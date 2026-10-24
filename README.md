@@ -1,45 +1,51 @@
 # pi-tuck
 
-Source preview of a Pi extension for deterministic compaction and history recall
-through `pi_tuck_recall` and `pi_tuck_search`. Word recall requires no Python,
-weights or semantic setup. Old sessions' `vcc_recall` and `vcc_search` calls remain
-recognized in history; those names are not registered as tool aliases.
+A Pi extension for deterministic compaction and history recall through
+`pi_tuck_recall` and `pi_tuck_search`. Word recall requires no Python,
+weights or semantic setup. Compaction preserves bounded navigation back to
+original history; it is not a promise that every detail remains in the active
+model context.
 
-Version 0.2.1 remains private and unpublished on npm. This source derives from a
-files-only extraction, followed by credit and naming changes; no source Git
-history is included. The exact original pi-vcc revision is not established.
-Derived source headers and complete notices are retained in [LICENSE](LICENSE).
-Historical private scores are not adopted as public quality evidence.
+## Install the tested source pin
 
-## Local source-loading evidence and developer prerequisites
-
-A disposable local source-only copy was loaded through its package manifest by
-Pi 1.1.0's unbundled SDK resource loader, without `dist`, prebuilding or locally
-supplied host peers. Real session-bound `pi_tuck_recall` and `pi_tuck_search`
-retrieved fictional original history with semantics disabled; a fresh SDK process
-reopened that session and reproduced recall. This is bounded local source-loading
-and persistence evidence, not an interactive CLI or installation witness.
-
-The public Git installation route has **not yet been requalified** for this
-candidate. No installability claim is made. Publication and a clean public pinned
-installation witness are separate work; the previous public pin's missing-dist
-failure is not superseded by this local evidence.
-
-For developer checking/building, use Node.js >=22.19.0 and the exact peer/dev
-dependency versions in package.json, already supplied locally:
+Use an installed Pi 1.1.0 host and Node.js >=22.19.0 (the declared Node minimum).
+The representative journey below was tested only on **Darwin arm64, Pi 1.1.0
+and Node.js 26.3.0**, not on other platforms or Node versions.
 
 ```sh
-npm run check
-npm run build
+pi install git:github.com/galyavin/pi-tuck@43927fa3fc61de3c89eba4e0ef504a148ead0c89
 ```
 
-These are developer commands, not an installer or a demonstrated public first-use
-journey. The Pi resource points at `index.ts`; compiled library exports and types
-remain a separate build contract. `pi_tuck_recall` provides keyword lookup and
-original-source navigation; `pi_tuck_search` provides historical discovery with
-lexical evidence available without semantics. Compaction preserves bounded
-navigation back to original history; it is not a promise that every detail
-remains in the active model context.
+The command pins the tested source commit. This updated README is a later,
+README-only documentation change, not a new tested source revision. Version
+0.2.1 is marked private in `package.json` and remains unpublished on npm.
+Review extension source before installation: it runs with your user permissions.
+
+### What was demonstrated
+
+One representative journey on 2026-10-24 showed three separate steps:
+
+1. **CLI installation:** `pi install` installed the exact public pin above;
+   all 115 installed source members matched the published source.
+2. **Direct registered SDK calls:** installed Pi 1.1.0's real SDK/resource loader
+   discovered the configured Git package and registered both tools. Direct lexical
+   calls retrieved fixed fictional facts and original native IDs; original-ID
+   reads returned the exact original texts.
+3. **Fresh-process reopening:** a new SDK process reopened the same persisted
+   native session and repeated both tools' queries and original reads.
+
+Semantics were disabled; both native search results reported zero embedding
+operations. This supports one bounded installation and SDK-reopening journey,
+not interactive/model-selected use, full agent tool hooks, compaction
+qualification, general recall, semantic quality, cross-platform proof or adoption.
+It does not repair the earlier public pin's missing-dist failure.
+
+## Tools, compatibility and developer build
+
+`pi_tuck_recall` provides keyword lookup and original-source navigation;
+`pi_tuck_search` provides historical discovery with lexical evidence available
+without semantics. Old sessions' `vcc_recall` and `vcc_search` calls remain
+recognized in history; those names are not registered as tool aliases.
 
 Semantic search is opt-in and currently limited to Apple Silicon. No weights,
 encoder, utility environment or downloadable companion is shipped here. Publisher
@@ -47,7 +53,25 @@ assets must be acquired and authenticated separately; [RUNTIME.md](RUNTIME.md)
 documents the host adapter contract, not a complete public setup journey. Lexical
 use does not depend on those assets.
 
+For developer checking/building, use Node.js >=22.19.0 and the exact peer/dev
+dependency versions in `package.json`, already supplied locally:
+
+```sh
+npm run check
+npm run build
+```
+
+These are developer commands, not installation instructions. The Pi resource
+points at `index.ts`; compiled library exports and types remain a separate build
+contract, not established by the installation witness above.
+
 ## Credits and license evidence
+
+This source derives from a files-only extraction, followed by credit and naming
+changes; no source Git history is included. The exact original pi-vcc revision is
+not established. Derived source headers and complete notices are retained in
+[LICENSE](LICENSE). Historical private scores are not adopted as public quality
+evidence.
 
 - [pi-vcc](https://github.com/sting8k/pi-vcc) by sting8k: this package includes
   derived work. The inherited LICENSE is MIT, Copyright (c) 2026 sting8k.
