@@ -11,23 +11,35 @@ history is included. The exact original pi-vcc revision is not established.
 Derived source headers and complete notices are retained in [LICENSE](LICENSE).
 Historical private scores are not adopted as public quality evidence.
 
-## Try lexical recall locally
+## Local source-loading evidence and developer prerequisites
 
-Use Node.js >=22.19.0 and the exact peer/dev dependency versions in package.json.
-With those dependencies available locally:
+A disposable local source-only copy was loaded through its package manifest by
+Pi 1.1.0's unbundled SDK resource loader, without `dist`, prebuilding or locally
+supplied host peers. Real session-bound `pi_tuck_recall` and `pi_tuck_search`
+retrieved fictional original history with semantics disabled; a fresh SDK process
+reopened that session and reproduced recall. This is bounded local source-loading
+and persistence evidence, not an interactive CLI or installation witness.
+
+The public Git installation route has **not yet been requalified** for this
+candidate. No installability claim is made. Publication and a clean public pinned
+installation witness are separate work; the previous public pin's missing-dist
+failure is not superseded by this local evidence.
+
+For developer checking/building, use Node.js >=22.19.0 and the exact peer/dev
+dependency versions in package.json, already supplied locally:
 
 ```sh
 npm run check
 npm run build
-pi --extension ./dist/index.js
 ```
 
-The last command loads this extension for one invocation without installing it or
-changing Pi settings. Ask Pi to find earlier conversation text with
-`pi_tuck_recall` (keyword lookup and original-source navigation) or
-`pi_tuck_search` (historical discovery, with lexical evidence available without
-semantics). Compaction preserves bounded navigation back to original history;
-it is not a promise that every detail remains in the active model context.
+These are developer commands, not an installer or a demonstrated public first-use
+journey. The Pi resource points at `index.ts`; compiled library exports and types
+remain a separate build contract. `pi_tuck_recall` provides keyword lookup and
+original-source navigation; `pi_tuck_search` provides historical discovery with
+lexical evidence available without semantics. Compaction preserves bounded
+navigation back to original history; it is not a promise that every detail
+remains in the active model context.
 
 Semantic search is opt-in and currently limited to Apple Silicon. No weights,
 encoder, utility environment or downloadable companion is shipped here. Publisher
@@ -105,7 +117,8 @@ an earlier release. No fresh benchmark result for this final tree is claimed her
 Only reproducible public synthetic lexical results may support bounded lexical
 mechanics claims. This easy, fixed fixture does not establish binding-budget
 stress, semantic recall, latency, integration, paired-release quality,
-cross-platform behavior, real-host registration or release readiness. Nonsemantic
+cross-platform behavior or release readiness. The benchmark itself does not
+establish real-host registration. Nonsemantic
 tests likewise do not establish those properties. Model-dependent qualification
 and private evidence are not distributed. See
 [CAPABILITY-INVENTORY.md](CAPABILITY-INVENTORY.md) for the shipped scope.
