@@ -1,0 +1,33 @@
+{
+  "id": "fresh-synthetic-lexical-v1",
+  "authorship": "Freshly authored for this bounded implementation; fictional objects and values, no session or evaluation imports.",
+  "documents": [
+    {"id":"d01","role":"user","text":"The amber observatory stores its spare lens in cedar drawer seven. Its inventory label is AMB-417."},
+    {"id":"d02","role":"user","text":"The amber observatory opens its roof at 21:40. The roof latch is violet."},
+    {"id":"d03","role":"user","text":"The cobalt ferry departs from reed pier nine. Its cargo allowance is seventeen crates."},
+    {"id":"d04","role":"user","text":"The juniper bakery proofing timer is set to 46 minutes. The starter jar has a copper lid."},
+    {"id":"d05","role":"user","text":"The quartz archive shelf label is QZ-862. Its reading lamp uses a linen shade."},
+    {"id":"d06","role":"user","text":"The marigold rover carries a basalt scoop. Its charging station is called Pebble Bay."},
+    {"id":"d07","role":"user","text":"The willow greenhouse waters seedlings at 06:25. Its north vent opens at 28 degrees."},
+    {"id":"d08","role":"user","text":"The saffron workshop orders eleven felt pads. Its delivery basket is turquoise."},
+    {"id":"d09","role":"user","text":"The indigo kite uses a braided hemp tether. Its storage tube is marked IK-593."},
+    {"id":"d10","role":"user","text":"The silver orchard maps row fourteen as the pear row. Its harvest bell rings twice."},
+    {"id":"d11","role":"user","text":"The coral library keeps its atlas on shelf six. The atlas binding is moss green."},
+    {"id":"d12","role":"user","text":"The cobalt workshop repairs baskets. It has no ferry timetable."},
+    {"id":"d13","role":"user","text":"The amber bakery stores flour in white bins. Its inventory label is BAK-201."},
+    {"id":"d14","role":"user","text":"The silver greenhouse grows fern seedlings. Its roof latch is orange."},
+    {"id":"d15","role":"user","text":"The coral ferry visits a quartz quarry. Its reading lamp is blue."}
+  ],
+  "cases": [
+    {"id":"c01","query":"amber observatory","expected":[{"source":"d01","text":"cedar drawer seven"},{"source":"d02","text":"21:40"}]},
+    {"id":"c02","query":"Where does the cobalt ferry depart?","expected":[{"source":"d03","text":"reed pier nine"},{"source":"d03","text":"seventeen crates"}]},
+    {"id":"c03","query":"JUNIPER proofing","expected":[{"source":"d04","text":"46 minutes"},{"source":"d04","text":"copper lid"}]},
+    {"id":"c04","query":"QZ-862","expected":[{"source":"d05","text":"QZ-862"},{"source":"d05","text":"linen shade"}]},
+    {"id":"c05","query":"marigold marigold rover","expected":[{"source":"d06","text":"basalt scoop"},{"source":"d06","text":"Pebble Bay"}]},
+    {"id":"c06","query":"willow greenhouse","expected":[{"source":"d07","text":"06:25"},{"source":"d07","text":"28 degrees"}]},
+    {"id":"c07","query":"saffron workshop","expected":[{"source":"d08","text":"eleven felt pads"},{"source":"d08","text":"turquoise"}]},
+    {"id":"c08","query":"IK-593|indigo kite","expected":[{"source":"d09","text":"braided hemp tether"},{"source":"d09","text":"IK-593"}]},
+    {"id":"c09","query":"silver orchard pear","expected":[{"source":"d10","text":"row fourteen"},{"source":"d10","text":"rings twice"}]},
+    {"id":"c10","query":"coral library atlas","expected":[{"source":"d11","text":"shelf six"},{"source":"d11","text":"moss green"}]}
+  ]
+}

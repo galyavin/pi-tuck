@@ -1,0 +1,51 @@
+{
+  "name": "pi-tuck",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-codemode": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "typebox": "1.3.27"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "tsc -p tsconfig.tests.json",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "@types/node": "24.10.1"
+  },
+  "files": [
+    "dist",
+    "scripts/incident.mjs",
+    "README.md",
+    "RUNTIME.md",
+    "LICENSE",
+    "CAPABILITY-INVENTORY.md",
+    "scripts/semantic-worker.py",
+    "scripts/eg2-runtime.py",
+    "scripts/provision-eg2.py",
+    "scripts/eg2-assets.lock.json"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}
