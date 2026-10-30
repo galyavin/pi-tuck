@@ -81,9 +81,9 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	const chars = (calibration.ok ? calibration.messages.reduce((n, m) => n + estimateSourceMessageChars(m), 0) : 0)
 		+ (input.previousSummary?.length ?? 0);
 	const { charsPerToken } = tuck.calibrateCharsPerToken(chars, input.tokensBefore);
-    // A preferred tail cannot consume more than the current input allowance.
-    // Current/fresh-source floors below may still require an explicit rejection.
-    const inputRoom = Math.max(0, (ctx.model?.contextWindow ?? 0) - reserveTokens - 1);
+    // A preferred tail takes at most half the current input allowance, so a cut leaves room to grow: a tail that fills the room lands the
+    // request just under the band and the next round cuts again. Current/fresh-source floors below may still require an explicit rejection.
+    const inputRoom = Math.floor(Math.max(0, (ctx.model?.contextWindow ?? 0) - reserveTokens - 1) / 2);
     const maxTokens = Math.min(MAX_TAIL_TOKENS, inputRoom);
     // Keep the current user turn native; older conversation competes in the
     // existing exact historical view instead of boosting a minimum native tail.
