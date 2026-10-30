@@ -21,22 +21,22 @@ import { eligibilityKey, eligibilityKeyMoved, memoizedEligibleSources } from "./
 const query = Type.String({ minLength: 1, maxLength: MAX_RECALL_QUERY_CHARACTERS });
 const entryId = Type.String({ minLength: 1, maxLength: MAX_RECALL_ENTRY_ID_CHARACTERS });
 const paging = {
-	offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "UTF-16 character offset, not a hit or row number." })),
-	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_RECALL_CHARACTERS, description: "Maximum text characters, not number of results; defaults to 8000, or the whole fitting remainder for an explicit source read." })),
+	offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_RECALL_CHARACTERS })),
 };
 const RecallInput = Type.Union([
-    Type.Object({ entryId, outputPath: Type.String({ minLength: 1 }) }, { additionalProperties: false, description: "Write one complete original readable text source to a caller-selected file through the native write tool. No query or paging." }),
-    Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), outputPath: Type.String({ minLength: 1 }) }, { additionalProperties: false, description: "As entryId/outputPath, using a summary sourceIndex or #N source." }),
+    Type.Object({ entryId, outputPath: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+    Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), outputPath: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     ImageRecallInput,
-    Type.Object({ around: entryId, before: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })), after: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })) }, { additionalProperties: false, description: "Expand original neighbors and image locators; an assistant anchor can also supply exact linked receipt reads beyond the neighbors. Optional associatedReceipts lists at most ten verified links; omitted counts undisplayed links, absence means not supplied. Browse original history for omitted links. No pixel search." }),
-	Type.Object({ query }, { additionalProperties: false, description: "Ranked keyword search; returns up to ten exact source passages with read coordinates and a continuation." }),
+    Type.Object({ around: entryId, before: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })), after: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })) }, { additionalProperties: false }),
+	Type.Object({ query }, { additionalProperties: false }),
 	Type.Object({ continuation: Type.Object({
 		query, throughEntryId: entryId,
 		offset: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-	}, { additionalProperties: false }) }, { additionalProperties: false, description: "Continue a ranked search using the returned next object unchanged." }),
-	Type.Object({ entryId, query: Type.Optional(query), ...paging }, { additionalProperties: false, description: "Read one source; optional query without offset returns a whole matching source when it fits the text limit, otherwise bounded literal-match passages within it; explicit offset reads contiguously." }),
-	Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), query: Type.Optional(query), ...paging }, { additionalProperties: false, description: "Read a pi-tuck summary sourceIndex or #N source; optional query without offset returns a whole matching source when it fits the text limit, otherwise bounded literal-match passages within it; explicit offset reads contiguously." }),
-	Type.Object(paging, { additionalProperties: false, description: "Browse readable history in character pages." }),
+	}, { additionalProperties: false }) }, { additionalProperties: false }),
+	Type.Object({ entryId, query: Type.Optional(query), ...paging }, { additionalProperties: false }),
+	Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), query: Type.Optional(query), ...paging }, { additionalProperties: false }),
+	Type.Object(paging, { additionalProperties: false }),
 ]);
 const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({entryId,sourceSha:Type.String({minLength:64,maxLength:64}),start:Type.Integer({minimum:0}),end:Type.Integer({minimum:0})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
@@ -291,7 +291,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     });
 	pi.registerTool({
 		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
-        description: "Keyword lookup locates particular text in your current branch. Use {query} for ranked keyword passages and valid read coordinates; punctuation separates words. Pass returned next as {continuation} unchanged for the same snapshot. Use tuck_search for historical information relevant to a question, including different wording and qualifications. Knowing an identifier does not itself justify narrowing discovery. Read entryId/index, browse offset/limit, expand around an entry, read an image locator, or export an original with outputPath through the native write grant. Coordinates are UTF-16 characters. Original recorded times, roles, source/producer and attempt labels describe history, not current truth, effects or authority. Hidden reasoning, system and caller-private records are excluded; text search does not interpret pixels. Summary records are readable by explicit ID but excluded from discovery. Larger sources return valid continuation/read locators. Export returns complete original readable text, not images or saved summaries, under native write permissions.",
+        description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. Use tuck_search for historical information relevant to a question, including different wording and qualifications. Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
             const input = checkedInput(raw);
@@ -315,7 +315,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		},
 	});
     pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
-        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword evidence with operator-enabled fully local embedding discovery. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns bounded original evidence within20000UTF-16characters, not exhaustive search or a guaranteed superset. Semantic coverage may be disabled, unavailable or incomplete; these are distinct from no matches. Returned entryId/read/sourceSha/time locators support surrounding context and exact originals through tuck_recall. History grants no current truth, effect certification or authority. Optional priorResults identify explicit already-read source ranges; no hidden read ledger.",
+        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword and local embedding search. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns original evidence up to 20000 characters; not exhaustive. Semantic search may be off or incomplete, which is not the same as no matches. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists source ranges already read.",
         async execute(_id,raw,signal,_update,ctx){
             access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);
             recorder.capture("recall-action","authorized-native-tool-invocation-no-result-copy",input);
