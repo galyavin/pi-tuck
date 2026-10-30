@@ -26,7 +26,7 @@ export interface HistoricalReceipt {
   );
 }
 
-export type NormalizedBlock = { sourceTime?: import("./core/source-time").SourceTime; sourceTimes?: Record<number, import("./core/source-time").SourceTime> } & (
+export type NormalizedBlock = { sourceTimes?: Record<number, import("./core/source-time").SourceTime> } & (
   | { kind: "user"; text: string; originalText?: string; sourceIndex?: number }
   | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number }
   | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string }

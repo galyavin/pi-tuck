@@ -127,6 +127,6 @@ export const normalize = (
     if (block.kind === "tool_result" && msg.role === "toolResult" &&
       ["error", "non-error"].includes(links.get(msg.toolCallId)?.status ?? "") &&
       isSourceExport(pairs.get(msg.toolCallId)?.calls[0]?.args)) block = { ...block, recallExport: true };
-    if (sourceTimes) block = { ...block, sourceTime: sourceTimes[i], sourceTimes: timeByIndex };
+    if (sourceTimes) block = { ...block, sourceTimes: timeByIndex };
     return block.kind === "notice" && sourceEntryIds?.[i] !== undefined ? { ...block, sourceEntryId: sourceEntryIds[i] } : block; }));
 };

@@ -39,17 +39,17 @@ test('actual registered source/search/continuation/around/image/export surfaces 
  }finally{await handle?.close();HTTP.mockRestore();}
 });
 
-test('public original custom notices keep journal time with their native entry identity before pricing',()=>{
+test('public original custom notices keep their native entry identity and carry no time: only user turns are timed',()=>{
  const m=SessionManager.inMemory('/test'),id=m.appendCustomMessageEntry('public','Original public qualification',true),entry=m.getBranch()[0]!;
  const compiled=compileDialogue({messages:[{role:'custom',customType:'public',content:'Original public qualification',display:true,timestamp:999}],sourceIndices:[undefined],sourceEntryIds:[id],sourceTimes:[resolveSourceTime(entry)]});
- const record=rows(compiled)[0];expect(record.sourceEntryId).toBe(id);expect(record.sourceTime).toEqual(resolveSourceTime(entry));expect(record.sourceTime?.basis).toBe('journal');expect(record).not.toHaveProperty('sourceIndex');expect(parseRecords(serializeRecords([record]))).toEqual([record]);
+ const record=rows(compiled)[0];expect(record.sourceEntryId).toBe(id);expect(resolveSourceTime(entry).basis).toBe('journal');expect(record).not.toHaveProperty('sourceTime');expect(record).not.toHaveProperty('sourceIndex');expect(parseRecords(serializeRecords([record]))).toEqual([record]);
 });
 
-test('portable core prices fixed original time metadata, keeps paired call/result bases and strict serialization',()=>{
+test('portable core times user turns only, keeps paired call/result bases and strict serialization',()=>{
  const messages=[{role:'user' as const,content:'Old binding: retain qualified mode.',timestamp:999}, {...answer('later correction'),content:[{type:'toolCall' as const,id:'a',name:'bash',arguments:{command:'check'}}]}, {role:'toolResult' as const,toolCallId:'a',toolName:'bash',content:[{type:'text' as const,text:'recorded output'}],isError:false,timestamp:999}];
  const sourceTimes=[{basis:'journal' as const,utc:'2026-01-01T00:00:00Z'},{basis:'message' as const,utc:'2026-02-01T00:00:00Z'},{basis:'unknown' as const}];
  const input={messages,sourceIndices:[5,6,7],sourceTimes,ranking:{maxBriefChars:2400}};
- const residual=compileRanked(input),records=rows(residual);expect(records.find(r=>r.kind==='tool_receipt')!.sourceTimes).toEqual([{sourceIndex:6,...sourceTimes[1]},{sourceIndex:7,...sourceTimes[2]}]);
+ const residual=compileRanked(input),records=rows(residual);expect(records.find(r=>r.kind==='tool_receipt')!.sourceIndices).toEqual([6,7]);expect(records.find(r=>r.kind==='tool_receipt')).not.toHaveProperty('sourceTimes');expect(records.find(r=>r.role==='user')!.sourceTimes).toEqual([{sourceIndex:5,...sourceTimes[0]}]);
  const ranked=residual;expect(ranked.length).toBeLessThanOrEqual(2400+TRANSCRIPT_HEADER.length+1+RANKED_SUFFIX.length);expect(parseRecords(serializeRecords(rows(ranked)))).toEqual(rows(ranked));expect(residual).not.toContain('1970');
  expect(()=>parseRecords(JSON.stringify({...records[0],sourceTimes:[{sourceIndex:999,basis:'unknown'}]}))).toThrow('Mismatched');
  expect(()=>parseRecords(JSON.stringify({...records[0],sourceTimes:[{sourceIndex:5,basis:'message',utc:'2026-02-30T00:00:00Z'}]}))).toThrow();

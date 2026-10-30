@@ -1,5 +1,5 @@
 import type { NormalizedBlock } from "../types";
-import { absorbCall, blockRecords, coveredCallKey, decorateRecord, isOmittable, noticeTimes, omissionRecord, receiptKey, repeatsCall, segmentClosing,
+import { absorbCall, blockRecords, coveredCallKey, decorateRecord, isOmittable, omissionRecord, receiptKey, repeatsCall, segmentClosing,
   type ExcerptCache } from "./brief";
 import { TRANSCRIPT_HEADER, lineUnits, type TranscriptRecord } from "./transcript";
 
@@ -74,17 +74,16 @@ export interface BriefMeter {
  * so it must equal what the full render measures; the final render in `selectRankedBriefBlocks` remains the authority.
  *
  * It relies on what `normalize` guarantees for the blocks of one brief: they are distinct objects; all carry the same `sourceTimes` or none
- * does; and notices that share a `sourceEntryId` share a `sourceTime`.
+ * does.
  */
 export const createBriefMeter = (blocks: NormalizedBlock[], mandatory: ReadonlySet<number> | undefined, cache: ExcerptCache): BriefMeter => {
   const n = blocks.length;
   const closing = segmentClosing(blocks);
   const times = blocks[0]?.sourceTimes;
-  const entryTimes = noticeTimes(blocks);
   const lengths = new WeakMap<TranscriptRecord, number>();
   const lengthOf = (record: TranscriptRecord): number => {
     let length = lengths.get(record);
-    if (length === undefined) lengths.set(record, length = JSON.stringify(decorateRecord(record, times, entryTimes)).length);
+    if (length === undefined) lengths.set(record, length = JSON.stringify(decorateRecord(record, times)).length);
     return length;
   };
 

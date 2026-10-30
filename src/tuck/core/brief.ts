@@ -1,6 +1,5 @@
 import type { NormalizedBlock } from "../types";
 import { clip } from "./content";
-import type { SourceTime } from "./source-time";
 import { serializeRecords, transcriptUnits, TRANSCRIPT_UNIT_CHARACTERS, smallOriginalArguments, MAX_PRODUCER_ARGUMENT_CHARACTERS, type TranscriptRecord } from "./transcript";
 
 const TRUNCATE_USER = 256;
@@ -351,12 +350,10 @@ export const repeatsCall = (previous: TranscriptRecord | undefined, record: Tran
 export const absorbCall = (previous: TranscriptRecord, record: TranscriptRecord): TranscriptRecord =>
   ({ ...previous, sourceIndices: [...new Set([...(previous.sourceIndices ?? [previous.sourceIndex!]), ...(record.sourceIndices ?? [record.sourceIndex!])])].sort((a, b) => a - b) } as TranscriptRecord);
 
-/** A source time for each locator the record names; only briefs of times-carrying blocks have them. */
-export const noticeTimes = (blocks: NormalizedBlock[]): Map<string, SourceTime> =>
-  new Map(blocks.flatMap(b => b.kind === "notice" && b.sourceEntryId && b.sourceTime ? [[b.sourceEntryId, b.sourceTime] as const] : []));
-export const decorateRecord = (record: TranscriptRecord, times: NormalizedBlock["sourceTimes"], entryTimes: ReadonlyMap<string, SourceTime>): TranscriptRecord => {
-  if (!times) return record;
-  if (record.sourceEntryId !== undefined) return { ...record, sourceTime: entryTimes.get(record.sourceEntryId) ?? { basis: "unknown" as const } };
+/** A source time for each locator a user record names; only briefs of times-carrying blocks have them. */
+export const decorateRecord = (record: TranscriptRecord, times: NormalizedBlock["sourceTimes"]): TranscriptRecord => {
+  // Times mark the user's turns only: on every record they cost a fifth to a third of the summary's tokens.
+  if (!times || record.role !== "user") return record;
   const indices = record.sourceIndices ?? (record.sourceIndex === undefined ? [] : [record.sourceIndex]);
   return indices.length ? { ...record, sourceTimes: indices.map(sourceIndex => ({ sourceIndex, ...(times[sourceIndex] ?? { basis: "unknown" as const }) })) } : record;
 };
@@ -377,8 +374,7 @@ export const buildBriefRecords = (blocks: NormalizedBlock[], cache?: ExcerptCach
     }
   }
   const times = blocks.find(b => b.sourceTimes)?.sourceTimes;
-  const entryTimes = noticeTimes(blocks);
-  return [...records, ...(plan?.omissions ?? [])].map(record => decorateRecord(record, times, entryTimes));
+  return [...records, ...(plan?.omissions ?? [])].map(record => decorateRecord(record, times));
 };
 
 export const compileBrief = (blocks: NormalizedBlock[], cache?: ExcerptCache): string =>
