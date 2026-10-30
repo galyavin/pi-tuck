@@ -4,7 +4,7 @@ import { assertNativeToolRounds } from "./protocol.js";
 import { parseRecords, serializeTranscript, splitSummary, type TranscriptRecord } from "./tuck/core/transcript";
 import { DIALOGUE_SUFFIX, RANKED_SUFFIX } from "./tuck/core/format";
 import { textOf } from "./tuck/core/content";
-import { MAX_TASK_CONTRACT_CHARACTERS, head, ledgerItems, ledgerRecords } from "./ledger.js";
+import { MAX_TASK_CONTRACT_CHARACTERS, actionItems, actionRecords, head, ledgerItems, ledgerRecords } from "./ledger.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -190,9 +190,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     }
     if (protectedUser?.type === "message" && protectedUser.message.role === "user")
         mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }], text: textOf(protectedUser.message.content) });
-    // The file ledger of the compacted history is mandatory, so it is charged in base like the quotes above.
+    // The file ledger and the action trail of the compacted history are mandatory, so they are charged in base like the quotes above.
     // A locator is given only where tuck_recall {index} resolves it: a unique global index of a readable entry.
-    const items = ledgerItems(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined, failedCalls);
+    const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
+    const items = ledgerItems(compacted, indices, resolves, failedCalls), actions = actionItems(compacted, indices, resolves, failedCalls);
 	const header = ctx.sessionManager.getHeader();
 	if (!header) throw new Error("Missing native session header");
 	const details = { compactor: "pi-tuck", version: 2, adapter: "standalone", keptUserTurns: cut.keptUserTurns,
@@ -205,14 +206,14 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const before = measure(projected.messages);
     const model = ctx.model;
     const floorAt = (keep: number) => {
-        const ledger = ledgerRecords(items, keep);
+        const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
         // Charged with the longer (ranked) closing, since the view is chosen later against this base.
         return { ledger, base: measure(preview(serializeTranscript([...mandatory, ...ledger]) + RANKED_SUFFIX)) };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
-    // When the whole floor cannot fit, the ledger keeps only its heading and older-files count; only that can refuse the cut.
-    let floor = floorAt(items.length);
-    if (!fits(floor.base) && items.length) floor = floorAt(0);
+    // When the whole floor cannot fit, the trail and the ledger keep only their headings and counts; only that can refuse the cut.
+    let floor = floorAt(Math.max(items.length, actions.length));
+    if (!fits(floor.base) && (items.length || actions.length)) floor = floorAt(0);
     const { ledger, base } = floor;
     if (!model || !fits(base))
         return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow) };

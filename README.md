@@ -26,6 +26,7 @@ Start a new Pi session after installing.
 
 - the dialogue: what you asked and what the agent answered, in order;
 - the files the agent read, wrote or edited, newest first (up to 60), with pointers to read them back;
+- the agent's other tool calls, such as shell commands, newest first (up to 30), without their output but with pointers to it;
 - your first prompt in the session, word for word (up to 12,000 characters).
 
 Tool output is left out of the summary; it stays in the session file. If the dialogue itself is too long for the room left, the summary

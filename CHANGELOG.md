@@ -12,6 +12,8 @@ First release on npm and the Pi package gallery.
 - Semantic search is on by default. Its local runtime (EmbeddingGemma-2, llama.cpp, a standalone CPython) is downloaded once, in the
   background, from pinned public sources, each file checked against its SHA-256. Turn it off with `{"semanticRecall": false}` in
   `~/.pi/agent/pi-tuck.json`.
+- Summaries list the agent's other tool calls (shell commands and the like) before the cut, newest first and capped at 30, without
+  their output but with a pointer to it, so an agent that writes little prose still sees what it already ran.
 - Runs started by a custom message (Pi 1.4) are budgeted by that message.
 - Sessions written by pi-vcc-based compactors (`VCC-TRANSCRIPT/1` summaries, `vcc_recall` and `vcc_search` calls) are read as this
   format, with tool names updated for the model.

@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { isLookupTool } from "./tuck/core/recall-operation";
 import { extractPath } from "./tuck/core/tool-args";
 import type { TranscriptRecord } from "./tuck/core/transcript";
 
@@ -54,4 +55,52 @@ export function ledgerRecords(items: readonly LedgerItem[], keep = items.length)
 		...listed.map(item => line(`- ${item.operation} ${item.path}` + (item.resolvable ? ` (tuck_recall {"index":${item.sourceIndex}})` : ""), item.sourceIndex)),
 		...(items.length ? [] : [line("(none)")]),
 		...(listed.length < items.length ? [line(`+${items.length - listed.length} older files: use tuck_recall`)] : [])];
+}
+
+/** Owner defaults: the newest calls are listed, each on one line of at most this many characters; older ones are counted. */
+export const MAX_ACTION_LINES = 30;
+export const MAX_ACTION_CHARACTERS = 200;
+const ACTIONS_TITLE = "Actions";
+export const ACTIONS_HEADING = "Tool calls other than read, write, edit and history lookups before this summary, newest first, without their output:";
+
+/** One tool call other than a read, write, edit or history lookup: the file ledger and the dialogue cover those. `sourceIndex` is
+ * the entry holding its result, shown as a locator only where tuck_recall {index} reads it. */
+export interface ActionItem { text: string; failed: boolean; sourceIndex?: number; resolvable: boolean }
+
+/** The calls exactly as recorded, newest first, with the command (or else the arguments) flattened to one line. A call from a failed or
+ * aborted response is not listed; a call whose result is an error is marked. */
+export function actionItems(entries: readonly SessionEntry[], indices: ReadonlyMap<string, number>, resolvable: (entry: SessionEntry) => boolean,
+	failedCalls: ReadonlySet<string>): ActionItem[] {
+	const results = new Map<string, SessionEntry>();
+	for (const entry of entries) if (entry.type === "message" && entry.message.role === "toolResult") results.set(entry.message.toolCallId, entry);
+	const calls: { text: string; failed: boolean; result?: SessionEntry }[] = [];
+	for (const entry of entries) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		if (entry.message.stopReason === "error" || entry.message.stopReason === "aborted") continue;
+		for (const block of entry.message.content) {
+			if (block.type !== "toolCall" || OPERATIONS.has(block.name) || isLookupTool(block.name)) continue;
+			const args = block.arguments as Record<string, unknown> | undefined;
+			const what = typeof args?.command === "string" ? args.command : JSON.stringify(args ?? {});
+			const line = `${block.name}: ${what}`.replace(/\s+/gu, " ").trim();
+			calls.push({ text: line.length > MAX_ACTION_CHARACTERS ? head(line, MAX_ACTION_CHARACTERS - 1) + "…" : line,
+				failed: failedCalls.has(block.id), result: results.get(block.id) });
+		}
+	}
+	return calls.reverse().map(({ text, failed, result }, rank) => {
+		const sourceIndex = result && indices.get(result.id);
+		return { text, failed, ...(sourceIndex !== undefined ? { sourceIndex } : {}),
+			resolvable: rank < MAX_ACTION_LINES && sourceIndex !== undefined && resolvable(result!) };
+	});
+}
+
+/** The action trail: a heading, one record per listed call (at most `keep` and the line cap), then a count of the older ones; nothing
+ * when there were no such calls. Each line carries its own source index, as the file ledger's do. */
+export function actionRecords(items: readonly ActionItem[], keep = items.length): TranscriptRecord[] {
+	if (!items.length) return [];
+	const listed = items.slice(0, Math.max(0, Math.min(keep, MAX_ACTION_LINES)));
+	const line = (text: string, sourceIndex?: number): TranscriptRecord => ({ kind: "section", title: ACTIONS_TITLE, text, ...(sourceIndex !== undefined ? { sourceIndex } : {}) });
+	return [line(ACTIONS_HEADING),
+		...listed.map(item => line(`- ${item.text}` + (item.failed ? " (failed)" : "") +
+			(item.resolvable ? ` (output: tuck_recall {"index":${item.sourceIndex}})` : ""), item.sourceIndex)),
+		...(listed.length < items.length ? [line(`+${items.length - listed.length} older calls: use tuck_recall`)] : [])];
 }

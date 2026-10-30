@@ -8,7 +8,7 @@ import { projectedMessages } from '../src/omissions';
 import { tuck, tuckObservedDraft, tuckRecall } from '../src/tuck';
 import { CLOSING_INSTRUCTION, RECALL_NOTE } from '../src/tuck/core/format';
 import { TRANSCRIPT_HEADER, parseRecords, serializeTranscript, splitSummary } from '../src/tuck/core/transcript';
-import { LEDGER_HEADING, MAX_LEDGER_LINES, MAX_TASK_CONTRACT_CHARACTERS, ledgerItems, ledgerRecords } from '../src/ledger';
+import { ACTIONS_HEADING, LEDGER_HEADING, MAX_ACTION_CHARACTERS, MAX_ACTION_LINES, MAX_LEDGER_LINES, MAX_TASK_CONTRACT_CHARACTERS, actionRecords, ledgerItems, ledgerRecords } from '../src/ledger';
 import { buildGlobalIndexById } from '../src/tuck/core/global-indices';
 
 // Every summary carries the task contract (the initiating prompt), the file ledger and the closing instruction, in both views.
@@ -131,7 +131,7 @@ test('C and D: no view drops tool history; both views end with the closing instr
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		expect(['dialogue', 'ranked']).toContain(draft.mode);
 		expect(ledgerText(draft.compaction.summary)).toContain('- wrote/edited out/x.csv');
-		expect(draft.compaction.summary.endsWith('\n\nOnly the dialogue and the files listed above carry over. Files created by commands are not listed: before redoing any step, list your output folders. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.')).toBe(true);
+		expect(draft.compaction.summary.endsWith('\n\nOnly the dialogue and the actions and files listed above carry over. Files created by commands are not listed: before redoing a step, read its output with tuck_recall or list your output folders. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.')).toBe(true);
 	} finally { s.dispose(); }
 });
 
@@ -190,4 +190,51 @@ test('A: an initiating prompt removed by a native edit is not quoted, and no lat
 		expect(draft.compaction.summary).not.toContain('ORIGINAL TASK');
 		expect(records(draft.compaction.summary).filter(r => r.kind === 'excerpt')).toEqual([]);
 	} finally { s.dispose(); }
+});
+
+/** The action trail as lines, heading first, locators kept. */
+const actionLines = (summary: string) => records(summary).filter(r => r.kind === 'section' && r.title === 'Actions').map(r => r.text!);
+const bare = (line: string) => line.replace(/ \(output: tuck_recall .*\)$/, '');
+
+test('E: the action trail lists the other tool calls newest first, marks failed ones, and leaves out reads, writes, edits and lookups', () => {
+	const s = session('Start.', [
+		{ name: 'read', args: { path: 'a.md' } },
+		{ name: 'bash', args: { command: 'python3 collect.py --out data/x.json' } },
+		{ name: 'bash', args: { command: 'pytest -q' }, isError: true },
+		{ name: 'tuck_recall', args: { query: 'x' } },
+		{ name: 'vcc_search', args: { query: 'y' } },
+		{ name: 'grep', args: { pattern: 'TODO', path: 'src' } },
+	], 2);
+	try {
+		const draft = draftOf(s);
+		if (!draft.compaction) throw new Error(draft.unavailable);
+		const lines = actionLines(draft.compaction.summary);
+		expect(lines[0]).toBe(ACTIONS_HEADING);
+		expect(lines.slice(1).map(bare)).toEqual(['- bash: make out1.txt', '- bash: make out0.txt', '- grep: {"pattern":"TODO","path":"src"}',
+			'- bash: pytest -q (failed)', '- bash: python3 collect.py --out data/x.json']);
+		// Each locator reads that call's own output.
+		const located = lines.find(line => line.includes('collect.py'))!.match(/\{"index":(\d+)\}/)!;
+		expect(JSON.stringify(tuckRecall(tuck, s.manager.getEntries(), s.manager.getBranch(), { index: Number(located[1]) }))).toContain('toolResult');
+		expect(draft.compaction.summary).toContain('Only the dialogue and the actions and files listed above carry over.');
+	} finally { s.dispose(); }
+});
+
+test('E: the trail caps its lines and counts the rest, flattens a command to one line and cuts a long one', () => {
+	const long = 'echo ' + 'z'.repeat(400), script = "python3 - <<'EOF'\nimport json\nprint(1)\nEOF";
+	const s = session('Start.', [...Array.from({ length: 40 }, (_, i) => ({ name: 'bash', args: { command: `step ${i}` } })),
+		{ name: 'bash', args: { command: script } }, { name: 'bash', args: { command: long } }]);
+	try {
+		const draft = draftOf(s);
+		if (!draft.compaction) throw new Error(draft.unavailable);
+		const lines = actionLines(draft.compaction.summary).slice(1).map(bare), calls = 42 + 12; // the fixture adds 12 later rounds of bash
+		expect(lines).toHaveLength(MAX_ACTION_LINES + 1);
+		expect(lines).toContain('- bash: ' + long.slice(0, MAX_ACTION_CHARACTERS - 'bash: '.length - 1) + '…');
+		expect(lines).toContain("- bash: python3 - <<'EOF' import json print(1) EOF");
+		expect(lines).not.toContain('- bash: step 0'); // the oldest are counted, not listed
+		expect(lines.at(-1)).toBe(`+${calls - MAX_ACTION_LINES} older calls: use tuck_recall`);
+	} finally { s.dispose(); }
+});
+
+test('E: with no such calls there is no trail at all', () => {
+	expect(actionRecords([])).toEqual([]);
 });
