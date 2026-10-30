@@ -1,5 +1,6 @@
 import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { isSourceExport, isLookupTool, isRecallTool } from "./tuck/core/recall-operation";
+import { escapeRegex } from "./tuck/core/keyword-query";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 export interface RecallOptions {
@@ -340,7 +341,7 @@ function recallHistory(branch: readonly SessionEntry[], options: RecallOptions =
 	let limit = options.limit ?? 8000;
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_RECALL_CHARACTERS)
 		throw new Error("Recall limit must be between 1 and 16000 characters");
-	const literal = query === undefined ? undefined : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iu");
+	const literal = query === undefined ? undefined : new RegExp(escapeRegex(query), "iu");
 	const attempts = recallAttempts(branch), links = producerReads(branch);
 	if (entryId !== undefined && literal && options.offset === undefined) {
 		const sources = branch.filter(entry => entry.id === entryId).flatMap(entry => {

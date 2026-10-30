@@ -2,7 +2,7 @@ import { isLookupTool } from "./recall-operation";
 import type { Message } from "@earendil-works/pi-ai";
 import type { RenderedEntry } from "./render-entries";
 import { textOf, isContentBearing, extractToolCallText, extractToolCallArgsText, clip } from "./content";
-import { prepareKeywordQuery, type KeywordMatcher } from "./keyword-query";
+import { escapeRegex, prepareKeywordQuery, type KeywordMatcher } from "./keyword-query";
 
 export interface SearchHit extends RenderedEntry {
   /** Context snippet around the first matched term (only when query provided) */
@@ -35,8 +35,6 @@ export interface TouchedFile {
   path: string;
   entries: FileTouch[];
 }
-const escapeRegex = (s: string): string =>
-  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Quantifier starting at `i`, if any. Only unbounded forms (+, *, {n,}) can
  *  drive catastrophic backtracking. */

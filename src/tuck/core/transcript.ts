@@ -39,7 +39,6 @@ export type TranscriptRecord = RecordFields & (
 );
 
 export const TRANSCRIPT_HEADER = "TUCK-TRANSCRIPT/1";
-export const TRANSCRIPT_MAX_UNITS = 120;
 export const TRANSCRIPT_UNIT_CHARACTERS = 120;
 /** UTF-16 serialized characters, including JSON escapes, labels and framing. */
 export const lineUnits = (characters: number): number => Math.max(1, Math.ceil(characters / TRANSCRIPT_UNIT_CHARACTERS));

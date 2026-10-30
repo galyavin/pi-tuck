@@ -7,11 +7,8 @@
  * historically numbered the selected window from zero. This module owns the
  * counting rule so both sides agree by construction.
  *
- * Ported from k0valik/pi-blackhole commit f82e07a (issue #28); the file
- * fallback streams via forEachJsonlLine instead of readFileSync so giant
- * sessions stay within PR #26's memory bounds.
+ * Ported from k0valik/pi-blackhole commit f82e07a (issue #28).
  */
-import { forEachJsonlLine } from "./jsonl";
 
 /** Entries counted by the global `#N` index: persisted message entries. */
 export const isCountedMessageEntry = (entry: any): boolean =>
@@ -55,27 +52,4 @@ export const buildGlobalIndexById = (entries: readonly any[]): Map<string, numbe
   const b = createGlobalIndexBuilder();
   for (const entry of entries) b.add(entry);
   return b.map();
-};
-
-/**
- * Build the same map by streaming a session JSONL file. Malformed lines are
- * skipped silently (load-messages already skips them). Returns undefined when
- * the file cannot be read (missing or IO error).
- */
-export const loadGlobalIndexById = (sessionFile: string): Map<string, number> | undefined => {
-  const b = createGlobalIndexBuilder();
-  let ok: boolean;
-  try {
-    ok = forEachJsonlLine(sessionFile, (line) => {
-      if (line.length === 0) return;
-      try {
-        b.add(JSON.parse(line.toString("utf8")));
-      } catch {
-        // Corrupt lines are silently dropped by pi too.
-      }
-    });
-  } catch {
-    return undefined;
-  }
-  return ok ? b.map() : undefined;
 };

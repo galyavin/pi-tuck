@@ -3,11 +3,11 @@ import { isRecallTool } from "./tuck/core/recall-operation";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ATTEMPT_NOTICE, createRecall, type RecallPolicy } from "./recall.js";
+import { ATTEMPT_NOTICE, MAX_RECALL_ENTRY_ID_CHARACTERS, createRecall, type RecallPolicy } from "./recall.js";
 
 export const MAX_HISTORY_IMAGE_BYTES = 5 * 1024 * 1024;
 export const ImageRecallInput = Type.Object({
-	entryId: Type.String({ minLength: 1, maxLength: 100 }),
+	entryId: Type.String({ minLength: 1, maxLength: MAX_RECALL_ENTRY_ID_CHARACTERS }),
 	image: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER,
 		description: "Zero-based image ordinal in this original native source; returns one image." }),
 }, { additionalProperties: false });
@@ -34,7 +34,7 @@ function images(entry: SessionEntry): ImageContent[] {
 export function imageSource(entry: SessionEntry): ImageSource | undefined {
 	const imageCount = images(entry).length;
 	if (!imageCount || entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "toolResult")) return;
-	if (!entry.id || entry.id.length > 100) throw new Error("Recall image source has an invalid or oversized ID");
+	if (!entry.id || entry.id.length > MAX_RECALL_ENTRY_ID_CHARACTERS) throw new Error("Recall image source has an invalid or oversized ID");
 	return { sourceTime: resolveSourceTime(entry), entryId: entry.id, role: entry.message.role, imageCount, read: { entryId: entry.id, image: 0 } };
 }
 
@@ -52,7 +52,7 @@ function supportedImage(block: ImageContent): boolean {
 }
 /** Explicit one-block delivery from the supplied branch; no path reads or resize. */
 export function historyImage(branch: readonly SessionEntry[], input: ImageRead, policy: RecallPolicy = {}): { content: (TextContent | ImageContent)[]; details: object } {
-	if (Object.keys(input).sort().join(",") !== "entryId,image" || typeof input.entryId !== "string" || !input.entryId.length || input.entryId.length > 100 || !Number.isSafeInteger(input.image) || input.image < 0)
+	if (Object.keys(input).sort().join(",") !== "entryId,image" || typeof input.entryId !== "string" || !input.entryId.length || input.entryId.length > MAX_RECALL_ENTRY_ID_CHARACTERS || !Number.isSafeInteger(input.image) || input.image < 0)
 		throw new Error("Invalid explicit image read");
 	const matches = branch.filter(entry => entry.id === input.entryId);
 	const header = { mode: "image", entryId: input.entryId,
@@ -73,7 +73,7 @@ export function historyImage(branch: readonly SessionEntry[], input: ImageRead, 
 /** Bounded original neighbors and image locators, with no pixel interpretation. */
 export function historyAround(branch: readonly SessionEntry[], input: { around: string; before?: number; after?: number }, policy: RecallPolicy = {}): HistoryAroundPage {
     const before = input.before ?? 2, after = input.after ?? 2;
-    if (!input.around || input.around.length > 100 || ![before, after].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 3))
+    if (!input.around || input.around.length > MAX_RECALL_ENTRY_ID_CHARACTERS || ![before, after].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 3))
         throw new Error("Invalid around-event read");
     const { discoveryEntry, readable, recallAttempts, producerReads } = createRecall(policy), attempts = recallAttempts(branch), links = producerReads(branch);
     const media = (entry: SessionEntry) => entry.type === "message" && entry.message.role === "toolResult" && isRecallTool(entry.message.toolName) ? undefined : imageSource(entry);

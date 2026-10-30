@@ -3,7 +3,6 @@ import type { convertToLlm } from "@earendil-works/pi-coding-agent";
 /** Includes Pi bash executions as well as ordinary LLM messages. */
 export type CompilerMessage = Parameters<typeof convertToLlm>[0][number];
 
-export type CompactionReason = "manual" | "threshold" | "overflow";
 
 export interface FileOps {
   readFiles?: string[];

@@ -131,7 +131,7 @@ const nextRenderableBlock = (blocks: NormalizedBlock[], index: number): Normaliz
   return undefined;
 };
 
-const isSegmentClosingAssistant = (blocks: NormalizedBlock[], index: number): boolean => {
+export const isSegmentClosingAssistant = (blocks: NormalizedBlock[], index: number): boolean => {
   if (blocks[index]?.kind !== "assistant") return false;
   const next = nextRenderableBlock(blocks, index);
   return !next || next.kind === "user";

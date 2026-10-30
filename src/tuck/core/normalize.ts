@@ -28,13 +28,14 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receip
   }
 
   if (msg.role === "toolResult") {
+    const original = originals.get(msg.toolCallId);
     return [{
       kind: "tool_result",
       name: msg.toolName,
       text: sanitize(textOf(msg.content)),
       sourceIndex: msgIndex,
-      originalReceipt: (originals.get(msg.toolCallId)?.text.length ?? Infinity) <= MAX_RECEIPT_CHARACTERS ? originals.get(msg.toolCallId) : undefined,
-      ...((originals.get(msg.toolCallId)?.text.length ?? 0) > MAX_RECEIPT_CHARACTERS ? { oversizedReceipt: originals.get(msg.toolCallId) } : {}),
+      originalReceipt: (original?.text.length ?? Infinity) <= MAX_RECEIPT_CHARACTERS ? original : undefined,
+      ...((original?.text.length ?? 0) > MAX_RECEIPT_CHARACTERS ? { oversizedReceipt: original } : {}),
     }];
   }
 

@@ -30,7 +30,7 @@ const STOPWORDS = new Set([
   "this", "what", "which", "who", "whom", "these", "those",
 ]);
 
-const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const matcher = (term: string): KeywordMatcher => {
   const source = escapeRegex(term);
