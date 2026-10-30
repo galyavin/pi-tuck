@@ -173,7 +173,7 @@ test('the state callback fires once per change, never throws into the controller
  expect(quiet.mock.calls.length).toBe(calls);expect(events.at(-1)![0]).toBe('disabled');
 });
 
-// ---- P7: lazy start and idle stop
+// ---- Lazy start and idle stop
 test('enabling starts no worker and no indexing; a turn end starts none; the state is on (waiting) while idle',async()=>{
  const {controller,provider}=setup();controller.enable();controller.schedule(provider);
  await advance(60000);

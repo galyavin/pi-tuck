@@ -227,7 +227,7 @@ const TOOL_ARGS_BUDGET = 2000;
 /**
  * Tool name of the recall tool itself (src/tools/recall.ts). A search
  * operation must not match its own query or its own prior output: the
- * pi_tuck_recall or pi_tuck_search invocation is persisted as an ordinary assistant toolCall (its
+ * tuck_recall or tuck_search invocation is persisted as an ordinary assistant toolCall (its
  * `{ query }` argument, excluded below in `toolCallArgsText`) followed by an
  * ordinary toolResult message (its `N matches for "<query>"` text, excluded
  * in `fullText`) — without both exclusions a repeated query keeps matching

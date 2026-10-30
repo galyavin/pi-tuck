@@ -357,7 +357,7 @@ class RuntimeTests(unittest.TestCase):
             base = pathlib.Path(directory).resolve(); assets = base / 'assets'; assets.mkdir()
             sentinel = assets / 'original'; sentinel.write_bytes(b'untouched companion bytes')
             target, environment, index, scratch = (base / name for name in ('runtime', 'permanent-env', 'index', 'scratch'))
-            argv = ['provision', str(target), '--assets', str(assets), '--python', sys.executable,
+            argv = ['provision', str(target), '--assets', str(assets), '--lock', str(assets / 'lock.json'), '--python', sys.executable,
                     '--environment-directory', str(environment), '--index-directory', str(index), '--scratch-directory', str(scratch)]
             with patch.object(sys, 'argv', argv), patch('subprocess.check_output') as probe, patch('subprocess.run') as effect:
                 with self.assertRaisesRegex(RuntimeError, 'Only Darwin arm64 is qualified'): PROVISION['main']()

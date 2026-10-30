@@ -77,7 +77,7 @@ export class IncidentRecorder {
   if (this.enabled || this.pumping) { notify('Recorder is already active or flushing'); return; }
   const rel = relative(resolve(project), this.directory);
   if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) { notify('Recorder directory must be outside project'); return; }
-  this.projectDirectory = resolve(project); this.notify = notify; this.state = 'recording'; this.nextCut = nextCut; this.sawCut = false; this.requests = 0; this.response = false; this.total = 0; this.captureCalls = 0; this.inlineMs = 0; this.hookMs = 0; this.id = randomUUID(); this.path = join(this.directory, 'pi-tuck-incident-' + this.id + '.jsonl');
+  this.projectDirectory = resolve(project); this.notify = notify; this.state = 'recording'; this.nextCut = nextCut; this.sawCut = false; this.requests = 0; this.response = false; this.total = 0; this.captureCalls = 0; this.inlineMs = 0; this.hookMs = 0; this.id = randomUUID(); this.path = join(this.directory, 'tuck-incident-' + this.id + '.jsonl');
   this.timer = setTimeout(() => this.stop(this.sawCut ? 'duration-exhausted' : 'no-cut-expired'), this.options.durationMs ?? 120000); this.timer.unref();
   this.capture('start', 'operator-session-control', { id: this.id, build: DIAGNOSTIC_BUILD, nextCut, notice: 'Structural/pattern exclusions; partial replay possible. No semantic secret guarantee.' });
  }
@@ -127,7 +127,7 @@ export class IncidentRecorder {
    const directoryStat = await lstat(this.directory);
    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o077) !== 0 || directoryStat.uid !== process.getuid?.()) throw new Error('Recorder directory ownership/permissions');
    const names: { name: string; time: number }[] = [];
-   for (const name of await readdir(this.directory)) if (/^pi-(?:tuck|vcc)-incident-[0-9a-f-]{36}\.jsonl$/.test(name)) { const stat = await lstat(join(this.directory,name)); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Retention ownership gap'); names.push({name,time:stat.mtimeMs}); }
+   for (const name of await readdir(this.directory)) if (/^tuck-incident-[0-9a-f-]{36}\.jsonl$/.test(name)) { const stat = await lstat(join(this.directory,name)); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Retention ownership gap'); names.push({name,time:stat.mtimeMs}); }
    names.sort((a,b)=>a.time-b.time);
    while (names.length >= (this.options.maxFiles ?? 4)) { const { name } = names.shift()!; if (join(this.directory, name) !== this.path) await unlink(join(this.directory, name)); }
    while (this.queue.length) {

@@ -113,7 +113,7 @@ test('cross-snapshot source membership reuses zero-unit sources and disjoint eli
  expect(f.tokenizations).toBe(3);expect(f.internal.current!.units.map(u=>u.encoded).join('\n')).not.toContain('PRIVATE');expect(f.internal.current!.sources).toHaveLength(3);
 });
 
-// ---- P8: the window covers what the agent can no longer see, kind first and then recency
+// ---- The window covers what the agent can no longer see, kind first and then recency
 const order=(f:ReturnType<typeof fixture>)=>f.internal.current!.units.map(u=>u.encoded.split('Original passage: ')[1]);
 /** c1 t1 c2 t2 | c3 t3 c4: conversation and tool output alternate; the first kept entry is c3, so c1..t2 are out of view. */
 function mixed(f:ReturnType<typeof fixture>){const ids:Record<string,string>={};for(const name of ['c1','t1','c2','t2','c3','t3','c4'])ids[name]=name.startsWith('t')?f.appendTool(name):f.append(name);f.cut(ids.c3!);return ids;}
@@ -184,7 +184,7 @@ test('search ranks over what is indexed and states the coverage; indexing_incomp
  const page=await f.c.search('query',f.provider);
  expect(page.status).toBe('ok');expect(f.internal.current!.complete).toBe(true);
  expect(page.coverage.window).toMatchObject({indexedCharacters:14,windowCharacters:14,outOfViewCharacters:8,eligibleCharacters:14,oldestCoveredTime:'1970-01-01T00:00:01Z',conversation:{indexedCharacters:4,outOfViewCharacters:4},toolResults:{indexedCharacters:4,outOfViewCharacters:4,oldestCoveredTime:'1970-01-01T00:00:02Z'}});
- expect(page.notice.endsWith('Semantic ranking covers 4 of 4 characters of earlier conversation and 4 of 4 characters of earlier tool output (newest first, back to 1970-01-01T00:00:02Z); use pi_tuck_recall for the rest.')).toBe(true);
+ expect(page.notice.endsWith('Semantic ranking covers 4 of 4 characters of earlier conversation and 4 of 4 characters of earlier tool output (newest first, back to 1970-01-01T00:00:02Z); use tuck_recall for the rest.')).toBe(true);
 });
 test('partial coverage is stated, not hidden: only part of the tool output is indexed, and the sentence says how much and back to when',async()=>{
  const f=fixture({prepareWorkMs:1,queryWaitMs:60});const ids=['u1','u2'].map(text=>f.append(text));for(let i=1;i<=10;i++)f.appendTool('tool '+i+'.');f.cut(f.append('kept'));void ids;
@@ -197,7 +197,7 @@ test('partial coverage is stated, not hidden: only part of the tool output is in
  expect(covered.conversation).toEqual({indexedCharacters:4,outOfViewCharacters:4});
  expect(covered.toolResults).toMatchObject({outOfViewCharacters:covered.toolResults.outOfViewCharacters});
  const toolChars=covered.toolResults.indexedCharacters;expect(toolChars).toBeGreaterThan(0);expect(toolChars).toBeLessThan(covered.toolResults.outOfViewCharacters);
- expect(page.notice.endsWith(`Semantic ranking covers 4 of 4 characters of earlier conversation and ${toolChars} of ${covered.toolResults.outOfViewCharacters} characters of earlier tool output (newest first, back to ${covered.toolResults.oldestCoveredTime}); use pi_tuck_recall for the rest.`)).toBe(true);
+ expect(page.notice.endsWith(`Semantic ranking covers 4 of 4 characters of earlier conversation and ${toolChars} of ${covered.toolResults.outOfViewCharacters} characters of earlier tool output (newest first, back to ${covered.toolResults.oldestCoveredTime}); use tuck_recall for the rest.`)).toBe(true);
 });
 test('all conversation is kept when tool output is evicted; what the window drops loses its stored vectors',async()=>{
  const f=fixture({maxUnits:5});f.append('c1');f.append('c2');for(let i=1;i<=6;i++)f.appendTool('t'+i);const kept=f.append('c3');f.cut(kept);
@@ -237,7 +237,7 @@ test('when only conversation is indexed the sentence goes back to the oldest con
  const f=fixture({queryWaitMs:40});mixed(f);await f.internal.prepare(f.provider,false);
  f.failEmbedAfter=0; // the search starts a full pass, which cannot index anything more
  const page=await f.c.search('query',f.provider);
- expect(page.status).toBe('ok');expect(page.notice.endsWith('Semantic ranking covers 4 of 4 characters of earlier conversation and 0 of 4 characters of earlier tool output (newest first, back to 1970-01-01T00:00:01Z); use pi_tuck_recall for the rest.')).toBe(true);
+ expect(page.status).toBe('ok');expect(page.notice.endsWith('Semantic ranking covers 4 of 4 characters of earlier conversation and 0 of 4 characters of earlier tool output (newest first, back to 1970-01-01T00:00:01Z); use tuck_recall for the rest.')).toBe(true);
 });
 test('the view comes from the latest compaction entry\'s first kept entry, the same boundary Pi projects',()=>{
  const six=(f:ReturnType<typeof fixture>)=>['m1','m2','m3','m4','m5','m6'].map(text=>f.append(text));
@@ -279,8 +279,8 @@ test('disable during a held stale preparation reports cancellation rather than d
   await rejection;expect(f.queryEmbeddings).toBe(0);expect(f.c.status().enabled).toBe(false);
  }finally{release();await terminal;await closing;f.internal.task=undefined;f.gate=undefined;}
 });
-// T17: with nothing out of view (no cut) the whole history is in the agent's context, so a search never waits for indexing and never starts a worker.
-const NOTHING_OUT='No semantic ranking performed: nothing is out of view, so the whole history is in your context.'; // one notice whether or not indexing is still running (doctrine chain: the coverage field carries progress)
+// With nothing out of view (no cut) the whole history is in the agent's context, so a search never waits for indexing and never starts a worker.
+const NOTHING_OUT='No semantic ranking performed: nothing is out of view, so the whole history is in your context.'; // one notice whether or not indexing is still running (the coverage field carries progress)
 test('no cut and a cold worker: the search returns indexing_incomplete at once, far under queryWaitMs, and starts no query work',async()=>{
  const f=fixture({queryWaitMs:60000});f.append('first source');f.append('second source');
  const started=performance.now(),page=await f.c.search('query',f.provider),elapsed=performance.now()-started;

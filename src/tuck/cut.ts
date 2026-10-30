@@ -173,7 +173,7 @@ export const findBudgetCutIndex = (
     if (live[j].message.role !== "toolResult") return j;
   }
   // Nothing after the crossing is a boundary (it falls inside the final tool
-  // round). For an oversized user-anchored tail (Case B, F3) fall back to the
+  // round). For an oversized user-anchored tail (Case B) fall back to the
   // nearest earlier non-receipt: the smallest protocol-safe suffix that reaches
   // the budget, instead of keeping the whole oversized tail.
   if (backwardFallback) for (let j = crossed; j >= 1; j--) {

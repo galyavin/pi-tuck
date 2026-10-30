@@ -20,7 +20,7 @@ test('an offline replay of a recorded operator cut reproduces the live summary',
 	const directory = mkdtempSync(join(tmpdir(), 'pi-incident-'));
 	const h = await harness({ at: 'prompt', complete: 60000, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } });
 	try {
-		await h.session.prompt('/compaction-incident on');
+		await h.session.prompt('/tuck-incident on');
 		await h.session.compact();
 		expect(h.compactions()).toHaveLength(1);
 		const records = await recorded(directory, hasProposal(directory));
@@ -41,7 +41,7 @@ test(`a recorded ${how} shows the arithmetic it was made with`, async () => {
 	const h = await harness(how === 'operator cut' ? { at: 'prompt', complete: 60000, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } }
 		: { at: 'tool', complete: BAND + 100, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } });
 	try {
-		await h.session.prompt('/compaction-incident on');
+		await h.session.prompt('/tuck-incident on');
 		if (how === 'operator cut') await h.session.compact(); else await h.run();
 		expect(h.compactions()).toHaveLength(1);
 		const records = await recorded(directory, hasProposal(directory));

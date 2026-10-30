@@ -4,11 +4,11 @@ import { BAND, HOST, ROOM, expectParity, scenario } from './budget-fixture';
 const PROMPT = 2; // 'Continue'
 
 // Triggers and the complete-context guard count one request: the same arithmetic for host input, summary wrapper and queued messages
-// (in a synthetic host scenario the guard rejected a request by 26 estimated tokens after the tool-boundary trigger
-// judged it to fit). A host (AB1) adds input to every request that is not in the saved conversation: its role view and guidance. It
+// (observed in a real session: the guard rejected a request by 26 estimated tokens after the tool-boundary trigger
+// judged it to fit). A host adds input to every request that is not in the saved conversation: its role view and guidance. It
 // hands the package the exact messages its `context` hook injects (`hostMessages`), and the package counts them with the same function
 // that counts the request in the guard, so a request the guard would reject is cut first, never rejected with no cut. The system prompt
-// here is larger than the host input, as in AB1 (32.8k against 2.9k). Window 272,000 and response reserve max(32,768, model.maxTokens
+// here is larger than the host input, as in a real host (32.8k against 2.9k). Window 272,000 and response reserve max(32,768, model.maxTokens
 // 128,000) leave an input room of 144,000 estimated tokens. A cut is triggered 2% of the room early (the band); inside the band it is
 // opportunistic, so these sweeps are walked around the band as well as around the room.
 //
@@ -51,7 +51,7 @@ test('mandatory input that cannot fit even with no history fails closed at the g
 });
 
 test('mandatory input that outgrows the room during a run fails closed at the guard of the next request, with no cut', async () => {
- // Host input grows past the room after the first round (as attempt effects accumulate in AB1's view). At the tool boundary no
+ // Host input grows past the room after the first round (as attempt effects accumulate in a host's view). At the tool boundary no
  // cut can help, so the trigger defers; the guard rejects the second request. The first request and its effect already happened.
  const r = await scenario({ at: 'tool-impossible', complete: 20000, host: HOST });
  expect(r.faults.join(' '), r.probe).toContain('Complete Pi context and response reserve exceed the estimated request budget');

@@ -244,7 +244,7 @@ export const planBrief = (blocks: NormalizedBlock[], full: Set<NormalizedBlock>,
         "sourceIndices are individual original locators, not a contiguous range. " +
         (sources.length > 8 ? "Locator list incomplete. " : "") +
         (missing.some(block => block.sourceIndex === undefined) ? "Some text blocks have no source locator. " : "") +
-        "Read originals with pi_tuck_recall; omitted text may qualify retained text. No new authority." });
+        "Read originals with tuck_recall; omitted text may qualify retained text. No new authority." });
   }
   plans.set(blocks, { full, closing: new Set(chronology.filter((_, i) => isSegmentClosingAssistant(chronology, i))), mandatorySources, omissions });
 };

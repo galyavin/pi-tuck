@@ -4,9 +4,9 @@ import {test,expect} from 'vitest';
 import {SessionManager,type ExtensionAPI,type ExtensionToolContext,type ToolDefinition} from '@earendil-works/pi-coding-agent';
 import {installCompaction} from '../src/compaction';
 import {createSemanticRecall,semanticEligibleSources} from '../src/semantic-recall';
-import {piTuck,piTuckRecall} from '../src/pi-tuck';
+import {tuck,tuckRecall} from '../src/tuck';
 
-// Out of contract (eligibility-cache.ts): an entry edited in place after it was appended, and a readAttemptMarker whose behaviour changes after install. The lexical recheck of pi_tuck_search
+// Out of contract (eligibility-cache.ts): an entry edited in place after it was appended, and a readAttemptMarker whose behaviour changes after install. The lexical recheck of tuck_search
 // reruns only when eligibilityKey moves, so those are not pinned here (they were the 'attempt', 'invalid' and 'interpretation' cases). The cases below stay in contract.
 for(const change of ['unchanged','access','cancel'] as const)test(`actual lexical offer binds excluded receipt attempt metadata: ${change}`,async()=>{
  const cwd='/lexical-attribution-contact',m=SessionManager.inMemory(cwd);
@@ -25,9 +25,9 @@ for(const change of ['unchanged','access','cancel'] as const)test(`actual lexica
  let resume!:()=>void,paused!:()=>void;const entered=new Promise<void>(done=>paused=done),gate=new Promise<void>(done=>resume=done);
  semantic.runtime=async()=>({call:async(op:string,input:any)=>{expect(op).toBe('embed');expect(input.kind).toBe('query');paused();await gate;return{vectors:[[1]]};}});
  semantic.index=async()=>({ranked:initial.units.slice(0,24).map((u:any)=>({key:u.key,score:1})),observed:initial.units.length});
- let tool:ToolDefinition|undefined;const pi={on:()=>{},registerCommand:()=>{},registerTool:(t:ToolDefinition)=>{if(t.name==='pi_tuck_search')tool=t;}} as unknown as ExtensionAPI;
+ let tool:ToolDefinition|undefined;const pi={on:()=>{},registerCommand:()=>{},registerTool:(t:ToolDefinition)=>{if(t.name==='tuck_search')tool=t;}} as unknown as ExtensionAPI;
  const handle=await installCompaction(pi,{semanticRecall:semantic,recallPolicy:policy,assertAccess:access});
- const words=()=>{const page=piTuckRecall(piTuck,m.getEntries(),m.getBranch(),{query:'needle'},policy);if(!('hits' in page))throw Error('Expected lexical discovery page');return page;},before=words();
+ const words=()=>{const page=tuckRecall(tuck,m.getEntries(),m.getBranch(),{query:'needle'},policy);if(!('hits' in page))throw Error('Expected lexical discovery page');return page;},before=words();
  expect(before.hits[0]?.recordedAttempt).toEqual({nodeId:'host',attemptId:'old'});
  const receiptBefore=JSON.stringify(m.getEntries().find(e=>e.id===receiptId)),branchBefore=m.getBranch().map(e=>[e.id,e.parentId]);
  const signal=new AbortController(),running=tool!.execute('contact',{query:'needle'},signal.signal,undefined,{cwd,sessionManager:m} as unknown as ExtensionToolContext);

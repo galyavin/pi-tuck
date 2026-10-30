@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import { applyTailBudget, buildOwnCut, findBudgetCutIndex } from '../src/pi-tuck/cut';
+import { applyTailBudget, buildOwnCut, findBudgetCutIndex } from '../src/tuck/cut';
 
-// F3: the budget cut is searched forward from the crossing and, only when that finds no boundary (the crossing is inside the final all-toolResult
+// The budget cut is searched forward from the crossing and, only when that finds no boundary (the crossing is inside the final all-toolResult
 // tail) and only for an oversized user-anchored tail (Case B), backward to the nearest earlier non-toolResult message. Case A (compact-all) keeps
 // the forward-only search. One char is one token here (charsPerToken 1), so the sizes below are token counts.
 const msg = (role: 'user' | 'assistant' | 'toolResult', size: number) => ({ role, content: 'x'.repeat(size) });

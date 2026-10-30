@@ -20,7 +20,7 @@ test('the post-cut check of an incoming prompt counts the whole request with a f
 		expect(r.faults.join(' | '), r.probe).toContain(PREFLIGHT);
 		expect(r.faults.join(' | '), r.probe).not.toContain(GUARD);
 		expect(r.requests, r.probe).toBe(0);
-		expect(h.notices.join(' '), r.probe).toContain('adjust the input, model or reserve'); // over the room: the capacity error
+		expect(h.notices.join(' '), r.probe).toContain("lower Pi's compaction.reserveTokens"); // over the room: the capacity error
 		expect(r.hostCalls, r.probe).toBe(2); // the decision and the snapshot after the cut
 	} finally { await h.cleanup(); }
 });
@@ -49,14 +49,14 @@ test(`an opportunistic cut that cannot be made leaves the incident recorder reco
 		? { at: 'tool', complete: BAND + 2000, host: HOST, history: 1500, fresh: 100, compaction: { diagnostics } }
 		: { at: 'prompt', complete: BAND + 500, host: HOST, compactedLast: true, compaction: { diagnostics } });
 	try {
-		await h.session.prompt('/compaction-incident on');
-		await h.session.prompt('/compaction-incident status');
+		await h.session.prompt('/tuck-incident on');
+		await h.session.prompt('/tuck-incident status');
 		expect(JSON.parse(h.notices.at(-1)!).state, h.notices.join('\n')).toBe('recording');
 		const r = await h.run();
 		expect(r.cuts, r.probe).toBe(0);
 		expect(r.faults, r.probe).toEqual([]);
 		expect(r.requests, r.probe).toBe(why === 'the planner declines it' ? 2 : 1);
-		await h.session.prompt('/compaction-incident status');
+		await h.session.prompt('/tuck-incident status');
 		expect(JSON.parse(h.notices.at(-1)!).state, h.notices.join('\n')).toBe('recording');
 	} finally { await h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
 });

@@ -1,5 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { buildGlobalIndexById } from "./pi-tuck/core/global-indices";
+import { buildGlobalIndexById } from "./tuck/core/global-indices";
 import { createRecall, type RecallPolicy, type ReadableEntry } from "./recall";
 
 /** Select one original readable source. No filesystem, state, paging or semantic inference. */

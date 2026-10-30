@@ -1,7 +1,7 @@
 import { pythonFlags, testPython, testNativeOwner } from './python-fixture';
 import {expect,test} from 'vitest';
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,realpathSync,writeFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -40,11 +40,12 @@ print(json.dumps({'ranked':scored['ranked'],'observed':scored['observed'],'statu
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 
-// T16(b): the worker scores the window's vectors and returns the stable top 24; node merges chunks of 1024 keys. The reference is the path this replaced: every vector
+// The worker scores the window's vectors and returns the stable top 24; node merges chunks of 1024 keys. The reference is the path this replaced: every vector
 // read in 128-key batches in rowid order, scored with a JS reduce over float64 values, stable-sorted and cut to 24 after each batch. The fixture has exact-duplicate vectors
 // inside one batch, across the 128 boundary and across the 1024-key chunk boundary, and more top-scoring duplicates than the 24 that are kept, so the cut falls inside a tie group.
 test('worker scoring in chunks gives the same top 24, scores included, as a full listing scored with a JS reduce, ties and all',async()=>{
- const root=mkdtempSync(join(tmpdir(),'semantic-score-')),runtime=join(root,'runtime'),project=join(root,'project'),database=join(root,'cache.sqlite');mkdirSync(runtime);mkdirSync(project);
+// The worker refuses an index path through a symlink, and macOS's temporary folder sits under one (/var → /private/var).
+ const root=mkdtempSync(join(realpathSync(tmpdir()),'semantic-score-')),runtime=join(root,'runtime'),project=join(root,'project'),database=join(root,'cache.sqlite');mkdirSync(runtime);mkdirSync(project);
  for(const name of ['pins.json','assets.sha256.json','requirements.lock'])writeFileSync(join(runtime,name),'{}');
  const worker=fileURLToPath(new URL('../scripts/semantic-worker.py',import.meta.url));
  // Each argument is a list of index requests; the results come back as a list.

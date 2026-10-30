@@ -1,8 +1,10 @@
-import { resolveSourceTime, type SourceTime } from "./pi-tuck/core/source-time";
-import { orderByOriginalSource } from "./pi-tuck/core/source-order";
+import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
+import { orderByOriginalSource } from "./tuck/core/source-order";
 import { assertNativeToolRounds } from "./protocol.js";
-import { TRANSCRIPT_HEADER, parseRecords, serializeTranscript, type TranscriptRecord } from "./pi-tuck/core/transcript";
-import { SUMMARY_SUFFIX } from "./pi-tuck/core/format";
+import { parseRecords, serializeTranscript, splitSummary, type TranscriptRecord } from "./tuck/core/transcript";
+import { DIALOGUE_SUFFIX, RANKED_SUFFIX } from "./tuck/core/format";
+import { textOf } from "./tuck/core/content";
+import { MAX_TASK_CONTRACT_CHARACTERS, head, ledgerItems, ledgerRecords } from "./ledger.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -10,19 +12,19 @@ import { ATTEMPT_NOTICE, createRecall, type RecallPolicy,
 	type PreparedKeywordQuery, type RecordedAttempt, type RecallOptions } from "./recall.js";
 
 type AgentMessage = Parameters<typeof convertToLlm>[0][number];
-type Cut = import("./pi-tuck/cut").OwnCutResult;
+type Cut = import("./tuck/cut").OwnCutResult;
 /** Counts a projection of the conversation exactly as the triggers, the post-cut checks and the guard do (budget.ts). */
 export type Measure = (messages: AgentMessage[]) => number;
-/** The summary view that produced a draft: the compiler's mode ladder, or the ranked fallback. */
-export type DraftMode = "bounded" | "masked" | "full" | "dialogue" | "ranked";
+/** The summary view that produced a draft: the whole pre-cut dialogue, or the ranked fallback. Both carry the file ledger. */
+export type DraftMode = "dialogue" | "ranked";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
-    | { compaction?: never; unavailable: string; capacityRejected?: boolean };
+    | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean };
 interface SearchHit { index: number; role: string; summary: string; snippet?: string }
 export interface RecallContinuation { query: string; throughEntryId: string; offset: number }
 /** Includes JSON escaping, hit metadata and continuation, not just excerpt text. */
 export const MAX_RANKED_RESPONSE_CHARACTERS = 16000;
 /** Deliberately narrow contract with the pinned pi-tuck source exports. No standalone hooks are installed. */
-export interface PiTuck {
+export interface Tuck {
 	buildOwnCut(entries: SessionEntry[], keep: number): Cut;
 	applyTailBudget(entries: SessionEntry[], cut: Extract<Cut, { ok: true }>, options: { charsPerToken: number; maxTokens?: number; oversizedFactor?: number }): Cut;
 	calibrateCharsPerToken(chars: number, tokens: number): { charsPerToken: number };
@@ -31,38 +33,38 @@ export interface PiTuck {
 		receiptContext?: { messages: AgentMessage[]; sourceIndices: (number | undefined)[] };
 		ranking: { maxBriefChars: number; maxBriefCharsCeiling?: number; briefCharsPerBlock?: number; maxBriefUnits?: number;
             mandatorySourceIndices?: ReadonlySet<number> } }): string;
-	/** Optional internal whole-residual capability; injected ranked-only compilers keep their contract. */
-	compileResidual?: (input: Parameters<PiTuck["compileRanked"]>[0], includeObservationBodies?: boolean, maxCharacters?: number, dialogueOnly?: boolean) => string;
-	/** Optional exact ranges extend an already selected residual; ranked fallback is unchanged. */
+	/** The whole pre-cut dialogue view; "" offers none, and the ranked view is used. */
+	compileDialogue(input: Parameters<Tuck["compileRanked"]>[0]): string;
 	prepareKeywordQuery(query: string): PreparedKeywordQuery;
 	searchEntriesDetailed(entries: SearchHit[], messages: Message[], query: string,
 		tuning: { relativeFloor: number; cap: number }): {
 		hits: SearchHit[];
 	};
 }
-import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./pi-tuck/cut";
-import { calibrateCharsPerToken, estimateSourceMessageChars } from "./pi-tuck/core/token-estimate";
-import { buildGlobalIndexById } from "./pi-tuck/core/global-indices";
-import { compileRanked, compileResidual } from "./pi-tuck/core/summarize";
-import { prepareKeywordQuery } from "./pi-tuck/core/keyword-query";
-import { searchEntriesDetailed } from "./pi-tuck/core/search-entries";
-export const piTuck: PiTuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileRanked, compileResidual, prepareKeywordQuery, searchEntriesDetailed };
-/** Ranked fallback allowance: spend at most25% of remaining estimated room.
- * A whole residual may offer3x this allowance, with actual preview/headroom guards.
- * The4-character conversion matches pinned Pi's summary estimator, not a
- * provider-token guarantee. Mandatory sources are already charged in base. */
+import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./tuck/cut";
+import { calibrateCharsPerToken, estimateSourceMessageChars } from "./tuck/core/token-estimate";
+import { buildGlobalIndexById } from "./tuck/core/global-indices";
+import { compileRanked, compileDialogue } from "./tuck/core/summarize";
+import { prepareKeywordQuery } from "./tuck/core/keyword-query";
+import { searchEntriesDetailed } from "./tuck/core/search-entries";
+export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileRanked, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
+/** The one historical allowance: at most 25% of remaining estimated room, for both views.
+ * The whole dialogue is offered only within it (plus actual preview/headroom guards);
+ * otherwise the ranked view fills it. The 4-character conversion matches pinned Pi's
+ * summary estimator, not a provider-token guarantee. Mandatory sources (current input,
+ * initiating prompt, file ledger) are already charged in base. */
 export function historicalAllowance(window: number, reserve: number, base: number, before: number): number {
     const free = Math.max(0, window - reserve - base - 1);
     return Math.max(0, Math.min(Math.floor(free / 4), before - base - 1)) * 4;
 }
 /** Uses pi-tuck's own cut, calibrated maximum tail and ranked compiler; Pi owns persistence and continuation. */
-export function piTuckDraft(piTuck: PiTuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false) {
- return piTuckObservedDraft(piTuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual }, ctx, reserveTokens, measure, policy, retainCurrentInput);
+export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false) {
+ return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual }, ctx, reserveTokens, measure, policy, retainCurrentInput);
 }
 /** Shared compiler observes canonical branch and current token estimate; no native preparation utility. */
-export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean }, ctx: ExtensionContext,
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
- const { isHistorySource } = createRecall(policy);
+ const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
 	if (input.branchEntries.some(entry => entry.type === "context_edit" && entry.replacement !== null))
 		return { unavailable: "pi-tuck does not support replacement context edits" };
@@ -75,18 +77,18 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
 	// Pi previews and persists against the original branch, including its edits.
 	const entries: SessionEntry[] = branch.filter(isHistorySource).map((e) => omitted.has(e.id)
 		? { type: "label", id: e.id, parentId: e.parentId, timestamp: e.timestamp, targetId: e.id, label: "" } : e);
-	const calibration = piTuck.buildOwnCut(entries, 0);
+	const calibration = tuck.buildOwnCut(entries, 0);
 	const chars = (calibration.ok ? calibration.messages.reduce((n, m) => n + estimateSourceMessageChars(m), 0) : 0)
 		+ (input.previousSummary?.length ?? 0);
-	const { charsPerToken } = piTuck.calibrateCharsPerToken(chars, input.tokensBefore);
+	const { charsPerToken } = tuck.calibrateCharsPerToken(chars, input.tokensBefore);
     // A preferred tail cannot consume more than the current input allowance.
     // Current/fresh-source floors below may still require an explicit rejection.
     const inputRoom = Math.max(0, (ctx.model?.contextWindow ?? 0) - reserveTokens - 1);
     const maxTokens = Math.min(MAX_TAIL_TOKENS, inputRoom);
     // Keep the current user turn native; older conversation competes in the
     // existing exact historical view instead of boosting a minimum native tail.
-	let cut = piTuck.buildOwnCut(entries, 1);
-	if (cut.ok) cut = piTuck.applyTailBudget(entries, cut, { charsPerToken, maxTokens,
+	let cut = tuck.buildOwnCut(entries, 1);
+	if (cut.ok) cut = tuck.applyTailBudget(entries, cut, { charsPerToken, maxTokens,
         oversizedFactor: Math.min(OVERSIZED_TAIL_FACTOR, inputRoom / Math.max(1, maxTokens)) });
 	if (!cut.ok) return { unavailable: `pi-tuck cannot select a cut: ${cut.reason}` };
     // The latest call's trailing receipts have not reached a subsequent response.
@@ -104,7 +106,7 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
         const keptId = cut.firstKeptEntryId;
         const chosenBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === keptId);
         if (hasFreshReceipt && lastResponse < chosenBoundary) {
-            const prefix = piTuck.buildOwnCut(entries.slice(0, lastResponse), 0);
+            const prefix = tuck.buildOwnCut(entries.slice(0, lastResponse), 0);
             if (!prefix.ok) return { unavailable: "No reducible history before the fresh tool round" };
             cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
                 firstKeptEntryId: response.id, compactAll: false, keepFallbackToCompactAll: false,
@@ -118,7 +120,7 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
     const shellKeptId = cut.firstKeptEntryId;
     const shellBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === shellKeptId);
     if (freshBash >= 0 && freshBash < shellBoundary) {
-        const prefix = piTuck.buildOwnCut(entries.slice(0, freshBash), 0);
+        const prefix = tuck.buildOwnCut(entries.slice(0, freshBash), 0);
         if (!prefix.ok) return { unavailable: "No reducible history before the fresh shell output" };
         cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
             firstKeptEntryId: entries[freshBash]!.id, compactAll: false, keepFallbackToCompactAll: false,
@@ -131,12 +133,16 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
     const current = entries[userPosition];
     const userContent = current?.type === "message" && current.message.role === "user" ? current.message.content : undefined;
     const textOnly = typeof userContent === "string" || (Array.isArray(userContent) && userContent.every(block => block.type === "text"));
+    // The initiating prompt is the task contract: quoted in every summary that compacts it away. It is the branch's first user
+    // source; when a native edit omitted it, nothing is quoted and no later user source is promoted in its place.
+    const firstUser = branch.find(entry => entry.type === "message" && entry.message.role === "user");
+    const firstUserPosition = entries.findIndex(entry => entry.id === firstUser?.id && entry.type === "message");
     const selectedKeptId = cut.firstKeptEntryId;
     const selectedBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === selectedKeptId);
     // An unobserved input or non-text input stays native. Quoting cannot deliver
     // its pixels/unknown blocks, and must not count as first exposure.
     if (userPosition >= 0 && userPosition < selectedBoundary && (!textOnly || userPosition > lastResponse)) {
-        const prefix = piTuck.buildOwnCut(entries.slice(0, userPosition), 0);
+        const prefix = tuck.buildOwnCut(entries.slice(0, userPosition), 0);
         if (!prefix.ok) return { unavailable: "No reducible history before the current user input" };
         cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
             firstKeptEntryId: current!.id, compactAll: false, keepFallbackToCompactAll: false,
@@ -148,14 +154,17 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
     // Keep the preferred native tail when a complete historical offer fits.
     // Otherwise try the current/fresh floor: whole dialogue can take priority
     // over already-observed native bulk, under the same final admission guards.
-    let completeDialogue = false;
+    // Each cut's file ledger skips write/edit calls whose result is an error.
+    const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
+    // First occurrence, as entries.find would resolve it.
+    const entryById = new Map<string, SessionEntry>();
+    for (const entry of entries) if (!entryById.has(entry.id)) entryById.set(entry.id, entry);
     const compileAtCut = (cut: Extract<Cut, { ok: true }>): Draft => {
-    completeDialogue = false;
-	const indices = piTuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
+	const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
 	// Keep native custom provenance; converting custom notices to user text loses the distinction.
 	const boundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
     if (boundary < 0) throw new Error("Missing original-source cut boundary");
-    const originalCut = piTuck.buildOwnCut(entries.slice(0, boundary).filter(entry => entry.type !== "compaction"), 0);
+    const originalCut = tuck.buildOwnCut(entries.slice(0, boundary).filter(entry => entry.type !== "compaction"), 0);
     if (!originalCut.ok) return { unavailable: "No eligible original prefix to compile" };
     const protectedUser = userPosition >= 0 && userPosition < boundary && textOnly ? current : undefined;
     const currentIndex = protectedUser ? indices.get(protectedUser.id) : undefined;
@@ -166,11 +175,24 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
 		receiptContext.messages.push(entry.message); receiptContext.sourceIndices.push(indices.get(entry.id));
 	}
     const mandatory: TranscriptRecord[] = [];
-    if (protectedUser?.type === "message" && protectedUser.message.role === "user") {
-        const content = protectedUser.message.content;
-        const text = typeof content === "string" ? content : content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n");
-        mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }], text });
+    // The initiating prompt is quoted first, like the current input below: text only, since quoting cannot deliver other blocks.
+    const initiating = firstUserPosition >= 0 && firstUserPosition < boundary && entries[firstUserPosition]!.id !== protectedUser?.id ? entries[firstUserPosition] : undefined;
+    const initiatingContent = initiating?.type === "message" && initiating.message.role === "user" ? initiating.message.content : undefined;
+    if (initiating && (typeof initiatingContent === "string" || Array.isArray(initiatingContent) && initiatingContent.every(block => block.type === "text"))) {
+        const text = textOf(initiatingContent), index = indices.get(initiating.id);
+        if (index === undefined) throw new Error("Missing initiating user source index");
+        const quoted = head(text, MAX_TASK_CONTRACT_CHARACTERS), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(initiating) }];
+        if (text.trim()) {
+            mandatory.push({ kind: "excerpt", role: "user", sourceIndex: index, sourceTimes, text: quoted });
+            if (quoted.length < text.length) mandatory.push({ kind: "omission", role: "user", sourceIndex: index, sourceTimes,
+                reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}` });
+        }
     }
+    if (protectedUser?.type === "message" && protectedUser.message.role === "user")
+        mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }], text: textOf(protectedUser.message.content) });
+    // The file ledger of the compacted history is mandatory, so it is charged in base like the quotes above.
+    // A locator is given only where tuck_recall {index} resolves it: a unique global index of a readable entry.
+    const items = ledgerItems(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined, failedCalls);
 	const header = ctx.sessionManager.getHeader();
 	if (!header) throw new Error("Missing native session header");
 	const details = { compactor: "pi-tuck", version: 2, adapter: "standalone", keptUserTurns: cut.keptUserTurns,
@@ -181,94 +203,87 @@ export function piTuckObservedDraft(piTuck: PiTuck, input: { branchEntries: Sess
         return manager.buildSessionProjection().messages;
     };
     const before = measure(projected.messages);
-    const baseSummary = serializeTranscript(mandatory.length ? mandatory :
-        [{ kind: "omission", reason: "Historical context omitted; read original sources with pi_tuck_recall" }]) + SUMMARY_SUFFIX;
-    const base = measure(preview(baseSummary));
-    if (!ctx.model || base + reserveTokens >= ctx.model.contextWindow || base >= before)
-        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(ctx.model && base + reserveTokens >= ctx.model.contextWindow) };
-    const maxBriefChars = historicalAllowance(ctx.model.contextWindow, reserveTokens, base, before);
-    const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entries.find(entry => entry.id === id)!)), receiptContext,
+    const model = ctx.model;
+    const floorAt = (keep: number) => {
+        const ledger = ledgerRecords(items, keep);
+        // Charged with the longer (ranked) closing, since the view is chosen later against this base.
+        return { ledger, base: measure(preview(serializeTranscript([...mandatory, ...ledger]) + RANKED_SUFFIX)) };
+    };
+    const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
+    // When the whole floor cannot fit, the ledger keeps only its heading and older-files count; only that can refuse the cut.
+    let floor = floorAt(items.length);
+    if (!fits(floor.base) && items.length) floor = floorAt(0);
+    const { ledger, base } = floor;
+    if (!model || !fits(base))
+        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow) };
+    const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
+    const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entryById.get(id)!)), receiptContext,
         ranking: { maxBriefChars, mandatorySourceIndices: new Set(mandatory.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },
     };
     // All offers use the same parser, mandatory insertion, native preview and guard.
-    const assemble = (compiled: string, omissionBase = false) => {
+    // Each view ends with its own closing section, true for what that view holds.
+    const assemble = (compiled: string, closing: string) => {
         if (typeof compiled !== "string") throw new Error("pi-tuck returned an invalid summary");
-        const records = compiled ? parseRecords(compiled.slice(TRANSCRIPT_HEADER.length + 1, -SUMMARY_SUFFIX.length)) : [];
+        const split = compiled ? splitSummary(compiled) : { body: "" };
+        if (!split) throw new Error("pi-tuck returned an invalid summary");
+        const records = parseRecords(split.body);
         for (const record of mandatory) {
             const insertion = records.findIndex(row => row.sourceIndex !== undefined && row.sourceIndex > record.sourceIndex!);
             records.splice(insertion < 0 ? records.length : insertion, 0, record);
         }
         orderByOriginalSource(records, sourceIndices, originalCut.selectedIds);
-        const summary = records.length ? serializeTranscript(records) + SUMMARY_SUFFIX : omissionBase ? baseSummary : "";
-        // An empty summary is refused by the callers ("extracted no summary"): there is no projection of it to build or to count.
-        if (!summary) return { summary, after: 0 };
+        // The ledger always has its heading, so no summary is empty.
+        records.push(...ledger);
+        const summary = serializeTranscript(records) + closing;
         const projection = preview(summary);
         assertNativeToolRounds(projection);
         return { summary, after: measure(projection) };
     };
-    const free = Math.max(0, ctx.model.contextWindow - reserveTokens - base - 1);
+    const free = Math.max(0, model.contextWindow - reserveTokens - base - 1);
     const headroom = Math.ceil(free / 4);
-    let offer: ReturnType<typeof assemble> | undefined;
-    // Reuse the ranked allowance for historical payloads; complete dialogue remains whole.
-    let partialCeiling = maxBriefChars;
-    let maskedAfter: number | undefined;
-    let offerMode: DraftMode = "ranked";
-    if (piTuck.compileResidual) for (const mode of ["bounded", "masked", "full", "dialogue"] as const) {
-        const residual = piTuck.compileResidual(compileInput, mode !== "masked" && mode !== "dialogue", mode === "bounded" ? partialCeiling : undefined, mode === "dialogue");
-        if (typeof residual !== "string") throw new Error("pi-tuck returned an invalid summary");
-        if (!residual.trim()) continue;
-        const candidate = residual.length <= 3 * maxBriefChars || mode === "masked" && input.operatorManual ? assemble(residual) : undefined;
-        if (mode === "masked") maskedAfter = candidate?.after;
-        if (candidate && residual.length <= 3 * maxBriefChars) {
-            if (candidate.after < before && candidate.after + reserveTokens + headroom < ctx.model.contextWindow) {
-                offer = candidate;
-                offerMode = mode;
-                break;
-            }
-            if (mode === "full") {
-                const target = Math.min(before - 1, ctx.model.contextWindow - reserveTokens - headroom - 1);
-                partialCeiling = Math.min(partialCeiling, Math.max(0, residual.length - 4 * Math.max(1, candidate.after - target)));
-            }
-        }
-    }
+    // The whole pre-cut dialogue, when it fits the allowance; otherwise the ranked view fills the same allowance.
+    // With no allowance only an operator's manual cut can use it.
+    const dialogue = maxBriefChars > 0 || input.operatorManual ? tuck.compileDialogue(compileInput) : "";
+    const dialogueFits = dialogue.length <= maxBriefChars;
+    const candidate = dialogue && (dialogueFits || input.operatorManual) ? assemble(dialogue, DIALOGUE_SUFFIX) : undefined;
+    const offer = candidate && dialogueFits && candidate.after < before && candidate.after + reserveTokens + headroom < model.contextWindow ? candidate : undefined;
     // Manual no-work preserves native originals; final request admission still owns full overhead.
-    if (!offer && input.operatorManual && maskedAfter !== undefined && maskedAfter >= before &&
-        before + reserveTokens < ctx.model.contextWindow)
+    if (!offer && input.operatorManual && candidate && candidate.after >= before &&
+        before + reserveTokens < model.contextWindow)
         return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
-    const { summary, after } = offer ?? assemble(piTuck.compileRanked(compileInput), maxBriefChars === 0);
-    if (!summary.trim()) return { unavailable: "pi-tuck extracted no summary from this history" };
+    const { summary, after } = offer ?? assemble(tuck.compileRanked(compileInput), RANKED_SUFFIX);
     // Draft reduction concerns conversation. Final request admission owns the effective system/tools.
-    if (after + reserveTokens >= ctx.model.contextWindow || after >= before)
-        return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= ctx.model.contextWindow };
-    completeDialogue = Boolean(offer);
-	return { compaction: { summary, firstKeptEntryId: cut.firstKeptEntryId, tokensBefore: input.tokensBefore, details: { ...details, tokensAfter: after, view: offer ? "complete-dialogue" : "ranked", mode: offer ? offerMode : "ranked" } }, after, mode: offer ? offerMode : "ranked" };
+    if (after + reserveTokens >= model.contextWindow || after >= before)
+        return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow };
+    const mode: DraftMode = offer ? "dialogue" : "ranked";
+	return { compaction: { summary, firstKeptEntryId: cut.firstKeptEntryId, tokensBefore: input.tokensBefore, details: { ...details, tokensAfter: after, view: offer ? "complete-dialogue" : "ranked", mode } }, after, mode };
     };
     const preferred = compileAtCut(cut);
-    if (preferred.compaction && completeDialogue) return preferred;
+    if (preferred.mode === "dialogue") return preferred;
     if (!preferred.compaction && !preferred.capacityRejected) return preferred;
     const preferredBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
     let floorBoundary = freshRound ? lastResponse : entries.length;
     if (freshBash >= 0) floorBoundary = Math.min(floorBoundary, freshBash);
     if (userPosition >= 0 && (!textOnly || userPosition > lastResponse)) floorBoundary = Math.min(floorBoundary, userPosition);
     if (floorBoundary <= preferredBoundary) return preferred;
-    const prefix = piTuck.buildOwnCut(entries.slice(0, floorBoundary), 0);
+    const prefix = tuck.buildOwnCut(entries.slice(0, floorBoundary), 0);
     if (!prefix.ok) return preferred;
     const retried = compileAtCut({ ...cut, budgetCut: undefined, messages: prefix.messages, selectedIds: prefix.selectedIds,
         firstKeptEntryId: entries[floorBoundary]?.id ?? "", compactAll: floorBoundary === entries.length,
         keepFallbackToCompactAll: false,
         keptUserTurns: entries.slice(floorBoundary).filter(entry => entry.type === "message" && entry.message.role === "user").length });
-    return preferred.compaction && (!retried.compaction || !completeDialogue) ? preferred : retried;
+    return preferred.compaction && retried.mode !== "dialogue" ? preferred : retried;
 
 }
 
 /** Numeric references use the original session index, then intersect with readable current-branch entries. */
-export function piTuckRecall(piTuck: PiTuck, entries: readonly SessionEntry[], branch: readonly SessionEntry[],
+export function tuckRecall(tuck: Tuck, entries: readonly SessionEntry[], branch: readonly SessionEntry[],
 	input: RecallOptions & { index?: number; continuation?: RecallContinuation }, policy: RecallPolicy = {}) {
  const { readable, discoveryEntry, discoveryExcerpt, discoveryWholeRange, recallAttempts, producerReads, recallHistory } = createRecall(policy);
 	const { continuation } = input;
 	if (continuation && [input.query, input.entryId, input.index, input.offset, input.limit].some((v) => v !== undefined))
 		throw new Error("Use continuation alone to continue the same ranked search");
-	const indices = piTuck.buildGlobalIndexById(entries);
+	const indices = tuck.buildGlobalIndexById(entries);
 	if (input.index !== undefined) {
 		if (input.entryId !== undefined)
 			throw new Error("Use index or entryId to select one source, not both");
@@ -298,8 +313,8 @@ export function piTuckRecall(piTuck: PiTuck, entries: readonly SessionEntry[], b
 	const messages: Message[] = rows.map((r) => ({ role: "user", content: r.text, timestamp: 0 }));
 	// The pinned upstream tuning seam removes selection cutoffs; each response
 	// stays bounded. A native prefix keeps ranking stable while the agent talks.
-	const preparedQuery = piTuck.prepareKeywordQuery(normalizedQuery);
-	const found = piTuck.searchEntriesDetailed(rendered, messages, normalizedQuery, { relativeFloor: 0, cap: rows.length });
+	const preparedQuery = tuck.prepareKeywordQuery(normalizedQuery);
+	const found = tuck.searchEntriesDetailed(rendered, messages, normalizedQuery, { relativeFloor: 0, cap: rows.length });
 	const start = continuation?.offset ?? 0;
 	const throughEntryId = rows.at(-1)?.entryId ?? null;
 	const hits: ({ entryId: string; index: number | undefined; role: string; toolName?: string; toolCallId?: string;

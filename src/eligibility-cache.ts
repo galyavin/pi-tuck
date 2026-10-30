@@ -14,9 +14,9 @@ interface Entry { policy: RecallPolicy | undefined; key: readonly unknown[]; sto
 
 const cache = new WeakMap<object, Entry>();
 
-/** The one place that decides when the snapshot stored for a session manager and policy is still the snapshot a rebuild would give, and when `pi_tuck_search` must rerun its lexical offer after its await: Pi entries
+/** The one place that decides when the snapshot stored for a session manager and policy is still the snapshot a rebuild would give, and when `tuck_search` must rerun its lexical offer after its await: Pi entries
  * are append-only, so a new entry changes the entry count, and a branch switch changes the leaf. Change what invalidates it here and nowhere else.
- * The lexical recheck in `pi_tuck_search` relies on the same contract: `piTuckRecall` is pure in (entries, branch, input, policy) whenever it returns (its only clock use is a 3 s abort that throws), so an unchanged key across the await means an unchanged
+ * The lexical recheck in `tuck_search` relies on the same contract: `tuckRecall` is pure in (entries, branch, input, policy) whenever it returns (its only clock use is a 3 s abort that throws), so an unchanged key across the await means an unchanged
  * lexical offer and the second pass is skipped (`eligibilityKeyMoved`). An entry edited in place
  * after it was appended, a `readAttemptMarker` with hidden state, or a policy mutated after install is outside this contract for both uses. */
 export function eligibilityKey(ctx: Context): readonly unknown[] {

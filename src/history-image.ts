@@ -1,9 +1,9 @@
-import { resolveSourceTime, type SourceTime } from "./pi-tuck/core/source-time";
+import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
+import { isRecallTool } from "./tuck/core/recall-operation";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ATTEMPT_NOTICE, createRecall, type RecallPolicy } from "./recall.js";
-import { isRecallTool } from "./pi-tuck/core/recall-operation";
 
 export const MAX_HISTORY_IMAGE_BYTES = 5 * 1024 * 1024;
 export const ImageRecallInput = Type.Object({

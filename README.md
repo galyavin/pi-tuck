@@ -1,148 +1,124 @@
 # pi-tuck
 
-A Pi extension for deterministic compaction and history recall through
-`pi_tuck_recall` and `pi_tuck_search`. Word recall requires no Python,
-weights or semantic setup. Compaction preserves bounded navigation back to
-original history; it is not a promise that every detail remains in the active
-model context.
+Deterministic compaction for [Pi](https://pi.dev). When a session's context fills up, pi-tuck replaces older turns with a summary built
+from the session itself, not written by a model: no extra model call, no cost, no invented history, and the same input always gives the
+same summary. Nothing is lost: the full history stays in the session file, and the agent gets two tools to read it back, by keyword and
+by meaning.
 
-## Install the tested source pin
-
-Use an installed Pi 1.1.0 host and Node.js >=22.19.0 (the declared Node minimum).
-The representative journey below was tested only on **Darwin arm64, Pi 1.1.0
-and Node.js 26.3.0**, not on other platforms or Node versions.
+## Install
 
 ```sh
-pi install git:github.com/galyavin/pi-tuck@43927fa3fc61de3c89eba4e0ef504a148ead0c89
+pi install npm:pi-tuck
 ```
 
-The command pins the tested source commit. This updated README is a later,
-README-only documentation change, not a new tested source revision. Version
-0.2.1 is marked private in `package.json` and remains unpublished on npm.
-Review extension source before installation: it runs with your user permissions.
-
-### What was demonstrated
-
-One representative journey on 2026-10-24 showed three separate steps:
-
-1. **CLI installation:** `pi install` installed the exact public pin above;
-   all 115 installed source members matched the published source.
-2. **Direct registered SDK calls:** installed Pi 1.1.0's real SDK/resource loader
-   discovered the configured Git package and registered both tools. Direct lexical
-   calls retrieved fixed fictional facts and original native IDs; original-ID
-   reads returned the exact original texts.
-3. **Fresh-process reopening:** a new SDK process reopened the same persisted
-   native session and repeated both tools' queries and original reads.
-
-Semantics were disabled; both native search results reported zero embedding
-operations. This supports one bounded installation and SDK-reopening journey,
-not interactive/model-selected use, full agent tool hooks, compaction
-qualification, general recall, semantic quality, cross-platform proof or adoption.
-It does not repair the earlier public pin's missing-dist failure.
-
-## Tools, compatibility and developer build
-
-`pi_tuck_recall` provides keyword lookup and original-source navigation;
-`pi_tuck_search` provides historical discovery with lexical evidence available
-without semantics. Old sessions' `vcc_recall` and `vcc_search` calls remain
-recognized in history; those names are not registered as tool aliases.
-
-Semantic search is opt-in and currently limited to Apple Silicon. No weights,
-encoder, utility environment or downloadable companion is shipped here. Publisher
-assets must be acquired and authenticated separately; [RUNTIME.md](RUNTIME.md)
-documents the host adapter contract, not a complete public setup journey. Lexical
-use does not depend on those assets.
-
-For developer checking/building, use Node.js >=22.19.0 and the exact peer/dev
-dependency versions in `package.json`, already supplied locally:
+or straight from GitHub:
 
 ```sh
-npm run check
-npm run build
+pi install git:github.com/galyavin/pi-tuck@v1.0.0
 ```
 
-These are developer commands, not installation instructions. The Pi resource
-points at `index.ts`; compiled library exports and types remain a separate build
-contract, not established by the installation witness above.
+Requires Pi 1.1 or later (tested on 1.1.0 and 1.4.0) and macOS. Semantic search needs Apple silicon; on an Intel Mac everything else works.
+Start a new Pi session after installing.
 
-## Credits and license evidence
+## What it does
 
-This source derives from a files-only extraction, followed by credit and naming
-changes; no source Git history is included. The exact original pi-vcc revision is
-not established. Derived source headers and complete notices are retained in
-[LICENSE](LICENSE). Historical private scores are not adopted as public quality
-evidence.
+**Compaction.** pi-tuck takes over Pi's compaction, both automatic and `/compact`. A summary keeps:
 
-- [pi-vcc](https://github.com/sting8k/pi-vcc) by sting8k: this package includes
-  derived work. The inherited LICENSE is MIT, Copyright (c) 2026 sting8k.
-  The [upstream LICENSE inspected at 733e872bf39be627b1b9eb387f964256c77d3cb3](https://github.com/sting8k/pi-vcc/blob/733e872bf39be627b1b9eb387f964256c77d3cb3/LICENSE)
-  has the same text. That current upstream snapshot is not an identification of
-  the exact pi-vcc revision originally inherited here.
-- [pi-blackhole](https://github.com/k0valik/pi-blackhole) by k0valik: retained
-  headers credit `isContentBearing`, `extractToolCallText`, `getFileIndicators`
-  and `getTouchedFiles` as ports from that MIT-licensed pi-vcc derivative.
-  `src/pi-tuck/core/global-indices.ts` separately cites commit `f82e07a`.
-  Its [LICENSE at f82e07a5595ee15f958c93f745fae805b26f0f4b](https://github.com/k0valik/pi-blackhole/blob/f82e07a5595ee15f958c93f745fae805b26f0f4b/LICENSE)
-  is MIT, Copyright (c) 2026 k0valik; the complete notice is included in LICENSE.
-  The [current inspected LICENSE at 0ce5ce5fec47223651644fcc967da34dd269f6f1](https://github.com/k0valik/pi-blackhole/blob/0ce5ce5fec47223651644fcc967da34dd269f6f1/LICENSE)
-  is identical. The four other headers do not identify their port revision;
-  neither inspected snapshot fills that lineage gap.
+- the dialogue: what you asked and what the agent answered, in order;
+- the files the agent read, wrote or edited, newest first (up to 60), with pointers to read them back;
+- your first prompt in the session, word for word (up to 12,000 characters).
 
-- [Pi](https://github.com/earendil-works/pi) by Mario Zechner: the two inlined
-  message-construction branches in `src/pi-tuck/cut.ts` have their complete MIT
-  notice retained in LICENSE, using the [Pi v1.1.0 notice at abe508e1b89912adde45528136c3221eb69acdd7](https://github.com/earendil-works/pi/blob/abe508e1b89912adde45528136c3221eb69acdd7/LICENSE).
-  This notice-source pin does not identify the original copy revision.
+Tool output is left out of the summary; it stays in the session file. If the dialogue itself is too long for the room left, the summary
+keeps a ranked selection of records instead. Each summary ends with a short instruction to the agent: re-read a file before editing it,
+and look things up rather than guess.
 
-Copyright (c) 2026 Rustem Galyavin identifies our contributions, not ownership
-of the upstream work. The MIT copyright and permission notices must remain with
-copies or substantial portions; the complete terms and warranty disclaimer are
-in LICENSE. Source provenance and original public-read records are retained
-outside this package for independent review, not bundled as Git history.
+**`tuck_recall`** finds earlier text by keyword and reads any original message or tool result exactly, by the index shown in a summary.
+It can also write an original back out to a file.
 
-## Standalone synthetic lexical benchmark
+**`tuck_search`** finds earlier history related to a question even when the wording differs. It combines keyword hits with local
+semantic search (see below) and returns the original text with pointers for `tuck_recall`.
 
-From this source repository's root, with Node.js >=22.19.0 and the declared
-TypeScript 5.9.3 development dependency already available:
+**Commands**
+
+| Command | Does |
+|---|---|
+| `/tuck-semantic on\|off\|status` | Turns semantic search on or off for this session, or shows its state. |
+| `/tuck-incident on\|next\|off\|status` | Records this session's compaction decisions to a file you can attach to a bug report. |
+
+`/compact` works as usual; pi-tuck does not take custom summary instructions. Pi's own setting `"compaction": { "enabled": false }`
+turns compaction off.
+
+**Small context windows.** pi-tuck keeps room for the model's reply: the larger of the model's output limit and Pi's
+`compaction.reserveTokens` (default 16,384). It refuses a request that cannot fit rather than let the provider cut it off. For a model
+with a window of 32k tokens or less, lower the reserve for that model in Pi's `settings.json`:
+
+```json
+{ "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 4096 } } } }
+```
+
+## Semantic search
+
+Semantic search is on by default and runs entirely on your Mac: an embedding model,
+[EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on the
+CPU. No text leaves your machine.
+
+The first time a session starts, pi-tuck downloads what it needs, once, about 390 MB in the background, and keeps working with keyword
+search meanwhile:
+
+| File | From |
+|---|---|
+| EmbeddingGemma-2, 8-bit GGUF (310 MB) and its tokenizer (32 MB) | huggingface.co |
+| llama.cpp release b11476 for macOS arm64 (12 MB) | github.com/ggml-org/llama.cpp |
+| CPython 3.13 (25 MB) and 16 Python packages for the tokenizer (9 MB) | github.com/astral-sh/python-build-standalone, pypi.org |
+
+Every file is pinned to a SHA-256 in [src/assets.ts](src/assets.ts) and checked before use. Everything goes to `~/.pi/agent/pi-tuck`;
+to remove it, delete that folder. Setup needs about 6.5 GB of free disk space while it runs and uses 460 MB after. If it fails, for
+example offline, pi-tuck says so and tries again at the next session start. One-shot runs (`pi -p`) don't start the setup.
+
+Indexing starts in the background the first time a session uses `tuck_search`, and catches up after each compaction. Semantic search is off when Pi
+runs in a folder that contains Pi's agent folder, such as your home folder, because its own files live there; open Pi in a project folder.
+
+**Turn it off** by creating `~/.pi/agent/pi-tuck.json`:
+
+```json
+{ "semanticRecall": false }
+```
+
+Nothing is then downloaded, and `tuck_search` uses keywords only. If you set `PI_CODING_AGENT_DIR`, the file and the download folder are
+in that folder instead.
+
+## Use from code
+
+The package also exports its parts for hosts that embed Pi through its SDK:
+
+```ts
+import { installCompaction, createSemanticRecall, ensureSemanticRuntime } from "pi-tuck";
+
+const config = JSON.parse(readFileSync(await ensureSemanticRuntime("/abs/path/outside/projects"), "utf8"));
+const semanticRecall = createSemanticRecall(config);
+const handle = await installCompaction(pi, { semanticRecall });
+await handle.setSemanticEnabled(true, ctx); // e.g. in a session_start handler
+```
+
+`installCompaction` options (reply reserve, host-injected messages, recall policy and others) are documented in
+[src/compaction.ts](src/compaction.ts). `handle.close()` stops the semantic worker; call it before disposing a session.
+
+## Development
 
 ```sh
-nice -n 19 node benchmark/gate-suite.mjs \
-  "$(dirname "$(pwd -P)")/tuck-benchmark-results-001" \
-  "$(dirname "$(pwd -P)")/tuck-benchmark-work-001"
+npm install
+npm run check   # types
+npm test        # unit tests (Vitest) and the Python runtime tests
+npm run build   # dist/ for the library export
 ```
 
-Use fresh absolute normalized destinations outside the source tree, with existing
-nonsymlink parents; change both suffixes for another run. Unix `nice` at priority
-19 is required. Keep both result and work directories. This command installs
-nothing and loads no Vitest, extension host, model, network or private asset.
-It is a source-tree command, not an npm script or an npm-tarball availability
-claim. Local source is trusted code, not sandboxed.
+## Credits
 
-The default creates a new self-reference from the current source tree, runs the
-candidate plus harmless-change and actual-source-loss controls, and invokes the
-real comparator. Success requires `suite.json` status 0; this includes the
-intentional loss comparator exiting 1 with `Regression c01`. Unexpected failures
-stop the suite, and existing results are never overwritten. To compare compatible
-result files separately:
+pi-tuck grew out of [pi-vcc](https://github.com/sting8k/pi-vcc) by sting8k and includes code from
+[pi-blackhole](https://github.com/k0valik/pi-blackhole) by k0valik and from [Pi](https://github.com/earendil-works/pi) by Mario
+Zechner, all MIT; their notices are in [LICENSE](LICENSE). The downloaded model is Apache-2.0, llama.cpp is MIT, and CPython is under the
+PSF license.
 
-```sh
-node benchmark/gate-compare.mjs BASELINE_RESULT.json CANDIDATE_RESULT.json
-```
+## License
 
-The fixed fictional fixture scores only delivered, source-backed literal facts.
-Neither any case nor the aggregate may decrease. Results retain raw retrieval,
-delivered snippets, scoring inputs, commands, source manifests and generated-module
-identities. See [benchmark/README.md](benchmark/README.md) for exact budgets,
-validation boundaries, controls and the optional explicit same-harness reference
-source. The default self-reference checks mechanics, not non-regression against
-an earlier release. No fresh benchmark result for this final tree is claimed here.
-
-## Scope and limits
-
-Only reproducible public synthetic lexical results may support bounded lexical
-mechanics claims. This easy, fixed fixture does not establish binding-budget
-stress, semantic recall, latency, integration, paired-release quality,
-cross-platform behavior or release readiness. The benchmark itself does not
-establish real-host registration. Nonsemantic
-tests likewise do not establish those properties. Model-dependent qualification
-and private evidence are not distributed. See
-[CAPABILITY-INVENTORY.md](CAPABILITY-INVENTORY.md) for the shipped scope.
+MIT

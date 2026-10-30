@@ -8,8 +8,8 @@ import { createAssistantMessageEventStream, getCurrentSystemMessage, type Assist
 import { convertToLlm, createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager, SettingsManager, type AgentSession, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { installCompaction, type CompactionOptions } from '../src/compaction';
 import { bandOf } from '../src/budget';
-import { serializeTranscript } from '../src/pi-tuck/core/transcript';
-import { SUMMARY_SUFFIX } from '../src/pi-tuck/core/format';
+import { serializeTranscript } from '../src/tuck/core/transcript';
+import { RANKED_SUFFIX } from '../src/tuck/core/format';
 
 // Window 272,000 and response reserve max(32,768, model.maxTokens 128,000) leave an input room of 144,000 estimated tokens.
 export const ROOM = 144000, HOST = 6000;
@@ -74,7 +74,7 @@ export interface Options {
  cycleSize?: number;
  /** With `history` at the prompt: the prompt grows until the prompt and the system part make exactly this many tokens (`complete` is then ignored). */
  incoming?: number;
- /** A handler registered before the compactor cancels every cut Pi asks for (as the Steward's profile enforcement may). */
+ /** A handler registered before the compactor cancels every cut Pi asks for (as another extension's policy may). */
  cancelCompact?: boolean;
  /** Called after the compactor has taken its snapshot at each decision (0: the prompt; i: the i-th tool boundary), for growth the trigger cannot see. */
  afterDecision?: (index: number, api: Unseen) => void;
@@ -153,7 +153,10 @@ export async function harness(options: Options) {
    // Probes only (registered before the compactor's hooks): the complete request as the guard will count it, from Pi's own functions.
    const toolsJson = () => JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
    const hostTokens = () => nonSystem([hostInput()]);
-   pi.on('before_agent_start', (event, ctx) => { cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.prompt, timestamp: 0 }) + referenceSystemPart(messages, event.systemPrompt, toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
+   // A prompt's decision is made on `input`, while the session is idle (Pi 1.4 counts the run as started at before_agent_start).
+   let starting = false; // as the compactor does: a message sent while a run starts joins it (Pi 1.1 still reports idle then)
+   pi.on('before_agent_start', () => { starting = true; }); pi.on('agent_start', () => { starting = false; }); pi.on('agent_settled', () => { starting = false; });
+   pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) options.onBoundary?.(event, ctx); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
    await installCompaction(pi, {
@@ -198,7 +201,7 @@ export async function harness(options: Options) {
   if (options.summary) {
    const records: Parameters<typeof serializeTranscript>[0] = [{ kind: 'omission', reason: 'Earlier work, summarized. ' + text(800) }];
    if (options.omitted) records.unshift({ kind: 'excerpt', role: 'user', sourceIndex: 0, text: 'o'.repeat(options.omitted) });
-   manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + SUMMARY_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + RANKED_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    if (options.omitted) manager.appendContextEdit(opening, null);
   }
   // History up to the request the case asks for. At the tool boundary the last tool result is sized when the tool runs.
@@ -211,7 +214,7 @@ export async function harness(options: Options) {
   else if (!(options.at === 'prompt' && options.history !== undefined)) while (historyComplete() + slack < target) options.oneTurn ? round(sizeFor) : cycle(sizeFor);
   if (options.at === 'prompt' && options.compactedLast) {
    // The compaction keeps everything after the opening request, so the saved conversation is large and the last saved entry is the compaction.
-   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + SUMMARY_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + RANKED_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    // The prompt carries the rest, so the last saved entry stays the compaction.
    const rest = options.complete - historyComplete();
    expect(rest).toBeGreaterThanOrEqual(0);

@@ -3,8 +3,8 @@ import { expect, vi } from 'vitest';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { installCompaction, type CompactionOptions } from '../src/compaction';
-import { serializeTranscript } from '../src/pi-tuck/core/transcript';
-import { SUMMARY_SUFFIX } from '../src/pi-tuck/core/format';
+import { serializeTranscript } from '../src/tuck/core/transcript';
+import { RANKED_SUFFIX } from '../src/tuck/core/format';
 import { EXACT_RESERVE, ROOM_EXACT, WINDOW, referenceGuardSystem } from './budget-fixture';
 import { scriptedModelRuntime } from './model-fixture';
 
@@ -34,7 +34,7 @@ export const stamp = (calibrationFactor: unknown, calibrationIdentity: unknown =
 export const stampWindow = (calibrationWindow: unknown, calibrationIdentity: unknown = KEY, calibrationFactor: unknown = Array.isArray(calibrationWindow) ? Math.max(1, ...calibrationWindow) : 1) =>
  receipted({ calibrationFactor, calibrationIdentity, calibrationWindow });
 /** Where a compaction entry's summary format is this compactor's own. */
-export const SUMMARY = serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + SUMMARY_SUFFIX;
+export const SUMMARY = serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + RANKED_SUFFIX;
 
 const user = { role: 'user' as const, content: 'Opening task', timestamp: 0 };
 /** A session whose branch holds, in order, the given compaction details (a `null` is a foreign entry: Pi's own shape, no receipt). */

@@ -5,7 +5,7 @@ import { exportSource } from "./source-export.js";
 import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
-import { bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart,
+import { bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -14,7 +14,7 @@ import { Check } from "typebox/value";
 import type { RecallPolicy } from "./recall.js";
 import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY_CHARACTERS } from "./recall.js";
 
-import { piTuck, piTuckDraft, piTuckObservedDraft, piTuckRecall } from "./pi-tuck.js";
+import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { eligibilityKey, eligibilityKeyMoved, memoizedEligibleSources } from "./eligibility-cache";
 
@@ -46,8 +46,8 @@ export const CALIBRATION_CEILING = 1.5;
 /** How many recent paired replies (and overflow bounds, and the seed while it is among them) the calibration factor is the maximum of. */
 export const CALIBRATION_WINDOW = 32;
 /** Measured provider-input undercount by model, as "provider/id". An identity with no usable receipt of its own starts its window with this entry, which
- * ages out after CALIBRATION_WINDOW later entries; every other model starts at 1. Empty (CTO, 2026-10-20): the 1.18 measured for openai/gpt-6.1-sol on
- * 2026-10-19 was the replayed reasoning the estimate now counts; with it counted, the first 32 requests of the AR root measure at most 0.97. */
+ * ages out after CALIBRATION_WINDOW later entries; every other model starts at 1. Empty: an undercount of 1.18 once measured for openai/gpt-6.1-sol
+ * was replayed reasoning, which the estimate now counts; with it counted, the first 32 requests of a real session measured at most 0.97. */
 export const MEASURED_CALIBRATION: Readonly<Record<string, number>> = {};
 /** The window of an identity with no usable receipt of its own: the model's measured undercount (at most CALIBRATION_CEILING), else 1. `key` is
  * `identityFor`'s [provider, api, id]. */
@@ -114,7 +114,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const found = findReceiptEntry(ctx.sessionManager.getBranch(), proposalId);
         if (found) { recorder.capture("observed-entry", "current-native-branch-memory-not-durable", { entryId: found.id, diagnosticReceiptId: proposalId, details: found.type === "compaction" ? found.details : undefined }); recorder.cut(); proposalId = undefined; }
     });
-    const captureDraft = (draft: NonNullable<ReturnType<typeof piTuckDraft>["compaction"]>, ctx: ExtensionContext, reserve: number, reason: string, tokensBefore: number, retainCurrentInput: boolean, operatorManual: boolean, previousSummary?: string, budget?: { response: number; host: number; mandatory: number; target: Target; margin: number }) => recorder.measureInline(() => {
+    const captureDraft = (draft: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>, ctx: ExtensionContext, reserve: number, reason: string, tokensBefore: number, retainCurrentInput: boolean, operatorManual: boolean, previousSummary?: string, budget?: { response: number; host: number; mandatory: number; target: Target; margin: number }) => recorder.measureInline(() => {
         const attached = attachReceipt(draft, reason, reserve, ctx.model?.contextWindow ?? 0, { responseReserveTokens: budget?.response, hostInputTokens: budget?.host, mandatoryInputTokens: budget?.mandatory, target: budget?.target, triggerMarginTokens: budget?.margin, calibrationFactor: factor, calibrationWindow: [...ratios], calibrationIdentity: identity, activeInputCeilingTokens: lastCeiling });
         proposalId = receiptId(attached);
         if (recorder.enabled) { try {
@@ -124,15 +124,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         } catch { recorder.stop("capture-failed-gap"); } }
         return attached;
     });
-    pi.registerCommand("compaction-incident", { description: "Session-local compaction diagnostics: on, next, off, status", handler: async (args, ctx) => {
+    pi.registerCommand("tuck-incident", { description: "Record this session's compaction decisions for a bug report: on, next, off, status", handler: async (args, ctx) => {
         const command = args.trim();
         if (command === "on" || command === "next") { access(); recorder.start(ctx.cwd, command === "next", status => ctx.ui.notify(status, "info")); }
         else if (command === "off") { recorder.stop("operator-cancelled"); }
-        else if (command && command !== "status") ctx.ui.notify("Use /compaction-incident on|next|off|status", "warning");
+        else if (command && command !== "status") ctx.ui.notify("Use /tuck-incident on|next|off|status", "warning");
         ctx.ui.notify(JSON.stringify(recorder.status()), "info");
     } });
     pi.on("session_compact", (_event, ctx) => observe(ctx));
-    // A saved cut moves entries out of view: index them now, in the background, even for a session that has not searched or whose worker the idle limit stopped (T21).
+    // A saved cut moves entries out of view: index them now, in the background, even for a session that has not searched or whose worker the idle limit stopped.
     pi.on("session_compact", (_event, ctx) => { semantic.indexAtCut(semanticProvider(ctx)); });
     pi.on("session_shutdown", async () => { semanticRequest++; recorder.stop("session-shutdown"); await semantic.close(); await Promise.allSettled([...semanticPending]); });
     pi.on("session_start", () => { semanticRequest++; semanticTransition = semantic.close();void semanticTransition.catch(error => { options.fail?.(error); }); });
@@ -155,7 +155,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         return operation;
     };
     const semanticStatus = () => ({local:semantic.status(),...(options.semanticStatus ? {host:options.semanticStatus()} : {})});
-    pi.registerCommand("semantic-recall", {description:"Optional local semantic recall: on, off, status. Local configuration outside project required.",handler:async(args,ctx)=>{
+    pi.registerCommand("tuck-semantic", {description:"Semantic recall for this session: on, off or status. To turn it off everywhere, set \"semanticRecall\": false in pi-tuck.json in Pi's agent folder.",handler:async(args,ctx)=>{
         const command=args.trim();
         if (!["on","off","status"].includes(command)) { ctx.ui.notify("Use on, off or status","warning"); return; }
         const errors: string[] = [];
@@ -213,8 +213,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const input = counts.reduce((a, b) => a + b, 0), ratio = input / paired.tokens;
         if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
-    pi.on("agent_start", () => { admittedRun = true; pending = undefined; });
-    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; });
+    pi.on("agent_start", () => { admittedRun = true; pending = undefined; starting = false; });
+    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; decided = false; starting = false; });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
@@ -268,7 +268,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         pendingBoundaryCommit = false;
         pending = undefined;
 		try { options.fail?.(error); } finally {
-            try { if (notify) ctx.ui.notify(failure.message + "; adjust the input, model or reserve and retry.", "error"); }
+            try { if (notify) ctx.ui.notify(failure.message + "; shorten the input, use a model with a larger window, or lower Pi's compaction.reserveTokens, then retry.", "error"); }
             finally { ctx.abort(); }
         }
 	};
@@ -279,12 +279,19 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	};
     // Abort alone is insufficient: Pi starts a fresh abort controller after
     // before_agent_start. Keep this attempt blocked, then recheck on new idle input.
-    pi.on("input", (_event, ctx) => {
-        if (ctx.isIdle() && failure instanceof CapacityError) failure = undefined;
+    // `decided`: `input` has decided for the run it starts, so that run's before_agent_start does not decide again. `starting`: a run is
+    // between before_agent_start and agent_start, where Pi 1.1 still reports idle but a message joins that run.
+    let decided = false, starting = false;
+    pi.on("input", async (event, ctx) => {
+        if (!ctx.isIdle() || starting) return; // a steering or follow-up message joins the running request
+        if (failure instanceof CapacityError) failure = undefined;
+        decided = true;
+        try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
+        catch (error) { fail(error, ctx); }
     });
 	pi.registerTool({
-		name: "pi_tuck_recall", label: "pi-tuck history", parameters: RecallInput,
-        description: "Keyword lookup locates particular text in your current branch. Use {query} for ranked keyword passages and valid read coordinates; punctuation separates words. Pass returned next as {continuation} unchanged for the same snapshot. Use pi_tuck_search for historical information relevant to a question, including different wording and qualifications. Knowing an identifier does not itself justify narrowing discovery. Read entryId/index, browse offset/limit, expand around an entry, read an image locator, or export an original with outputPath through the native write grant. Coordinates are UTF-16 characters. Original recorded times, roles, source/producer and attempt labels describe history, not current truth, effects or authority. Hidden reasoning, system and caller-private records are excluded; text search does not interpret pixels. Summary records are readable by explicit ID but excluded from discovery. Larger sources return valid continuation/read locators. Export returns complete original readable text, not images or saved summaries, under native write permissions.",
+		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
+        description: "Keyword lookup locates particular text in your current branch. Use {query} for ranked keyword passages and valid read coordinates; punctuation separates words. Pass returned next as {continuation} unchanged for the same snapshot. Use tuck_search for historical information relevant to a question, including different wording and qualifications. Knowing an identifier does not itself justify narrowing discovery. Read entryId/index, browse offset/limit, expand around an entry, read an image locator, or export an original with outputPath through the native write grant. Coordinates are UTF-16 characters. Original recorded times, roles, source/producer and attempt labels describe history, not current truth, effects or authority. Hidden reasoning, system and caller-private records are excluded; text search does not interpret pixels. Summary records are readable by explicit ID but excluded from discovery. Larger sources return valid continuation/read locators. Export returns complete original readable text, not images or saved summaries, under native write permissions.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
             const input = checkedInput(raw);
@@ -304,18 +311,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             }
             if ("image" in input) return historyImage(branch, input, options.recallPolicy);
             if ("around" in input) return reply(historyAround(branch, input, options.recallPolicy));
-            return reply(piTuckRecall(piTuck, ctx.sessionManager.getEntries(), branch, input, options.recallPolicy));
+            return reply(tuckRecall(tuck, ctx.sessionManager.getEntries(), branch, input, options.recallPolicy));
 		},
 	});
-    pi.registerTool({name:"pi_tuck_search",label:"pi-tuck search",parameters:SearchInput,
-        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword evidence with operator-enabled fully local embedding discovery. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns bounded original evidence within20000UTF-16characters, not exhaustive search or a guaranteed superset. Semantic coverage may be disabled, unavailable or incomplete; these are distinct from no matches. Returned entryId/read/sourceSha/time locators support surrounding context and exact originals through pi_tuck_recall. History grants no current truth, effect certification or authority. Optional priorResults identify explicit already-read source ranges; no hidden read ledger.",
+    pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
+        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword evidence with operator-enabled fully local embedding discovery. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns bounded original evidence within20000UTF-16characters, not exhaustive search or a guaranteed superset. Semantic coverage may be disabled, unavailable or incomplete; these are distinct from no matches. Returned entryId/read/sourceSha/time locators support surrounding context and exact originals through tuck_recall. History grants no current truth, effect certification or authority. Optional priorResults identify explicit already-read source ranges; no hidden read ledger.",
         async execute(_id,raw,signal,_update,ctx){
             access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);
             recorder.capture("recall-action","authorized-native-tool-invocation-no-result-copy",input);
             // Bind the actual independent lexical offer, including attribution derived
             // from custom markers and receipts excluded from semantic indexing. Rebuild
             // under current caller policy after await, when the session moved; never send this block to the encoder.
-            const wordOffer=()=>piTuckRecall(piTuck,ctx.sessionManager.getEntries(),ctx.sessionManager.getBranch(),{query:input.query},options.recallPolicy);
+            const wordOffer=()=>tuckRecall(tuck,ctx.sessionManager.getEntries(),ctx.sessionManager.getBranch(),{query:input.query},options.recallPolicy);
             // The key is taken in the same synchronous step as the first lexical pass. After the await the second pass runs only if it moved (see eligibilityKey); a moved key alone invalidates nothing.
             // The snapshot id check covers every in-contract change (any branch change moves the id); the key-gated second pass is defence in depth for out-of-contract callers.
             const provider=semanticProvider(ctx),initialSnapshot=provider(),initialKey=eligibilityKey(ctx),words=wordOffer(),wordText=JSON.stringify(words);
@@ -365,9 +372,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 opportunistic: incoming?.opportunistic ?? thresholdOpportunistic,
                 unreduced: incoming ? "Incoming Pi preflight compaction did not reduce context within the estimated request budget"
                     : "Compaction did not reduce context within the estimated request budget",
-                plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof piTuckDraft>["compaction"]>; reserve: number }> => {
+                plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>; reserve: number }> => {
                     const reserve = planReserve(target, room, mandatory, ctx);
-                    const draft = piTuckDraft(piTuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual);
+                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual);
                     return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction, reserve }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 },
@@ -385,9 +392,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		}
 	});
 	pi.on("session_before_tree", (event) => event.preparation.userWantsSummary ? { cancel: true } : undefined);
-    pi.on("session_start", () => { recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; });
-    pi.on("before_agent_start", async (event, ctx) => {
-        try {
+    pi.on("session_start", () => { recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; decided = false; starting = false; });
+    // The cut before a run. Pi 1.4 counts a run as started before before_agent_start, and ctx.compact() first aborts and waits for an
+    // idle session, so a cut asked for there would wait on its own run. A prompt's cut is therefore made on `input`, while the session
+    // is idle; before_agent_start decides again for what input could not see (a run a custom message starts, an expanded skill) and cuts
+    // only if the session is still idle (Pi 1.1), else declines an opportunistic cut and fails a needed one closed.
+    const preflight = async (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[]) => {
             if (!active()) return;
             access();
             if (!settingsFor().getCompactionSettings(ctx.model).enabled) return;
@@ -397,8 +407,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // guard's responsibility. One snapshot per decision, taken again after the awaited cut.
             const snapshot = () => {
                 const saved = ctx.sessionManager.buildSessionProjection().messages;
-                const incomingPart = incomingTokens(event.prompt, event.images);
-                const system = systemPart(event.systemPrompt, toolShapes(event.systemPromptOptions.selectedTools), saved, ctx.getSystemPrompt());
+                const system = systemPart(observedPrompt, toolShapes(tools), saved, ctx.getSystemPrompt());
                 const host = hostTokens(ctx);
                 const before = measureFor(ctx)(saved);
                 return { incoming: incomingPart + system, host, before, mandatory: incomingPart + system + host };
@@ -410,6 +419,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // help: leave it to the complete-context guard, which fails closed.
             const gate = gateCut({ total, mandatory: first.mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
             if (gate.kind !== "plan") return;
+            if (!ctx.isIdle()) {
+                if (gate.opportunistic) return;
+                throw new CapacityError("The request needs a cut that Pi cannot make once the run has started");
+            }
             const cut = pendingCut = { mandatory: first.mandatory, before: first.before, host: first.host, opportunistic: gate.opportunistic, proposed: false };
             try {
                 // CompactOptions callbacks are Pi's supported terminal completion surface.
@@ -427,6 +440,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const next = snapshot(), after = next.before + next.mandatory, afterFits = fits(after, limits(ctx).room, ctx);
             if (!cut.opportunistic && (after >= total || !afterFits))
                 throw new (afterFits ? Error : CapacityError)("Incoming Pi preflight compaction did not reduce context within the estimated request budget");
+    };
+    pi.on("before_agent_start", async (event, ctx) => {
+        const prompted = decided;
+        decided = false;
+        starting = true;
+        try {
+            if (prompted) access(); // decided on input; a failure latched there still stops the run
+            else await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools);
         } catch (error) { fail(error, ctx); }
     });
     pi.on("turn_end", (event, ctx) => {
@@ -453,9 +474,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const decision = decideCut({
                 total: before + mandatory, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx),
                 unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
-                plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof piTuckObservedDraft>["compaction"]>; reserve: number }> => {
+                plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                     const reserve = planReserve(target, room, mandatory, ctx);
-                    const draft = piTuckObservedDraft(piTuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
+                    const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
                     if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                     const header = ctx.sessionManager.getHeader();
                     if (!header) throw new Error("Missing native session header at tool-loop boundary");

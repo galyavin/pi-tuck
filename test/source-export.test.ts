@@ -28,7 +28,7 @@ test("empty or image-only sources have no text; assistant hidden reasoning is ne
 });
 test("actual registered tool rejects mixed export schemas/access/cancellation before native write", async () => {
  let tool:ToolDefinition|undefined, denied=false, writes=0;
- const pi={on:()=>{},getSettings:()=>({}),registerCommand:()=>{},registerTool:(t:ToolDefinition)=>{if(t.name==="pi_tuck_recall")tool=t}} as unknown as ExtensionAPI;
+ const pi={on:()=>{},getSettings:()=>({}),registerCommand:()=>{},registerTool:(t:ToolDefinition)=>{if(t.name==="tuck_recall")tool=t}} as unknown as ExtensionAPI;
  await installCompaction(pi,{assertAccess:()=>{if(denied)throw Error("Access denied")}});
  const x=make(), signal=new AbortController(), ctx={sessionManager:x.manager,executeTool:async()=>{writes++;return{isError:false,content:[]}}} as unknown as ExtensionToolContext;
  const run=(input:unknown)=>tool!.execute("call",input,signal.signal,undefined,ctx);

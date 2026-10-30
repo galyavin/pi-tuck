@@ -6,8 +6,7 @@ import {join} from 'node:path';
 import {ModelRuntime,SessionManager,SettingsManager,DefaultResourceLoader,createAgentSession,type AgentSession} from '@earendil-works/pi-coding-agent';
 import {createAssistantMessageEventStream,type AssistantMessage,type UserMessage} from '@earendil-works/pi-ai';
 import {installCompaction} from '../src/compaction';
-import {parseRecords,TRANSCRIPT_HEADER} from '../src/pi-tuck/core/transcript';
-import {SUMMARY_SUFFIX} from '../src/pi-tuck/core/format';
+import {parseRecords,TRANSCRIPT_HEADER,splitSummary} from '../src/tuck/core/transcript';
 import {Type} from 'typebox';
 for(const kind of ['repeated-text','active-auto','unobserved-text','image','omitted','superseded','capacity-conflict'] as const)
 test(`current input source remains complete or explicitly fails: ${kind}`,async()=>{
@@ -32,7 +31,7 @@ test(`current input source remains complete or explicitly fails: ${kind}`,async(
   const originals=manager.getEntries().map(e=>({id:e.id,json:JSON.stringify(e)}));
   const settings=SettingsManager.inMemory({retry:{enabled:false},compaction:{enabled:true,reserveTokens:model.maxTokens+8192,keepRecentTokens:0}});
   const loader=new DefaultResourceLoader({cwd:dir,agentDir:dir,settingsManager:settings,noExtensions:true,noSkills:true,noContextFiles:true,noPromptTemplates:true,noThemes:true,systemPrompt:'Free current-source invariant',extensionFactories:[async pi=>{handle=await installCompaction(pi,{settings,fail:e=>faults.push(String(e))});}]});
-  await loader.reload();({session}=await createAgentSession({cwd:dir,modelRuntime:runtime,model,thinkingLevel:'low',sessionManager:manager,settingsManager:settings,resourceLoader:loader,tools:['pi_tuck_recall','read'],customTools:[{name:'read',label:'Read',description:'Free observed current-round witness',parameters:Type.Object({}),execute:async()=>({content:[{type:'text',text:'New observed mechanical data.\n'.repeat(1800)}],details:{}})}]}));await session.bindExtensions({});session.agent.streamFunction=()=>{throw Error('Unexpected model request');};
+  await loader.reload();({session}=await createAgentSession({cwd:dir,modelRuntime:runtime,model,thinkingLevel:'low',sessionManager:manager,settingsManager:settings,resourceLoader:loader,tools:['tuck_recall','read'],customTools:[{name:'read',label:'Read',description:'Free observed current-round witness',parameters:Type.Object({}),execute:async()=>({content:[{type:'text',text:'New observed mechanical data.\n'.repeat(1800)}],details:{}})}]}));await session.bindExtensions({});session.agent.streamFunction=()=>{throw Error('Unexpected model request');};
   if(kind==='active-auto'){
    let requests=0;
    session.agent.streamFunction=()=>{
@@ -43,7 +42,7 @@ test(`current input source remains complete or explicitly fails: ${kind}`,async(
    await session.prompt(text);
    const cut=manager.getBranch().findLast(e=>e.type==='compaction');expect(cut?.type).toBe('compaction');
    if(cut?.type!=='compaction')throw Error('Missing automatic native cut');
-   const records=parseRecords(cut.summary.slice(TRANSCRIPT_HEADER.length+1,-SUMMARY_SUFFIX.length));
+   const records=parseRecords(splitSummary(cut.summary)!.body);
    const historical=records.some(r=>r.kind==='excerpt'&&r.role==='user'&&r.text===text);
    const native=manager.buildSessionProjection().messages.some(m=>m.role==='user'&&(typeof m.content==='string'?m.content:m.content.flatMap(b=>b.type==='text'?[b.text]:[]).join('\n'))===text);
    expect(historical||native).toBe(true);expect(requests).toBe(3);expect(faults).toEqual([]);
@@ -53,7 +52,7 @@ test(`current input source remains complete or explicitly fails: ${kind}`,async(
    for(let i=0;i<(kind==='repeated-text'?3:1);i++){
     if(i)for(let j=0;j<3;j++)cycle('additional-'+i+'-'+j,2000);
     const cut=await session.compact(),view=manager.buildSessionProjection().messages;
-    const records=parseRecords(cut.summary.slice(TRANSCRIPT_HEADER.length+1,-SUMMARY_SUFFIX.length));
+    const records=parseRecords(splitSummary(cut.summary)!.body);
     if(kind==='image'||kind==='unobserved-text')expect(view.some(m=>m.role==='user'&&JSON.stringify(m.content)===JSON.stringify(content))).toBe(true);
     else if(kind==='repeated-text')expect(records.some(r=>r.kind==='excerpt'&&r.role==='user'&&r.text===text)).toBe(true);
     else if(kind==='omitted')expect(JSON.stringify(view)).not.toContain('CURRENT_SOURCE_BEGIN');

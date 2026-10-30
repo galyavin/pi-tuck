@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { BAND, HOST, ROOM, harness, receiptOf, scenario } from './budget-fixture';
 import { conversationTokens, measurableConversationTokens, projectedConversationTokens } from '../src/budget';
-import { piTuck, piTuckObservedDraft, type DraftMode, type PiTuck } from '../src/pi-tuck';
+import { tuck, tuckObservedDraft, type DraftMode, type Tuck } from '../src/tuck';
+import { CLOSING_INSTRUCTION, RANKED_CLOSING_INSTRUCTION, RECALL_NOTE } from '../src/tuck/core/format';
 
-// Each cut records which summary view produced it: the compiler's ladder (bounded, masked, full, dialogue-only) or the ranked fallback.
-// Before this, every complete view was labelled "complete-dialogue", so a regression from a summary with tool actions to a dialogue-only
-// one was invisible.
-const MODES: DraftMode[] = ['bounded', 'masked', 'full', 'dialogue', 'ranked'];
+// Each cut records which summary view produced it: the whole pre-cut dialogue, or the ranked fallback when the dialogue exceeds the
+// allowance. Both views carry the file ledger and end with the closing instruction.
+const MODES: DraftMode[] = ['dialogue', 'ranked'];
+const LEDGER = '"kind":"section","title":"Files"';
 const OMITTED_ACTIONS = 'Historical tool actions and observations omitted';
-const OMITTED_BODY = 'Historical observation body omitted';
 const BODY = 'Observed mechanical test data.';
 
 function session(rounds = 12) {
@@ -32,18 +32,16 @@ function session(rounds = 12) {
 	return { manager, ctx, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-// Force the ladder to one mode: every other mode's offer is too large to be admitted.
-const forcing = (target: DraftMode): PiTuck => ({ ...piTuck, compileResidual: (input, bodies, ceiling, dialogue) => {
-	const mode = dialogue ? 'dialogue' : ceiling !== undefined ? 'bounded' : bodies ? 'full' : 'masked';
-	return mode === target ? piTuck.compileResidual!(input, bodies, ceiling, dialogue) : 'z'.repeat(3 * input.ranking.maxBriefChars + 1);
-} });
+// Force one view: for the ranked view, the dialogue offer is too large to be admitted.
+const forcing = (target: DraftMode): Tuck => ({ ...tuck, compileDialogue: input =>
+	target === 'dialogue' ? tuck.compileDialogue(input) : 'z'.repeat(input.ranking.maxBriefChars + 1) });
 
 for (const target of MODES)
 test(`the mode recorded is the view that produced the summary: ${target}`, () => {
 	const s = session();
 	try {
 		const measure = (messages: Parameters<typeof conversationTokens>[0]) => measurableConversationTokens(messages, s.ctx);
-		const draft = piTuckObservedDraft(forcing(target), { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
+		const draft = tuckObservedDraft(forcing(target), { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		const details = draft.compaction.details as { mode: string; view: string; tokensAfter: number };
 		expect(details.mode).toBe(target);
@@ -51,8 +49,13 @@ test(`the mode recorded is the view that produced the summary: ${target}`, () =>
 		const summary = draft.compaction.summary;
 		// The summary has the content of its view.
 		if (target === 'dialogue') { expect(summary).toContain(OMITTED_ACTIONS); expect(summary).not.toContain(BODY); }
-		if (target === 'masked') { expect(summary).toContain(OMITTED_BODY); expect(summary).not.toContain(BODY); expect(summary).not.toContain(OMITTED_ACTIONS); }
-		if (target === 'bounded' || target === 'full') { expect(summary).toContain(BODY); expect(summary).not.toContain(OMITTED_ACTIONS); }
+		if (target === 'ranked') expect(summary).not.toContain(OMITTED_ACTIONS);
+		// Both views carry the file ledger (the read calls f0..f11); each ends with the closing true for what it holds.
+		expect(summary).toContain(LEDGER);
+		expect(summary).toContain('- read f0');
+		expect(summary.endsWith(target === 'ranked' ? RANKED_CLOSING_INSTRUCTION : CLOSING_INSTRUCTION)).toBe(true);
+		expect(summary.includes(RECALL_NOTE)).toBe(target === 'ranked');
+		if (target === 'dialogue') expect(summary).not.toContain('"kind":"tool_receipt"');
 	} finally { s.dispose(); }
 });
 
@@ -63,7 +66,7 @@ test('the planner counts the draft with the supplied measure: the same function 
 		// A measure that is not Pi's raw estimate: the converted conversation plus a constant. The draft must report exactly it.
 		const measure = (messages: Parameters<typeof conversationTokens>[0]) => { const n = measurableConversationTokens(messages, s.ctx) + 1000; calls.push(n); return n; };
 		const before = measure(s.manager.buildSessionProjection().messages);
-		const draft = piTuckObservedDraft(piTuck, { branchEntries: s.manager.getBranch(), tokensBefore: before }, s.ctx, 272000 - 120000, measure, {}, true);
+		const draft = tuckObservedDraft(tuck, { branchEntries: s.manager.getBranch(), tokensBefore: before }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		// Independent reference: the new summary in a native preview, converted by Pi (it is wrapped), counted by Pi, plus the constant.
 		const header = s.manager.getHeader()!;
@@ -79,15 +82,18 @@ test('the planner counts the draft with the supplied measure: the same function 
 	} finally { s.dispose(); }
 });
 
-test('an empty summary is refused as "extracted no summary" before its preview is built or counted, even by a strict measure', () => {
+test('an empty compiler offer still yields the mandatory floor (initiating prompt and file ledger), counted by the strict measure', () => {
 	const s = session();
 	try {
-		// The strict measure would throw on an empty summary ("unsupported compaction summary"); it is never asked to count one.
+		// The strict measure would throw on an empty summary ("unsupported compaction summary"); the floor is never empty.
 		const measure = (messages: Parameters<typeof conversationTokens>[0]) => projectedConversationTokens(messages, s.ctx);
-		const empty: PiTuck = { ...piTuck, compileResidual: undefined, compileRanked: () => '' };
-		const draft = piTuckObservedDraft(empty, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
-		expect(draft.compaction).toBeUndefined();
-		expect(draft.unavailable).toBe('pi-tuck extracted no summary from this history');
+		const empty: Tuck = { ...tuck, compileDialogue: () => '', compileRanked: () => '' };
+		const draft = tuckObservedDraft(empty, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
+		if (!draft.compaction) throw new Error(draft.unavailable);
+		expect(draft.mode).toBe('ranked');
+		expect(draft.compaction.summary).toContain('"text":"Earlier request 0"');
+		expect(draft.compaction.summary).toContain(LEDGER);
+		expect(draft.compaction.summary).not.toContain('Earlier request 1"');
 	} finally { s.dispose(); }
 });
 
@@ -104,13 +110,13 @@ test('real cuts record a mode that matches their view and content', async () => 
 				expect(MODES, `mode ${r.mode}`).toContain(r.mode);
 				expect(r.view === 'ranked', `${latest}: ${r.mode} ${r.view}`).toBe(r.mode === 'ranked');
 				if (r.mode === 'dialogue') expect(entry.summary).toContain(OMITTED_ACTIONS);
-				if (r.mode === 'bounded' || r.mode === 'full') expect(entry.summary).not.toContain(OMITTED_ACTIONS);
+				expect(entry.summary).toContain(LEDGER);
 				seen.add(r.mode);
 			}
 		} finally { await h.cleanup(); }
 	}
-	// The walk really passed through the ladder into the dialogue-only view and the ranked fallback.
-	expect([...seen].sort()).toEqual(expect.arrayContaining(['bounded', 'dialogue', 'ranked']));
+	// The walk really passed through both views.
+	expect([...seen].sort()).toEqual(['dialogue', 'ranked']);
 });
 
 test('a cut at the tool boundary records its mode', async () => {
@@ -119,14 +125,15 @@ test('a cut at the tool boundary records its mode', async () => {
 	expect(MODES).toContain(receiptOf(r.entries[0]!).mode);
 });
 
-test('a tool-heavy history is cut to a dialogue-only summary, and the record says so', async () => {
-	// Hundreds of small tool calls: the action record outgrows its allowance, so the compiler keeps only the dialogue (the steady state of a
-	// long tool-heavy session). Before the mode was recorded, this was invisible: every complete view was labelled "complete-dialogue".
+test('a history whose dialogue exceeds the allowance is cut to the ranked view, which still carries the file ledger', async () => {
+	// Hundreds of turns: the whole dialogue outgrows the one allowance (there is no 3x multiplier), so the ranked view fills it instead.
+	// The ranked view is a selection, never a view without tool history: the ledger and closing instruction are in it.
 	const r = await scenario({ at: 'prompt', complete: ROOM + 500, host: HOST, cycleSize: 150 });
 	expect(r.faults, r.probe).toEqual([]);
 	expect(r.cuts, r.probe).toBe(1);
 	const entry = r.entries[0]!;
-	expect(receiptOf(entry).mode, r.probe).toBe('dialogue');
-	expect(receiptOf(entry).view, r.probe).toBe('complete-dialogue');
-	expect(entry.summary).toContain(OMITTED_ACTIONS);
-});
+	expect(receiptOf(entry).mode, r.probe).toBe('ranked');
+	expect(receiptOf(entry).view, r.probe).toBe('ranked');
+	expect(entry.summary).toContain(LEDGER);
+	expect(entry.summary.endsWith(RANKED_CLOSING_INSTRUCTION)).toBe(true);
+}, 60000); // the ranked compiler over hundreds of turns takes about ten seconds

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline generic EG2 provisioning from an exact companion lock; no host policy/downloads."""
+"""Offline EG2 provisioning from an exact companion lock; pi-tuck's setup downloads and assembles the companion first."""
 import argparse
 import json
 import os
@@ -12,12 +12,10 @@ import subprocess
 import sys
 
 RUNTIME = runpy.run_path(str(pathlib.Path(__file__).with_name('eg2-runtime.py')))
-LOCK = RUNTIME['read_json'](pathlib.Path(__file__).with_name('eg2-assets.lock.json'))
 RESERVE = 5 * 1024**3
 
 
-def verify_assets(root, lock=None):
-    lock = LOCK if lock is None else lock
+def verify_assets(root, lock):
     if lock.get('format') != 1 or lock.get('platform') != 'darwin-arm64' or lock.get('python') not in ('3.12', '3.13'):
         raise RuntimeError('Unsupported companion lock')
     manifest = lock['files']
@@ -47,7 +45,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('destination', type=pathlib.Path, help='NEW absolute external immutable asset root')
     parser.add_argument('--assets', required=True, type=pathlib.Path, help='extracted exact companion directory')
-    parser.add_argument('--lock', type=pathlib.Path, help='publisher-verified format-1 lock; default is bundled Q8 lock')
+    parser.add_argument('--lock', required=True, type=pathlib.Path, help='format-1 lock binding every companion file to its SHA-256')
     parser.add_argument('--python', required=True, type=pathlib.Path, help='absolute native arm64 Python 3.12 or 3.13 with venv/ensurepip')
     parser.add_argument('--environment-directory', type=pathlib.Path, help='NEW permanent venv path; default destination/env; never relocate')
     parser.add_argument('--index-directory', required=True, type=pathlib.Path, help='absolute external disposable cache, outside runtime/project')
@@ -55,8 +53,8 @@ def main():
     args = parser.parse_args()
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         raise RuntimeError('Only Darwin arm64 is qualified')
-    paths = [args.destination, args.assets, args.python, args.index_directory]
-    paths += [p for p in (args.lock, args.environment_directory, args.scratch_directory) if p is not None]
+    paths = [args.destination, args.assets, args.lock, args.python, args.index_directory]
+    paths += [p for p in (args.environment_directory, args.scratch_directory) if p is not None]
     if not all(p.is_absolute() for p in paths):
         raise RuntimeError('Use absolute paths')
     if os.path.lexists(args.destination):
@@ -78,7 +76,7 @@ def main():
     RUNTIME['python_supported'](probe[0])
     if probe[1] != 'arm64':
         raise RuntimeError('Native arm64 Python required')
-    lock = RUNTIME['read_json'](args.lock) if args.lock else LOCK
+    lock = RUNTIME['read_json'](args.lock)
     verify_assets(assets, lock)
     if '.'.join(map(str, probe[0])) != lock['python']:
         raise RuntimeError('Python differs from the exact companion lock')

@@ -31,7 +31,7 @@ test('only the newest receipt counts: when it fails, the seed is 1 and an older 
   ['an identity in another format', stamp(1.3, [MODEL.provider, MODEL.api, MODEL.id].join('|'))],
   ['an identity that is not a string', stamp(1.3, [MODEL.provider, MODEL.api, MODEL.id])],
   ['an identity that is a one-element array holding the key', stamp(1.3, [KEY])],
-  ['no identity field (a receipt written before T10)', receipted({ calibrationFactor: 1.3 })],
+  ['no identity field (an older receipt)', receipted({ calibrationFactor: 1.3 })],
   ['an identity field that is null', stamp(1.3, null)],
  ];
  for (const [name, details] of failing) {
@@ -195,7 +195,7 @@ test('a retry adds no ratio: a request is paired once, so a repeated or unpaired
  await expectFactor(1.05, noSeed(), 'the K-th paired reply ages it out', then(ratio(1.4), times(3 * K, reply(1.05)), times(K, ratio(1.05))));
 });
 
-// The stale-factor property (CEO criterion 4). After any sequence of paired replies, replies with no usage, unpaired replies, accepted and ignored
+// The stale-factor property. After any sequence of paired replies, replies with no usage, unpaired replies, accepted and ignored
 // overflow bounds, the factor is max(1, the last K accepted entries): the ratios and overflow bounds, with the seed as the first entry. It is never above that.
 test('property: after any sequence the factor is max(1, the last K accepted ratios and overflow bounds, the seed while it is in the window)', async () => {
  let state = 20261018;
@@ -227,7 +227,7 @@ test('property: after any sequence the factor is max(1, the last K accepted rati
 });
 
 // -- The window is carried in the receipt --------------------------------------------------------------------------------------------------------
-// AB1 builds a new compactor for every node attempt, so a scalar seed would restart a stale entry's life at every attempt. Each receipt now records the
+// A host may build a new compactor for every attempt, so a scalar seed would restart a stale entry's life at every attempt. Each receipt now records the
 // window (oldest first, at most K entries) and a new compactor seeds its window from it; a receipt without a valid window seeds [calibrationFactor].
 const lowerAfter = (n: number) => times(n, ratio(1.05));
 
@@ -291,7 +291,7 @@ test('a model switch does not leak one identity\'s window into another\'s', asyn
  await expectFactor(1, branch(), 'switched away and back', async d => { await switched(d); await d.offer(50000); d.ctx.model = MODEL; await d.offer(50000); });
 });
 
-// The point of carrying the window. A node attempt is a new compactor (AB1 builds one per attempt) that seeds from the branch's newest receipt, and a
+// The point of carrying the window. An attempt is a new compactor (a host may build one per attempt) that seeds from the branch's newest receipt, and a
 // cut inside the attempt writes its window into the next receipt. Each attempt here is shorter than K replies with a cut at its end. The test
 // models the cut's receipt as the writer records it (the current window, oldest first); the writer itself is checked on real cuts in the equivalence
 // test. A scalar seed gives every attempt a new full life to the stale entry, so the factor would stay at the high ratio for ever.
@@ -401,7 +401,7 @@ test('equivalence: a seeded Resume plans its next cut exactly as the continuous 
 
 test('a Resume after a latch caused by an anomalous in-process factor is executable again: the seed is capped at the ceiling and the room fits the mandatory input', async () => {
  // A reply reports nine times the estimate (the ordinary ratchet has no upper bound). The next cut is planned at 9 and records it. The host input then
- // grows to 25,000 tokens, about 42,000 mandatory with the system part (the order of AB1's own): at 9 they no longer fit the room, so the next request
+ // grows to 25,000 tokens, about 42,000 mandatory with the system part (the order of a host's own): at 9 they no longer fit the room, so the next request
  // is refused and the failure latches.
  const h = await harness({ at: 'prompt', complete: 24000, host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE, usageFirst: 216000 });
  try {

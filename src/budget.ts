@@ -1,10 +1,10 @@
 import { getCurrentSystemMessage, type ImageContent } from "@earendil-works/pi-ai";
-import { convertToLlm, estimateTokens, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, estimateTokens, type BeforeAgentStartEvent, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { measurableMessages, projectedMessages } from "./omissions.js";
 import type { RecallPolicy } from "./recall.js";
 
 /**
- * The one measure of the next request. The cut triggers, the cut planner (including the draft admission in pi-tuck.ts), the post-cut
+ * The one measure of the next request. The cut triggers, the cut planner (including the draft admission in tuck.ts), the post-cut
  * checks and the complete-context guard all count through these functions, so they cannot count one request two ways. Everything is
  * deterministic and uses Pi's public converter and estimator; nothing here calls a model or reads a clock.
  */
@@ -57,6 +57,10 @@ export const systemPart = (observedPrompt: string, tools: readonly ToolShape[], 
 export const incomingTokens = (prompt: string, images: readonly ImageContent[] | undefined): number =>
 	estimateTokens({ role: "user", content: prompt, timestamp: 0 }) +
 	estimateTokens({ role: "user", content: [...(images ?? [])], timestamp: 0 });
+/** A run's incoming message: the user's prompt and images, or the custom message that started the run (Pi 1.4 and later), counted as the
+ * user message it is sent as. */
+export const incomingEventTokens = (event: BeforeAgentStartEvent): number => event.messageType === "custom"
+	? estimateTokens({ role: "user", content: event.message.content, timestamp: 0 }) : incomingTokens(event.prompt, event.images);
 /** The guard's complete measure of one request: system part by the guard formula plus every converted non-system message. */
 export const requestTokens = (messages: Messages, systemPrompt: string): number => {
 	const converted = convertToLlm(messages);
@@ -73,7 +77,7 @@ export const planningReserve = (window: number, targetRoom: number, factor: numb
 	window - Math.floor(targetRoom / factor) + mandatory;
 
 export type Target = "band" | "room";
-/** A planned cut: the conversation it leaves, and the summary view that produced it (the planner's mode ladder). */
+/** A planned cut: the conversation it leaves, and the summary view that produced it (whole dialogue or ranked). */
 export type Plan<D extends object = {}> = ({ draft: true; after: number; mode: string } & D) | { draft: false; capacityRejected: boolean; reason: string };
 export type Decision<D extends object = {}> =
 	/** The request fits below the band, or an opportunistic cut cannot help: no cut and no fault; the request goes to the guard. */

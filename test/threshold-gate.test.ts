@@ -10,8 +10,8 @@ import { BAND_EXACT, EXACT_RESERVE, HOST, ROOM_EXACT, WINDOW, harness, receiptOf
 // admits, and a cut that cannot shrink the request would latch a fault. The compactor therefore answers a "threshold" call with its own
 // gate: nothing below the band (a plain cancel, which Pi reports as aborted), an opportunistic cut inside it, a due cut at or above the
 // room. These are real Pi sessions with scripted replies that carry output tokens; the exact reply reserve and reserveTokens 0 are what
-// AB1 configures (the threshold then lies at the whole window, so only large outputs reach it).
-const RECORDED_MAX_OUTPUT = 12729; // the largest reply output in the five recorded trial roots (828 replies)
+// a host configures (the threshold then lies at the whole window, so only large outputs reach it).
+const RECORDED_MAX_OUTPUT = 12729; // the largest reply output in the five recorded sessions (828 replies)
 // The reply that ends a run adds a few tokens to the conversation before Pi's end-of-run check, so "below the band" keeps a little clear of it.
 const CLEAR = 20;
 const base = { host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE, usageRatio: 0.998 };
@@ -138,7 +138,7 @@ test.each([0, RECORDED_MAX_OUTPUT, 50000])('dormancy with reserveTokens 0 and th
  }
 });
 
-test('negative control: with the setting AB1 used before, reserveTokens equal to the reserve, Pi asks at 247,500 reported tokens and the compactor, calibrated on that reply, takes the cut', async () => {
+test('negative control: with the setting a host used before, reserveTokens equal to the reserve, Pi asks at 247,500 reported tokens and the compactor, calibrated on that reply, takes the cut', async () => {
  const r = await observed({ ...base, at: 'prompt', complete: 225000, reserveTokens: 32768, usageRatio: 1.1 });
  expect(r.asked, r.probe).toEqual(['threshold']);
  expect(r.faults, r.probe).toEqual([]);
@@ -161,9 +161,9 @@ test("a declined threshold ask does not end an operator's running incident recor
  const directory = mkdtempSync(join(tmpdir(), 'pi-recorder-'));
  const h = await harness({ ...base, at: 'tool', complete: 225000, fresh: 215000, outputTokens: 50000, compaction: { ...EXACT_RESERVE, diagnostics: { directory } } });
  try {
-  await h.session.prompt('/compaction-incident on');
+  await h.session.prompt('/tuck-incident on');
   const r = await h.run();
-  await h.session.prompt('/compaction-incident status');
+  await h.session.prompt('/tuck-incident status');
   expect(r.cuts, r.probe).toBe(0);
   expect(JSON.parse(h.notices.at(-1)!).state, r.probe).toBe('recording');
  } finally { await h.cleanup(); await new Promise(resolve => setTimeout(resolve, 100)); rmSync(directory, { recursive: true, force: true }); }

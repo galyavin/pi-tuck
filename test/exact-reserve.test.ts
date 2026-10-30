@@ -119,7 +119,7 @@ test('an exact reserve larger than the floor shrinks the room, and a cut keeps t
  }
 });
 
-// AB1 sets Pi's `compaction.reserveTokens` to 0 (SEAM-1), which puts Pi's usage threshold at the whole window. threshold-gate.test.ts covers
+// A host can set Pi's `compaction.reserveTokens` to 0, which puts Pi's usage threshold at the whole window. threshold-gate.test.ts covers
 // what the compactor does when Pi asks anyway.
 test('reserveTokens 0 survives Pi\'s settings unchanged', async () => {
  const runtime = await scriptedModelRuntime(), model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;

@@ -11,7 +11,7 @@ import { BAND_EXACT, EXACT_RESERVE, HOST, ROOM_EXACT, WINDOW, expectParity, harn
 // (agent-session.js _checkCompaction, _overflowRecoveryAttempted). If the retry fails the same way, Pi reports the used-up recovery as a
 // failed "overflow" compaction that was neither aborted nor supplied by an extension, and the run ends with the provider's own message.
 // That is not a compactor failure: the package must not call fail() (no latch) and must not abort (an abort would end the run as aborted
-// and hide the provider's message from the host). AB1 declares the exact 32,768 reply reserve, so these paths are reachable there.
+// and hide the provider's message from the host). A host may declare the exact 32,768 reply reserve, so these paths are reachable there.
 // Window 272,000 less the exact reserve leaves a room of 239,232.
 const base = { at: 'prompt' as const, complete: 60000, host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE };
 
@@ -164,10 +164,10 @@ test(`the incident recorder is stopped with its own reason: ${c.name} -> ${c.sta
  const directory = mkdtempSync(join(tmpdir(), 'pi-recorder-'));
  const h = await installed({ directory });
  try {
-  await h.command('compaction-incident', 'on');
+  await h.command('tuck-incident', 'on');
   await h.emit('session_compact_failed', c.event);
   expect(h.notices).toContain('Compaction incident: ' + c.state);
-  await h.command('compaction-incident', 'status');
+  await h.command('tuck-incident', 'status');
   expect(JSON.parse(h.notices.at(-1)!).state).toBe(c.state);
  } finally { await h.close(); await new Promise(resolve => setTimeout(resolve, 100)); rmSync(directory, { recursive: true, force: true }); }
 });
@@ -176,9 +176,9 @@ test('a threshold ask the compactor declined (cancelled, not from an extension) 
  const directory = mkdtempSync(join(tmpdir(), 'pi-recorder-'));
  const h = await installed({ directory });
  try {
-  await h.command('compaction-incident', 'on');
+  await h.command('tuck-incident', 'on');
   await h.emit('session_compact_failed', failed('threshold', undefined, { aborted: true }));
-  await h.command('compaction-incident', 'status');
+  await h.command('tuck-incident', 'status');
   expect(JSON.parse(h.notices.at(-1)!).state).toBe('recording');
   await h.emit('session_compact_failed', failed('threshold', undefined, { aborted: true, fromExtension: true }));
   expect(h.notices).toContain('Compaction incident: cut-cancelled');

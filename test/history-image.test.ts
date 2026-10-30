@@ -29,7 +29,7 @@ test("source scope, ambiguity, private records and malformed delivery never expo
 	const foreign = manager().appendMessage({ role: "user", content: [image()], timestamp: 1 });
 	expect(metadata(historyImage(session.getBranch(), { entryId: foreign, image: 0 })).status).toBe("not_found");
 	expect(metadata(historyImage([...session.getBranch(), session.getEntry(id)!], { entryId: id, image: 0 })).status).toBe("ambiguous");
-	const privateId = session.appendMessage({ role: "custom", customType: "ab1.policy", content: [image()], display: false, timestamp: 1 });
+	const privateId = session.appendMessage({ role: "custom", customType: "host.policy", content: [image()], display: false, timestamp: 1 });
 	expect(historyImage(session.getBranch(), { entryId: privateId, image: 0 }).content).toHaveLength(1);
 	const corrupt = session.appendMessage({ role: "user", content: [image(Buffer.from("not an image").toString("base64"))], timestamp: 1 });
 	expect(metadata(historyImage(session.getBranch(), { entryId: corrupt, image: 0 })).status).toBe("unsupported_image");
@@ -44,7 +44,7 @@ test("source scope, ambiguity, private records and malformed delivery never expo
 test("around supplies image-only neighbors and distant unique producer receipts without echoes", () => {
  const session=manager();const producer=session.appendMessage(assistant([{type:"toolCall",id:"capture",name:"capture",arguments:{path:"reference.png"}}]));
  for(let i=0;i<5;i++)session.appendMessage({role:"user",content:"Neighbor "+i,timestamp:1});
- session.appendMessage({role:"toolResult",toolName:"pi_tuck_recall",toolCallId:"echo",content:[image()],isError:false,timestamp:1});
+ session.appendMessage({role:"toolResult",toolName:"tuck_recall",toolCallId:"echo",content:[image()],isError:false,timestamp:1});
  const original=session.appendMessage({role:"toolResult",toolName:"capture",toolCallId:"capture",content:[image()],isError:false,timestamp:1});
  const page=historyAround(session.getBranch(),{around:producer,before:0,after:1});
  expect(page.imageSources.map(e=>e.entryId)).toEqual([original]);expect(JSON.stringify(page)).not.toContain(png);
@@ -58,7 +58,7 @@ test("around supplies image-only neighbors and distant unique producer receipts 
 test("registered image and around modes obey the existing optional host access policy",async()=>{
  const session=manager(),id=session.appendMessage({role:"user",content:[image()],timestamp:1});
  let execute:Parameters<ExtensionAPI["registerTool"]>[0]["execute"]|undefined,permitted=true,checks=0;
- await installCompaction({registerCommand:()=>{},registerTool:(tool:Parameters<ExtensionAPI["registerTool"]>[0])=>{if(tool.name==="pi_tuck_recall")execute=tool.execute;},on:()=>()=>{}} as unknown as ExtensionAPI,
+ await installCompaction({registerCommand:()=>{},registerTool:(tool:Parameters<ExtensionAPI["registerTool"]>[0])=>{if(tool.name==="tuck_recall")execute=tool.execute;},on:()=>()=>{}} as unknown as ExtensionAPI,
  {assertAccess:()=>{checks++;if(!permitted)throw Error("Read admission denied");}});
  const run=(input:unknown)=>execute!("read",input as never,undefined,()=>{},{sessionManager:session} as unknown as Parameters<NonNullable<typeof execute>>[4]);
  expect((await run({entryId:id,image:0})).content[1]).toEqual(image());

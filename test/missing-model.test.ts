@@ -32,7 +32,7 @@ test('the guard: a missing model is a plain Error, with no capacity advice', asy
 		expect(h.errors).toHaveLength(1);
 		expect(isPlain(h.errors[0])).toBe(true);
 		expect((h.errors[0] as Error).message).toBe('No context model for the request budget');
-		expect(h.notices).toEqual([]); // the capacity advice ("adjust the input, model or reserve") is for capacity only
+		expect(h.notices).toEqual([]); // the capacity advice ("lower Pi's compaction.reserveTokens") is for capacity only
 	});
 });
 
@@ -43,7 +43,7 @@ test('the guard: with a model, a request over the room is still the capacity err
 		expect(isPlain(h.errors[0])).toBe(false);
 		expect((h.errors[0] as Error).constructor.name).toBe('CapacityError');
 		expect((h.errors[0] as Error).message).toContain('Complete Pi context and response reserve exceed the estimated request budget');
-		expect(h.notices.join(' ')).toContain('adjust the input, model or reserve');
+		expect(h.notices.join(' ')).toContain("lower Pi's compaction.reserveTokens");
 	});
 });
 

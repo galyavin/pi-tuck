@@ -4,7 +4,7 @@ import { CALIBRATION_CEILING } from '../src/compaction';
 import { OVERFLOW_TEXT, WINDOW } from './budget-fixture';
 import { MODEL, expectFactor, reporting, sessionWith, stamp, type Drive } from './calibration-fixture';
 
-// Change 2 of T10, kept apart from the seed (calibration-seed.test.ts) so that it can be judged, or dropped, alone: it widens the update rule of the
+// Kept apart from the seed (calibration-seed.test.ts) so that it can be judged, or dropped, alone: it widens the update rule of the
 // calibration factor by one bounded learning source. A provider that refuses a request for exceeding the window proves the request's true count was at
 // least window + 1; against the estimate E the guard counted, that is a lower bound (window + 1) / E on the ratio. It is learned only when it is at
 // most CALIBRATION_CEILING, and only for a request that was paired exactly as a completed reply must be. Every other errored reply teaches nothing.

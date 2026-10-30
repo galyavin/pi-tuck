@@ -4,7 +4,7 @@ import type { HistoricalReceipt } from "../types";
 
 export const MAX_RECEIPT_CHARACTERS = 8000;
 export const MAX_PRODUCER_ARGUMENT_CHARACTERS = 1000;
-export const RECEIPT_RANGE_NOTICE = "Incomplete original readable text at this range; omitted text may qualify it. pi_tuck_recall {index,offset,limit} expands the original.";
+export const RECEIPT_RANGE_NOTICE = "Incomplete original readable text at this range; omitted text may qualify it. tuck_recall {index,offset,limit} expands the original.";
 /** Only complete JSON arguments; serialization must not coerce or omit values. */
 export const smallOriginalArguments = (value: unknown, maxCharacters = MAX_PRODUCER_ARGUMENT_CHARACTERS): value is Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -38,12 +38,7 @@ export type TranscriptRecord = RecordFields & (
   { kind: "section"; title: string; text: string }
 );
 
-export const TRANSCRIPT_HEADER = "PI-TUCK-TRANSCRIPT/1";
-/** Saved legacy framing is accepted, never emitted by serializeTranscript. */
-export const LEGACY_TRANSCRIPT_HEADER = "VCC-TRANSCRIPT/1";
-export const transcriptHeader = (text: string): string | undefined =>
-  [TRANSCRIPT_HEADER, LEGACY_TRANSCRIPT_HEADER].find(header => text.startsWith(header + "\n"));
-const LEGACY_RECEIPT_RANGE_NOTICE = RECEIPT_RANGE_NOTICE.replace("pi_tuck_recall", "vcc_recall");
+export const TRANSCRIPT_HEADER = "TUCK-TRANSCRIPT/1";
 export const TRANSCRIPT_MAX_UNITS = 120;
 export const TRANSCRIPT_UNIT_CHARACTERS = 120;
 /** UTF-16 serialized characters, including JSON escapes, labels and framing. */
@@ -52,6 +47,23 @@ export const transcriptUnits = (text: string): number => text === "" ? 0 :
 export const serializeRecords = (records: TranscriptRecord[]): string => records.map(r => JSON.stringify(r)).join("\n");
 export const serializeTranscript = (records: TranscriptRecord[]): string => records.length ?
   `${TRANSCRIPT_HEADER}\n${serializeRecords(records)}` : "";
+/** Starts a summary's closing section, after the record lines. */
+export const CLOSING_SEPARATOR = "\n\n---\n\n";
+/** A summary in this format, split by structure: each record is one JSON line, so the first blank line after the header starts the
+ * closing section. Any closing wording, from this build or an earlier one, is accepted and returned byte for byte. */
+export const splitSummary = (summary: string): { body: string; closing: string } | undefined => {
+  const header = [TRANSCRIPT_HEADER, LEGACY_TRANSCRIPT_HEADER].find(h => summary.startsWith(h + "\n"));
+  if (!header) return undefined;
+  const at = summary.indexOf(CLOSING_SEPARATOR, header.length);
+  if (at < 0) return undefined;
+  // A summary saved before the rename keeps its records byte for byte (their lengths are checked); only its closing is pointed at the
+  // tools the model has now.
+  const closing = header === TRANSCRIPT_HEADER ? summary.slice(at) : summary.slice(at).replaceAll("vcc_recall", "tuck_recall").replaceAll("vcc_search", "tuck_search");
+  return { body: summary.slice(header.length + 1, at), closing };
+};
+/** The header of summaries saved before the rename to pi-tuck. */
+export const LEGACY_TRANSCRIPT_HEADER = "VCC-TRANSCRIPT/1";
+const LEGACY_RECEIPT_RANGE_NOTICE = RECEIPT_RANGE_NOTICE.replace("tuck_recall", "vcc_recall");
 
 /** Accept our explicit record protocol only. Never recover roles from payload text. */
 export const parseRecords = (text: string): TranscriptRecord[] => {

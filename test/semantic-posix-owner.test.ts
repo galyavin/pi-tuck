@@ -48,7 +48,7 @@ test.each([false,true])('POSIX leader exit is insufficient; only exact group abs
  expect(existsSync(join(root,scratch))).toBe(false);expect(readdirSync(config.indexDirectory)).toEqual([]);
  expect(c.status()).toMatchObject({enabled:false,cleanupError:null});
 },10000);
-// T22: macOS answers EPERM for a group whose only remaining member exited and is not yet reaped (reproduced on darwin: kill(-pgid, 0) and
+// macOS answers EPERM for a group whose only remaining member exited and is not yet reaped (reproduced on darwin: kill(-pgid, 0) and
 // SIGTERM give EPERM for a zombie-only group, ESRCH once reaped). EPERM means the group is still present: the close keeps polling to its
 // bound and fails only if the group remains; any other errno still fails at once.
 test.each(['transient','persistent','other'] as const)('POSIX close: EPERM from a group that is going away (%s)',async mode=>{

@@ -7,7 +7,9 @@ import re
 import sys
 
 OFFICIAL_REVISION = '914f7f89142e33e77833254d9c9b90c3cef7303b'
-NATIVE_COMMIT = '448147d42a71d0147c6dc844f99f9ffe7419183a'
+NATIVE_COMMIT = '988190680d5a89fce97de3c20df2c2813731fd61'  # llama.cpp release b11476, what pi-tuck's setup installs
+# Runtimes provisioned earlier with a source build of llama.cpp at 448147d stay valid.
+NATIVE_COMMITS = (NATIVE_COMMIT, '448147d42a71d0147c6dc844f99f9ffe7419183a')
 ARTIFACTS = ('Q4_0', 'Q4_K_S', 'Q4_K_M', 'Q8_0', 'BF16')
 COMPUTE = 'CPU float32 with f32 KV; quantized weights where selected'
 POOLING = 'mask-aware mean including prompt, projected token states, then float32 L2'
@@ -88,7 +90,7 @@ def validate_pins(pins, manifest):
             or e.get('documentInstruction') != 'title: none | text: '
             or e.get('pooling') != POOLING):
         raise ValueError('invalid_embedding_pin')
-    if (b.get('name') != 'llama.cpp' or b.get('commit') != NATIVE_COMMIT
+    if (b.get('name') != 'llama.cpp' or b.get('commit') not in NATIVE_COMMITS
             or b.get('artifact') not in ARTIFACTS or e.get('dtype') != b.get('artifact')
             or b.get('modelSHA256') != manifest['model.gguf'] or b.get('gpuLayers') != 0
             or b.get('compute') != COMPUTE or b.get('computePrecision', 'float32') != 'float32'
@@ -247,7 +249,7 @@ def verify_tokenizers(root):
                     raise ValueError('tokenizers_membership_failure')
                 actual.add(name)
     if not wheels:
-        # Managed AB1 binds every installed library byte, including dependency
+        # A managed runtime binds every installed library byte, including dependency
         # metadata/native companions and the signed interpreter's pip seed.
         actual = set()
         for path in package.parent.rglob('*'):

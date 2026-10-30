@@ -6,7 +6,7 @@ import {SessionManager,type ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {createSemanticRecall,semanticEligibleSources,type SemanticRecallController} from '../src/semantic-recall';
 import {installCompaction} from '../src/compaction';
 
-// T21: a saved cut starts background indexing of what left the view, for a session that has searched before (each AB1 session has its own
+// A saved cut starts background indexing of what left the view, for a session that has searched before (a host may give each session its own
 // controller and worker, so a session that never searched starts nothing). The cut never waits for it, and a failure goes to recovery.
 type Snapshot=ReturnType<typeof semanticEligibleSources>;
 interface Internals {runtime(project:string):Promise<{call(op:string,input:any):Promise<unknown>}>;current?:Snapshot;task?:Promise<void>;timer?:unknown;healTimer?:ReturnType<typeof setTimeout>;healReason:string|null;active:boolean;fullIndexing:boolean;idleTimer?:unknown;error:string|null;}
@@ -34,8 +34,8 @@ function fixture(){
  return {c,internal,stored,manager,append,provider,cwd,get embeddings(){return embeddings;},set failEmbed(value:boolean){failEmbed=value;},set undercount(value:boolean){undercount=value;}};
 }
 const settled=async(c:SemanticRecallController,internal:Internals)=>{for(let i=0;i<400&&(internal.timer||internal.task);i++)await new Promise(done=>setTimeout(done,5));return c.status();};
-/** A search with nothing out of view: it returns at once (T17) and marks the session as one that searches. Then the idle limit passes: the
- * idle stop leaves the synthetic session inactive (no background work) until the next demand. */
+/** A search with nothing out of view: it returns at once and marks the session as one that searches. Then the idle limit passes: the
+ * idle stop leaves the session inactive (no background work) until the next demand, which is the state a real session was in. */
 const searchBeforeAnyCut=async(f:ReturnType<typeof fixture>)=>{const page=await f.c.search('earlier',f.provider);expect(page.status).toBe('indexing_incomplete');await settled(f.c,f.internal);f.internal.active=false;f.internal.fullIndexing=false;clearTimeout(f.internal.idleTimer as ReturnType<typeof setTimeout>);f.internal.idleTimer=undefined;};
 // The search above indexes what existed then, in the background; history added after it is what a cut must index.
 const cutAll=(f:ReturnType<typeof fixture>)=>{f.append('decided after the last search');f.manager.appendCompaction('summary of what was cut','no-such-entry',100,undefined,true);};
@@ -100,7 +100,7 @@ test('a worker that reports fewer stored vectors than the covered prefix makes t
  const page=await f.c.search('decision',f.provider);
  expect(page.status).toBe('unavailable');expect(page.notice).toContain('Snapshot index coverage changed');
 });
-test('T17: with nothing out of view, a recorded failure is still reported as unavailable', async()=>{
+test('with nothing out of view, a recorded failure is still reported as unavailable', async()=>{
  const f=fixture();f.append('first decision');const error=f.internal.error='Incompatible semantic model; EG2 768/8192 offline required';
  const page=await f.c.search('decision',f.provider);
  expect(page.status).toBe('unavailable');

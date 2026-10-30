@@ -53,7 +53,7 @@ SOFTWARE.
 Pi-derived inlined message constructors
 
 The following notice applies to the adapted createCustomMessage and
-createBranchSummaryMessage construction branches in src/pi-tuck/cut.ts
+createBranchSummaryMessage construction branches in src/tuck/cut.ts
 and their distributed generated equivalents. Notice source: Pi v1.1.0,
 https://github.com/earendil-works/pi/blob/abe508e1b89912adde45528136c3221eb69acdd7/LICENSE
 This notice-source pin does not identify the original copy revision.

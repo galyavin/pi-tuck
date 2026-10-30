@@ -6,11 +6,11 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext, type Extensio
 import { createSemanticRecall, semanticEligibleSources, type SemanticRecallController } from '../src/semantic-recall';
 import { eligibilityKey, memoizedEligibleSources } from '../src/eligibility-cache';
 import { installCompaction } from '../src/compaction';
-import { piTuckRecall } from '../src/pi-tuck';
+import { tuckRecall } from '../src/tuck';
 import type { RecallPolicy } from '../src/recall';
 import { BAND, HOST, EXACT_RESERVE, harness } from './budget-fixture';
 
-// T13: the eligible-history snapshot is memoized per session manager on a cheap key. `access()` still runs on every call, a hit never hands out the
+// The eligible-history snapshot is memoized per session manager on a cheap key. `access()` still runs on every call, a hit never hands out the
 // stored object (the controller fills `units`, `complete`, `indexed` and `window` on what it is given, and reads `viewStart` to place the window), and
 // the key is sound only while entries are not changed in place after they are appended (the pin test below). The wrapped build is counted through a
 // pass-through spy, so a rebuild is observable.
@@ -20,13 +20,13 @@ vi.mock('../src/semantic-recall', async importOriginal => {
 });
 const reference = (await vi.importActual<typeof import('../src/semantic-recall')>('../src/semantic-recall')).semanticEligibleSources;
 const rebuilds = () => vi.mocked(semanticEligibleSources).mock.calls.length;
-// T16(a): the lexical pass of `pi_tuck_search` is counted through a pass-through spy on `piTuckRecall`, so the second pass is observable.
-vi.mock('../src/pi-tuck', async importOriginal => {
-	const actual = await importOriginal<typeof import('../src/pi-tuck')>();
-	return { ...actual, piTuckRecall: vi.fn(actual.piTuckRecall) };
+// The lexical pass of `tuck_search` is counted through a pass-through spy on `tuckRecall`, so the second pass is observable.
+vi.mock('../src/tuck', async importOriginal => {
+	const actual = await importOriginal<typeof import('../src/tuck')>();
+	return { ...actual, tuckRecall: vi.fn(actual.tuckRecall) };
 });
-const lexicalPasses = () => vi.mocked(piTuckRecall).mock.calls.length;
-const actualPiTuck = await vi.importActual<typeof import('../src/pi-tuck')>('../src/pi-tuck'); // uncounted reference passes
+const lexicalPasses = () => vi.mocked(tuckRecall).mock.calls.length;
+const actualTuck = await vi.importActual<typeof import('../src/tuck')>('../src/tuck'); // uncounted reference passes
 type Snapshot = ReturnType<typeof reference>;
 
 const CWD = '/eligibility-cache-test';
@@ -67,7 +67,7 @@ const changes: Record<string, (f: ReturnType<typeof session>) => void> = {
 	'an appended message': f => { f.m.appendMessage(user('a later message', 99)); },
 	'a compaction entry': f => { f.m.appendCompaction('a summary', f.ids[1]!, 100); },
 	'a context_edit entry': f => { f.m.appendContextEdit(f.ids[0]!, null); },
-	'a private custom entry': f => { f.m.appendCustomEntry('ab1.input', { text: 'input' }); },
+	'a private custom entry': f => { f.m.appendCustomEntry('host.input', { text: 'input' }); },
 	'a switch to an earlier entry': f => { f.m.branch(f.ids[0]!); },
 	'a reset to the root': f => { f.m.resetLeaf(); },
 };
@@ -212,10 +212,10 @@ test('two policy objects on one manager never share a snapshot, and a missing po
 
 test('a policy that changes eligibility gives its own snapshot from the same manager', () => {
 	const { m, ctx } = session();
-	m.appendCustomMessageEntry('ab1.input', 'private input', false);
+	m.appendCustomMessageEntry('host.input', 'private input', false);
 	const open = memoizedEligibleSources(ctx, {}, quiet);
-	const closed = memoizedEligibleSources(ctx, { privateCustomTypes: ['ab1.input'] }, quiet);
-	expect(closed).toEqual(reference(ctx, { privateCustomTypes: ['ab1.input'] }, quiet));
+	const closed = memoizedEligibleSources(ctx, { privateCustomTypes: ['host.input'] }, quiet);
+	expect(closed).toEqual(reference(ctx, { privateCustomTypes: ['host.input'] }, quiet));
 	expect(open).toEqual(reference(ctx, {}, quiet));
 	expect(open.sources.length).toBe(closed.sources.length + 1); // the private custom message is a source only without the policy
 	expect(closed.id).not.toBe(open.id);
@@ -253,7 +253,7 @@ test('a session that cannot be built throws every time and caches nothing', () =
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// Co-sign test 1: soundness over random append sequences. A fixed seed; the property is stated about the stamp (the key), not about the cache.
+// Soundness over random append sequences. A fixed seed; the property is stated about the stamp (the key), not about the cache.
 
 const SEED = 20261018;
 function random(seed: number) { // mulberry32
@@ -262,7 +262,7 @@ function random(seed: number) { // mulberry32
 }
 
 test(`soundness, seed ${SEED}: stamp-equal never coexists with a different full id, every append changes the stamp, and the memoized id is the full id`, () => {
-	const next = random(SEED), policy: RecallPolicy = { privateCustomTypes: ['ab1.input', 'ab1.attempt'] };
+	const next = random(SEED), policy: RecallPolicy = { privateCustomTypes: ['host.input', 'host.attempt'] };
 	const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)]!;
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 	const bash = (step: number) => ({ role: 'bashExecution' as const, command: `ls ${step}`, output: `output ${step}`, exitCode: 0, cancelled: false, truncated: false, timestamp: step });
@@ -288,9 +288,9 @@ test(`soundness, seed ${SEED}: stamp-equal never coexists with a different full 
 				if (roll < 0.22 || !entries.length) { kind = 'message'; m.appendMessage(pick([user(`u${step}`, step), assistant(`a${step}`, step), toolResult(`t${step}`, `r${step}`, step), bash(step)] as never[])); }
 				else if (roll < 0.30 && editable.length) { kind = 'context_edit'; m.appendContextEdit(pick(editable).id, null); }
 				else if (roll < 0.38) { kind = 'compaction'; m.appendCompaction(`summary ${step}`, pick(branch.length ? branch : entries).id, 100 + step); }
-				else if (roll < 0.46) { kind = 'private custom'; m.appendCustomEntry(pick(['ab1.input', 'ab1.attempt']), { step }); }
+				else if (roll < 0.46) { kind = 'private custom'; m.appendCustomEntry(pick(['host.input', 'host.attempt']), { step }); }
 				else if (roll < 0.50) { kind = 'public custom'; m.appendCustomEntry('other.note', { step }); }
-				else if (roll < 0.55) { kind = 'custom message'; m.appendCustomMessageEntry(pick(['ab1.input', 'ab1.note']), `note ${step}`, false); }
+				else if (roll < 0.55) { kind = 'custom message'; m.appendCustomMessageEntry(pick(['host.input', 'host.note']), `note ${step}`, false); }
 				else if (roll < 0.59) { kind = 'label'; m.appendLabelChange(pick(entries).id, pick(['bookmark', undefined])); }
 				else if (roll < 0.63) { kind = 'branch summary'; m.branchWithSummary(pick(entries).id, `summary of the branch left at step ${step}`); }
 				else if (roll < 0.67) { kind = 'model change'; m.appendModelChange('test', pick(['model-a', 'model-b'])); }
@@ -364,7 +364,7 @@ function fixture(kind: 'memo' | 'plain' = 'memo', policy?: RecallPolicy) {
 	return { c, internal, manager, ctx, provider, append, hooks, stored, revoke: () => { permitted = false; }, get tokenizations() { return tokenizations; }, set tokenizations(n: number) { tokenizations = n; } };
 }
 const keysOf = (snapshot: Snapshot) => snapshot.units.map(unit => unit.key);
-// A compact-all cut after the sources: they are out of view, so a search waits for them. With nothing out of view a search does not wait for indexing (T17), and these tests are about the search itself.
+// A compact-all cut after the sources: they are out of view, so a search waits for them. With nothing out of view a search does not wait for indexing, and these tests are about the search itself.
 const compactAll = (m: SessionManager) => m.appendCompaction('summary of what was cut', 'no-such-entry', 100, undefined, true);
 
 test('a completed prepare publishes a snapshot, and a later hit hands out empty units and incomplete', async () => {
@@ -451,7 +451,7 @@ test('a full prepare and search over frozen sources writes to none of them', asy
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // EG2-ON: a plan takes its window and coverage from the snapshot it is given (`viewStart` puts the conversation a cut removed from view first).
-// `pi_tuck_search` calls the provider before it calls `search`, so the controller's own bind is usually a hit.
+// `tuck_search` calls the provider before it calls `search`, so the controller's own bind is usually a hit.
 
 function cutSession(f: ReturnType<typeof fixture>) {
 	f.append('older conversation 0');
@@ -508,7 +508,7 @@ test('every field of a snapshot is classified: stored fields equal a direct buil
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// Co-sign test 2: access revoked mid-operation aborts at the next provider call, with SemanticAccessError. The history never changes, so every
+// Access revoked mid-operation aborts at the next provider call, with SemanticAccessError. The history never changes, so every
 // provider call after the first is a cache hit.
 
 test('access revoked mid-prepare aborts the prepare at the next provider call, on a cache hit', async () => {
@@ -532,7 +532,22 @@ test('access revoked mid-search aborts the search with SemanticAccessError and d
 	const error = await f.c.search('source', f.provider).then(() => undefined, e => e as Error);
 	expect(error?.name).toBe('SemanticAccessError');
 	expect(rebuilds()).toBe(start); // the whole search ran on hits
-	expect(f.c.status().enabled).toBe(false);
+	expect(f.c.status()).toMatchObject({ enabled: false, state: 'disabled', lastError: 'Access revoked' });
+});
+
+// A revocation that stops recall keeps its reason, so a host never sees it as recall that was never switched on.
+test.each([
+	['a search binding its snapshot', (f: ReturnType<typeof fixture>) => f.c.search('source', f.provider)],
+	['a wait for readiness', (f: ReturnType<typeof fixture>) => f.c.waitForReady(3000)],
+])('access revoked before %s disables the controller and records why', async (_name, call) => {
+	const f = fixture();
+	for (let i = 0; i < 3; i++) f.append('source ' + i);
+	await f.internal.prepare(f.provider);
+	f.c.schedule(f.provider);
+	f.revoke();
+	const error = await call(f).then(() => undefined, e => e as Error);
+	expect(error?.name).toBe('SemanticAccessError');
+	expect(f.c.status()).toMatchObject({ enabled: false, state: 'disabled', lastError: 'Access revoked' });
 });
 
 test('access revoked on a scheduled preparation disables the controller', async () => {
@@ -550,12 +565,12 @@ test('access revoked on a scheduled preparation disables the controller', async 
 async function installed(f: ReturnType<typeof fixture>, assertAccess: () => void) {
 	const handlers: Record<string, ((event: unknown, ctx: unknown) => unknown)[]> = {};
 	let tool: ToolDefinition | undefined;
-	const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { (handlers[name] ??= []).push(handler); }, registerCommand: () => {}, registerTool: (t: ToolDefinition) => { if (t.name === 'pi_tuck_search') tool = t; } } as unknown as ExtensionAPI;
+	const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { (handlers[name] ??= []).push(handler); }, registerCommand: () => {}, registerTool: (t: ToolDefinition) => { if (t.name === 'tuck_search') tool = t; } } as unknown as ExtensionAPI;
 	const handle = await installCompaction(pi, { semanticRecall: f.c, assertAccess });
 	const ctx = { cwd: f.ctx.cwd, sessionManager: f.manager, ui: { notify: () => {} } } as unknown as ExtensionToolContext;
 	return { handle, handlers, ctx, search: () => tool!.execute('t13', { query: 'source' }, undefined, undefined, ctx) };
 }
-test('through installCompaction: assertAccess revoked while pi_tuck_search awaits the query embedding aborts the controller with SemanticAccessError', async () => {
+test('through installCompaction: assertAccess revoked while tuck_search awaits the query embedding aborts the controller with SemanticAccessError', async () => {
 	const f = fixture();
 	for (let i = 0; i < 4; i++) f.append('source ' + i); compactAll(f.manager);
 	await f.internal.prepare(f.provider);
@@ -581,18 +596,18 @@ test('through installCompaction: assertAccess revoked in the middle of a schedul
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// Co-sign test 3: an `ab1.input` appended mid-search invalidates the search, exactly as a direct build does.
+// A `host.input` appended mid-search invalidates the search, exactly as a direct build does.
 
-const AB1: RecallPolicy = { privateCustomTypes: ['ab1.input'] };
+const HOST_POLICY: RecallPolicy = { privateCustomTypes: ['host.input'] };
 async function midSearch(kind: 'memo' | 'plain') {
-	const f = fixture(kind, AB1);
+	const f = fixture(kind, HOST_POLICY);
 	for (let i = 0; i < 4; i++) f.append('source ' + i); compactAll(f.manager);
 	await f.internal.prepare(f.provider);
-	f.hooks.embedQuery = () => { f.manager.appendCustomEntry('ab1.input', { text: 'input appended while the query is being embedded' }); };
+	f.hooks.embedQuery = () => { f.manager.appendCustomEntry('host.input', { text: 'input appended while the query is being embedded' }); };
 	const page = await f.c.search('source', f.provider);
 	return { status: page.status, notice: page.notice, groups: page.groups };
 }
-test('an ab1.input appended mid-search invalidates the controller search, and the page is the one a direct build gives', async () => {
+test('a host.input appended mid-search invalidates the controller search, and the page is the one a direct build gives', async () => {
 	const memo = await midSearch('memo'), plain = await midSearch('plain');
 	expect(memo.status).toBe('unavailable');
 	expect(memo.notice).toContain('Eligible branch or source changed before semantic admission');
@@ -607,7 +622,7 @@ async function toolFixture(policy: RecallPolicy | undefined, during: (m: Session
 	else {
 		m.appendMessage(user('Eligible ordinary history for the search tool.', 1));
 		m.appendMessage(user('More eligible history for the search tool.', 2));
-		compactAll(m); // out of view, so the search waits for the indexed window as it did before T17
+		compactAll(m); // out of view, so the search waits for the indexed window
 	}
 	const ctx = { cwd: CWD, sessionManager: m } as unknown as ExtensionToolContext;
 	const initial = reference(ctx, policy ?? {}, quiet);
@@ -620,13 +635,13 @@ async function toolFixture(policy: RecallPolicy | undefined, during: (m: Session
 	semantic.runtime = async () => ({ call: async () => { during(m); return { vectors: [[1]] }; } });
 	semantic.index = async () => ({ ranked: initial.units.slice(0, 24).map(u => ({ key: u.key, score: 1 })), observed: initial.units.length });
 	let tool: ToolDefinition | undefined;
-	const pi = { on: () => {}, registerCommand: () => {}, registerTool: (t: ToolDefinition) => { if (t.name === 'pi_tuck_search') tool = t; } } as unknown as ExtensionAPI;
+	const pi = { on: () => {}, registerCommand: () => {}, registerTool: (t: ToolDefinition) => { if (t.name === 'tuck_search') tool = t; } } as unknown as ExtensionAPI;
 	const handle = await installCompaction(pi, { semanticRecall: semantic as never, ...(policy ? { recallPolicy: policy } : {}) });
 	return { run: () => tool!.execute('t13', { query: 'history' }, undefined, undefined, ctx), close: async () => { await handle.close(); await semantic.close(); }, m };
 }
 
-test('through pi_tuck_search: an ab1.input appended mid-search invalidates the search, as it did before the cache', async () => {
-	const t = await toolFixture(AB1, m => { if (m.getEntries().every(e => e.type !== 'custom')) m.appendCustomEntry('ab1.input', { text: 'input' }); });
+test('through tuck_search: a host.input appended mid-search invalidates the search, as it did before the cache', async () => {
+	const t = await toolFixture(HOST_POLICY, m => { if (m.getEntries().every(e => e.type !== 'custom')) m.appendCustomEntry('host.input', { text: 'input' }); });
 	try {
 		const result = await t.run();
 		expect(result.isError).toBe(true);
@@ -636,7 +651,7 @@ test('through pi_tuck_search: an ab1.input appended mid-search invalidates the s
 	} finally { await t.close(); }
 });
 
-test('through pi_tuck_search: on an unchanged session the whole search builds the snapshot once; the provider is the memoized one', async () => {
+test('through tuck_search: on an unchanged session the whole search builds the snapshot once; the provider is the memoized one', async () => {
 	const t = await toolFixture(undefined, () => {});
 	try {
 		const start = rebuilds(), result = await t.run();
@@ -647,9 +662,9 @@ test('through pi_tuck_search: on an unchanged session the whole search builds th
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// Co-sign test 4: timing on a synthetic root of about 3,400 entries.
+// Timing on a synthetic session of about 3,400 entries.
 
-test('timing on a root of about 3,400 entries: a hit costs a small fraction of a rebuild', () => {
+test('timing on a session of about 3,400 entries: a hit costs a small fraction of a rebuild', () => {
 	const m = SessionManager.inMemory(CWD), ctx = ctxOf(m);
 	const first = m.appendMessage(user('opening request', 1));
 	for (let i = 1; i < 3400; i++) {
@@ -657,10 +672,10 @@ test('timing on a root of about 3,400 entries: a hit costs a small fraction of a
 		if (i % 4 === 1) m.appendMessage(user(`request ${i} ` + big, i));
 		else if (i % 4 === 2) m.appendMessage(assistant(`answer ${i} ` + big, i));
 		else if (i % 4 === 3) m.appendMessage(toolResult(`call-${i}`, `result ${i} ` + big, i));
-		else m.appendCustomEntry(i % 8 === 0 ? 'ab1.input' : 'other.note', { i });
+		else m.appendCustomEntry(i % 8 === 0 ? 'host.input' : 'other.note', { i });
 		if (i % 400 === 0) m.appendContextEdit(first, null);
 	}
-	const policy: RecallPolicy = { privateCustomTypes: ['ab1.input'] };
+	const policy: RecallPolicy = { privateCustomTypes: ['host.input'] };
 	const entries = m.getEntryCount();
 	expect(entries).toBeGreaterThan(3300);
 	memoizedEligibleSources(ctx, policy, quiet); // warm the JIT on a throwaway build
@@ -679,7 +694,7 @@ test('timing on a root of about 3,400 entries: a hit costs a small fraction of a
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The pin: the key is sound only while appended entries are never changed in place. Every appended entry is deep-frozen, and a REAL Pi session
-// is driven through tool calls, a retry, a compaction cut, a context_edit and AB1-style custom entries. Any in-place write then throws.
+// is driven through tool calls, a retry, a compaction cut, a context_edit and custom entries of the kind a host writes. Any in-place write then throws.
 
 function pin(manager: SessionManager) {
 	const internal = manager as unknown as { _appendEntry(entry: unknown): void; fileEntries: unknown[] };
@@ -694,11 +709,11 @@ test('the pin has teeth: a frozen appended entry rejects an in-place edit', () =
 	const entry = m.getEntry(m.appendMessage(user('original', 1)))! as unknown as { parentId: string | null; message: { content: string } };
 	expect(() => { entry.message.content = 'edited'; }).toThrow(TypeError);
 	expect(() => { entry.parentId = 'forged'; }).toThrow(TypeError);
-	const custom = m.getEntry(m.appendCustomEntry('ab1.input', { text: 'x' }))! as unknown as { data: { text: string } };
+	const custom = m.getEntry(m.appendCustomEntry('host.input', { text: 'x' }))! as unknown as { data: { text: string } };
 	expect(() => { custom.data.text = 'edited'; }).toThrow(TypeError);
 });
 
-const PIN_POLICY: RecallPolicy = { privateCustomTypes: ['ab1.input', 'ab1.attempt'] };
+const PIN_POLICY: RecallPolicy = { privateCustomTypes: ['host.input', 'host.attempt'] };
 const real = [
 	{ name: 'a provider overflow: Pi cuts through the package and retries', overflow: true },
 	{ name: 'a tool boundary: Pi calls a tool and the package cuts there', overflow: false },
@@ -738,13 +753,13 @@ test(`a real Pi session writes nothing in place: ${name}`, async () => {
 			expect(disagreements).toEqual([]);
 		}
 		check();
-		// Writes of the kind AB1 makes: a context_edit, then custom entries; each must change the stamp and agree with a full build.
+		// Writes of the kind a host makes: a context_edit, then custom entries; each must change the stamp and agree with a full build.
 		const target = h.manager.getBranch().find(e => e.type === 'message' && e.message.role === 'user')!;
 		for (const write of [
 			() => h.manager.appendContextEdit(target.id, null),
-			() => h.manager.appendCustomEntry('ab1.input', { text: 'input' }),
-			() => h.manager.appendCustomEntry('ab1.attempt', { attemptId: 'a1' }),
-			() => h.manager.appendCustomMessageEntry('ab1.input', 'a private message', false),
+			() => h.manager.appendCustomEntry('host.input', { text: 'input' }),
+			() => h.manager.appendCustomEntry('host.attempt', { attemptId: 'a1' }),
+			() => h.manager.appendCustomMessageEntry('host.input', 'a private message', false),
 		]) { const before = stamp(); write(); expect(stamp()).not.toBe(before); check(); }
 		// A further turn over the edited session, with frozen entries.
 		await h.session.prompt('Continue after the edit');
@@ -756,7 +771,7 @@ test(`a real Pi session writes nothing in place: ${name}`, async () => {
 }, 120000);
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// T16(a): `pi_tuck_search` runs its lexical pass again after the await only when `eligibilityKey` moved. The semantic snapshot id check is unchanged, and a moved key alone
+// `tuck_search` runs its lexical pass again after the await only when `eligibilityKey` moved. The semantic snapshot id check is unchanged, and a moved key alone
 // invalidates nothing. In-place edits of recorded entries and a policy whose behaviour changes after install are outside this contract (see eligibility-cache.ts).
 const text = (result: { content: { type: string; text?: string }[] }) => result.content.filter(b => b.type === 'text').map(b => b.text!);
 async function invalidatedBy(during: (m: SessionManager) => void, setup?: (m: SessionManager) => void) {
@@ -766,11 +781,11 @@ async function invalidatedBy(during: (m: SessionManager) => void, setup?: (m: Se
 		return { isError: result.isError, blocks, status: JSON.parse(blocks[0]!).status };
 	} finally { await t.close(); }
 }
-test('through pi_tuck_search: an entry appended during the await invalidates the search', async () => {
+test('through tuck_search: an entry appended during the await invalidates the search', async () => {
 	const r = await invalidatedBy(m => { if (m.getEntries().length < 4) m.appendMessage(user('history appended while the query is being embedded', 9)); });
 	expect(r.isError).toBe(true); expect(r.blocks).toHaveLength(1); expect(r.status).toBe('snapshot_invalidated');
 });
-test('through pi_tuck_search: a leaf switch to a sibling of the same depth during the await invalidates the search', async () => {
+test('through tuck_search: a leaf switch to a sibling of the same depth during the await invalidates the search', async () => {
 	let first = '';
 	const r = await invalidatedBy(m => { m.branch(first); }, m => {
 		m.appendMessage(user('Eligible ordinary history for the search tool.', 1)); compactAll(m);
@@ -780,7 +795,7 @@ test('through pi_tuck_search: a leaf switch to a sibling of the same depth durin
 	});
 	expect(r.isError).toBe(true); expect(r.blocks).toHaveLength(1); expect(r.status).toBe('snapshot_invalidated');
 });
-test('through pi_tuck_search: with an equal key the lexical pass runs once, and the page carries the first pass', async () => {
+test('through tuck_search: with an equal key the lexical pass runs once, and the page carries the first pass', async () => {
 	const t = await toolFixture(undefined, () => {});
 	try {
 		const start = lexicalPasses(), result = await t.run();
@@ -789,13 +804,13 @@ test('through pi_tuck_search: with an equal key the lexical pass runs once, and 
 		expect(JSON.parse(text(result)[1]!).status).toBe('ok');
 	} finally { await t.close(); }
 });
-test('through pi_tuck_search: a moved key with the same branch (an entry added on another branch) runs the second lexical pass and invalidates nothing', async () => {
+test('through tuck_search: a moved key with the same branch (an entry added on another branch) runs the second lexical pass and invalidates nothing', async () => {
 	const t = await toolFixture(undefined, m => {
 		if (m.getEntries().length > 3) return;
 		const leaf = m.getLeafId()!; m.branch(m.getBranch()[0]!.id); m.appendMessage(user('a message on another branch', 9)); m.branch(leaf);
 	});
 	try {
-		const unmoved = JSON.stringify(actualPiTuck.piTuckRecall(actualPiTuck.piTuck, t.m.getEntries(), t.m.getBranch(), { query: 'history' })); // the words of a run with no off-branch append
+		const unmoved = JSON.stringify(actualTuck.tuckRecall(actualTuck.tuck, t.m.getEntries(), t.m.getBranch(), { query: 'history' })); // the words of a run with no off-branch append
 		const start = lexicalPasses(), result = await t.run();
 		expect(result.isError).not.toBe(true);
 		expect(lexicalPasses() - start).toBe(2);

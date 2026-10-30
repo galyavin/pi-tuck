@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { MEASURED_CALIBRATION, seedWindow } from '../src/compaction';
 import { MODEL, drive, expectFactor, reporting, sessionWith, stamp, stampWindow } from './calibration-fixture';
 
-// The measured seed is retired (CTO, 2026-10-20): the 1.18 measured for openai/gpt-6.1-sol was the replayed reasoning that the estimate now counts. The
+// The measured seed is retired: the 1.18 measured for openai/gpt-6.1-sol was the replayed reasoning that the estimate now counts. The
 // table stays the place for a measured model; it is empty, so every model starts at 1 when its branch has no receipt of its own, and receipts still seed.
 // The fixture's MODEL is openai-codex/gpt-6.1-sol; MEASURED is the same model under provider openai, the identity the seed was keyed to.
 const MEASURED = { ...MODEL, provider: 'openai' };
