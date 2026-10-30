@@ -42,8 +42,9 @@ export const TRANSCRIPT_HEADER = "TUCK-TRANSCRIPT/1";
 export const TRANSCRIPT_MAX_UNITS = 120;
 export const TRANSCRIPT_UNIT_CHARACTERS = 120;
 /** UTF-16 serialized characters, including JSON escapes, labels and framing. */
+export const lineUnits = (characters: number): number => Math.max(1, Math.ceil(characters / TRANSCRIPT_UNIT_CHARACTERS));
 export const transcriptUnits = (text: string): number => text === "" ? 0 :
-  text.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil(line.length / TRANSCRIPT_UNIT_CHARACTERS)), 0);
+  text.split("\n").reduce((n, line) => n + lineUnits(line.length), 0);
 export const serializeRecords = (records: TranscriptRecord[]): string => records.map(r => JSON.stringify(r)).join("\n");
 export const serializeTranscript = (records: TranscriptRecord[]): string => records.length ?
   `${TRANSCRIPT_HEADER}\n${serializeRecords(records)}` : "";

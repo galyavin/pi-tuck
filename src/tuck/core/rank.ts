@@ -1,6 +1,7 @@
 import type { NormalizedBlock, FileOps } from "../types";
 import { extractPath } from "./tool-args";
 import { compileBrief, planBrief, heredocCloseIndex, type ExcerptCache } from "./brief";
+import { createBriefMeter, type BriefSize } from "./brief-meter";
 import { TRANSCRIPT_HEADER, transcriptUnits, MAX_RECEIPT_CHARACTERS } from "./transcript";
 
 export interface BriefRankingOptions {
@@ -235,32 +236,33 @@ export const selectRankedBriefBlocks = (
 
   // Charge the actual candidate serialization. Adjacent-block truncation and
   // tool omission notices can change its size; isolated-block estimates cannot certify it.
-  // Cache only within this synchronous selection over unchanged normalized blocks.
+  // The meter keeps that size current as blocks join; the final render below remains the authority.
   const excerpts: ExcerptCache = new WeakMap();
   const full = new Set<NormalizedBlock>();
+  const meter = createBriefMeter(blocks, options.mandatorySourceIndices, excerpts);
+  const within = (size: BriefSize) => (maxBriefChars == null || size.chars <= maxBriefChars) &&
+    (options.maxBriefUnits == null || size.units <= options.maxBriefUnits);
   const admit = (indices: number[], preferFull = false): boolean => {
     const added = indices.filter(i => !selected.has(i));
     if (!added.length && !preferFull) return true;
     if (selected.size + added.length > maxBlocks) return false;
-    const candidate = [...selected, ...added].sort((a, b) => a - b).map(i => blocks[i]);
-    const proposedFull = new Set(full);
-    if (preferFull) for (const i of indices)
-      if (["user", "assistant", "bash"].includes(blocks[i].kind)) proposedFull.add(blocks[i]);
-    const fits = (includeOmissions = true) => {
-      planBrief(candidate, proposedFull, blocks, options.mandatorySourceIndices, includeOmissions);
-      const rendered = TRANSCRIPT_HEADER + "\n" + compileBrief(candidate, excerpts);
-      return (maxBriefChars == null || rendered.length <= maxBriefChars) &&
-        (options.maxBriefUnits == null || transcriptUnits(rendered) <= options.maxBriefUnits);
-    };
+    const promoted = preferFull ? indices.filter(i => ["user", "assistant", "bash"].includes(blocks[i].kind) && !full.has(blocks[i])) : [];
     // Notices are best effort: never overflow or displace otherwise fitting text.
-    if (!fits() && !fits(false)) {
-      if (preferFull && indices.some(i => blocks[i].kind === "bash")) return false;
-      for (const i of indices) if (!full.has(blocks[i])) proposedFull.delete(blocks[i]);
-      if (!fits() && !fits(false)) return false;
+    const fits = () => { const { withNotices, withoutNotices } = meter.size(added); return within(withNotices) || within(withoutNotices); };
+    for (const i of added) meter.select(i);
+    for (const i of promoted) meter.promote(i);
+    if (!fits()) {
+      if (preferFull && indices.some(i => blocks[i].kind === "bash")) {
+        for (const i of promoted) meter.demote(i);
+        for (const i of added) meter.unselect(i);
+        return false;
+      }
+      for (const i of promoted.splice(0)) meter.demote(i);
+      if (!fits()) { for (const i of added) meter.unselect(i); return false; }
     }
     for (const i of added) selected.add(i);
-    full.clear();
-    for (const block of proposedFull) full.add(block);
+    meter.commit(added);
+    for (const i of promoted) full.add(blocks[i]);
     return true;
   };
 

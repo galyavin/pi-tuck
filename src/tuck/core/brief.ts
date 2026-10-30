@@ -1,5 +1,6 @@
 import type { NormalizedBlock } from "../types";
 import { clip } from "./content";
+import type { SourceTime } from "./source-time";
 import { serializeRecords, transcriptUnits, TRANSCRIPT_UNIT_CHARACTERS, smallOriginalArguments, MAX_PRODUCER_ARGUMENT_CHARACTERS, type TranscriptRecord } from "./transcript";
 
 const TRUNCATE_USER = 256;
@@ -174,7 +175,7 @@ const toolOneLiner = (name: string, args: Record<string, unknown>): string =>
       ? `serializedArgumentsPrefix=${incompletePrefix(JSON.stringify(args))}`
       : "arguments omitted; read original source");
 
-type CallRecord = Extract<TranscriptRecord, { kind: "tool_call" }>;
+export type CallRecord = Extract<TranscriptRecord, { kind: "tool_call" }>;
 /** Literal JSON fields avoid quoting JSON inside quoted transcript text.
  * Keep the old leading excerpt before adding whole members. Its existing row
  * unit allowance bounds the offer; full character/admission owners still apply. */
@@ -231,39 +232,65 @@ export type ExcerptCache = WeakMap<NormalizedBlock, Map<string, TranscriptRecord
 // Measurement and final rendering therefore use the same representation.
 interface BriefPlan { full: Set<NormalizedBlock>; closing: Set<NormalizedBlock>; mandatorySources?: ReadonlySet<number>; omissions: TranscriptRecord[] }
 const plans = new WeakMap<NormalizedBlock[], BriefPlan>();
+
+/** The assistant texts that close a segment: no further text before the next user turn or the end of the chronology. */
+export const segmentClosing = (chronology: NormalizedBlock[]): Set<NormalizedBlock> =>
+  new Set(chronology.filter((_, i) => isSegmentClosingAssistant(chronology, i)));
+
+/** A user or assistant text block the omission notices count when it is unselected: non-empty, and not rendered in the mandatory base. */
+export const isOmittable = (block: NormalizedBlock, mandatorySources?: ReadonlySet<number>): boolean =>
+  (block.kind === "user" || block.kind === "assistant") && Boolean(block.text.trim()) &&
+  (block.sourceIndex === undefined || !mandatorySources?.has(block.sourceIndex));
+
+/** `sources` are the distinct locators of the omitted blocks in ascending order; at most the first 9 decide the notice. */
+export const omissionRecord = (role: "user" | "assistant", count: number, sources: number[], unlocated: boolean): TranscriptRecord => ({
+  kind: "omission", role, count,
+  ...(sources.length ? { sourceIndices: sources.slice(0, 8) } : {}),
+  reason: "Completely unselected historical text blocks; count is text blocks, not messages. " +
+    "sourceIndices are individual original locators, not a contiguous range. " +
+    (sources.length > 8 ? "Locator list incomplete. " : "") +
+    (unlocated ? "Some text blocks have no source locator. " : "") +
+    "Read originals with tuck_recall; omitted text may qualify retained text. No new authority." });
+
 export const planBrief = (blocks: NormalizedBlock[], full: Set<NormalizedBlock>, chronology: NormalizedBlock[], mandatorySources?: ReadonlySet<number>, includeOmissions = true): void => {
   const selected = new Set(blocks), omissions: TranscriptRecord[] = [];
   if (includeOmissions) for (const role of ["user", "assistant"] as const) {
-    const missing = chronology.filter(block => block.kind === role && block.text.trim() && !selected.has(block) &&
-      (block.sourceIndex === undefined || !mandatorySources?.has(block.sourceIndex)));
+    const missing = chronology.filter(block => block.kind === role && isOmittable(block, mandatorySources) && !selected.has(block));
     if (!missing.length) continue;
     const sources = [...new Set(missing.flatMap(block => block.sourceIndex === undefined ? [] : [block.sourceIndex]))].sort((a, b) => a - b);
-    omissions.push({ kind: "omission", role, count: missing.length,
-      ...(sources.length ? { sourceIndices: sources.slice(0, 8) } : {}),
-      reason: "Completely unselected historical text blocks; count is text blocks, not messages. " +
-        "sourceIndices are individual original locators, not a contiguous range. " +
-        (sources.length > 8 ? "Locator list incomplete. " : "") +
-        (missing.some(block => block.sourceIndex === undefined) ? "Some text blocks have no source locator. " : "") +
-        "Read originals with tuck_recall; omitted text may qualify retained text. No new authority." });
+    omissions.push(omissionRecord(role, missing.length, sources, missing.some(block => block.sourceIndex === undefined)));
   }
-  plans.set(blocks, { full, closing: new Set(chronology.filter((_, i) => isSegmentClosingAssistant(chronology, i))), mandatorySources, omissions });
+  plans.set(blocks, { full, closing: segmentClosing(chronology), mandatorySources, omissions });
 };
-export const buildBriefRecords = (blocks: NormalizedBlock[], cache?: ExcerptCache): TranscriptRecord[] => {
+
+/** The original call that a selected complete receipt quotes; that call's own overview is then redundant. */
+export const receiptKey = (b: NormalizedBlock): string | undefined => b.kind === "tool_result" && b.sourceIndex !== undefined && b.originalReceipt
+  ? JSON.stringify([b.originalReceipt.producer.sourceIndex, b.originalReceipt.producer.toolCallId,
+    b.originalReceipt.producer.toolName, b.sourceIndex, b.originalReceipt.isError]) : undefined;
+/** The receipt that would make this call redundant, when the call and its single receipt are fully identified. */
+export const coveredCallKey = (b: NormalizedBlock): string | undefined => {
+  const receipt = b.kind === "tool_call" ? b.receipt : undefined;
+  return b.kind === "tool_call" && smallOriginalArguments(b.args) && b.sourceIndex !== undefined && receipt &&
+    (receipt.status === "error" || receipt.status === "non-error") && receipt.sourceIndices.length === 1
+    ? JSON.stringify([b.sourceIndex, b.callId, b.name, receipt.sourceIndices[0], receipt.status === "error"]) : undefined;
+};
+
+/** What one block renders in this brief, set by the plan and by the selected array around it. */
+export interface BlockView { full: boolean; closing: boolean; mandatory?: ReadonlySet<number>; bounded: boolean; covered: boolean }
+
+/** The records of one block alone: before identical calls merge and before source times are attached. */
+export const blockRecords = (b: NormalizedBlock, view: BlockView, cache?: ExcerptCache): TranscriptRecord[] => {
   const records: TranscriptRecord[] = [];
-  // Selected complete receipts already carry this exact original event once.
-  const coveredCalls = new Set(blocks.flatMap(b => b.kind === "tool_result" && b.sourceIndex !== undefined && b.originalReceipt
-    ? [JSON.stringify([b.originalReceipt.producer.sourceIndex, b.originalReceipt.producer.toolCallId,
-      b.originalReceipt.producer.toolName, b.sourceIndex, b.originalReceipt.isError])] : []));
-  const plan = plans.get(blocks);
+  const identity = b.sourceIndex !== undefined ? { sourceIndex: b.sourceIndex } : {};
   const excerpts = (block: NormalizedBlock & { text: string; originalText?: string }, role: "user" | "assistant" | "custom", head: number, tail = 0) => {
     // The adapter already renders these complete sources in its mandatory base.
     // Keep them visible to structural grouping without charging them twice.
-    if (block.sourceIndex !== undefined && plan?.mandatorySources?.has(block.sourceIndex)) return [];
-    if (plan?.full.has(block)) return [{ kind: "excerpt" as const, role, ...(block.sourceIndex !== undefined ? { sourceIndex: block.sourceIndex } : {}), text: block.originalText ?? block.text, ...(block.kind === "notice" && block.sourceEntryId !== undefined ? { sourceEntryId: block.sourceEntryId } : {}) }];
-    const key = `${head}:${tail}:${Boolean(plan)}`;
+    if (block.sourceIndex !== undefined && view.mandatory?.has(block.sourceIndex)) return [];
+    if (view.full) return [{ kind: "excerpt" as const, role, ...(block.sourceIndex !== undefined ? { sourceIndex: block.sourceIndex } : {}), text: block.originalText ?? block.text, ...(block.kind === "notice" && block.sourceEntryId !== undefined ? { sourceEntryId: block.sourceEntryId } : {}) }];
+    const key = `${head}:${tail}:${view.bounded}`;
     const saved = cache?.get(block)?.get(key);
     if (saved) return saved;
-    const result = excerptRecords(block.text, role, block.sourceIndex, head, tail, Boolean(plan)).map(record =>
+    const result = excerptRecords(block.text, role, block.sourceIndex, head, tail, view.bounded).map(record =>
       block.kind === "notice" && block.sourceEntryId !== undefined ? { ...record, sourceEntryId: block.sourceEntryId } : record);
     if (cache) {
       let variants = cache.get(block);
@@ -272,62 +299,86 @@ export const buildBriefRecords = (blocks: NormalizedBlock[], cache?: ExcerptCach
     }
     return result;
   };
+  if (b.kind === "user" || b.kind === "notice" || b.kind === "bash") {
+    if (b.kind === "bash") {
+      const stored = view.full ? "\nstoredShell=" + JSON.stringify({ historical: true,
+        output: b.output, cancelled: b.cancelled ?? "unknown", truncated: b.truncated ?? "unknown" }) : "";
+      records.push({ kind: "bash", role: "bashExecution", ...identity, text: bashRecord(b.command, b.exitCode) + stored });
+    } else if (!isNoiseUser(b.text)) {
+      records.push(...excerpts(b, b.kind === "user" ? "user" : "custom", TRUNCATE_USER));
+    }
+  } else if (b.kind === "assistant") {
+    if (b.text) records.push(...excerpts(b, "assistant",
+      view.closing ? SEGMENT_CLOSING_ASSISTANT_HEAD_WORDS : ASSISTANT_HEAD_WORDS,
+      view.closing ? SEGMENT_CLOSING_ASSISTANT_TAIL_WORDS : ASSISTANT_TAIL_WORDS));
+  } else if (b.kind === "tool_call") {
+    if (!b.name.trim() || view.covered) return records;
+    const receipt = b.receipt;
+    const relation = receipt ? `; receipt=${receipt.status}` +
+      (receipt.sourceIndices.length ? ` source=${receipt.sourceIndices.map(n => `#${n}`).join(",")}` : "") : "";
+    const suffix = (b.callId ? ` call=${excerpt(b.callId, 160)}` : "") + relation;
+    const text = toolOneLiner(b.name, b.args) + suffix;
+    const sourceIndices = b.sourceIndex === undefined ? undefined :
+      [...new Set([b.sourceIndex, ...(receipt?.dependencyIndices ?? [])])].sort((a, b) => a - b);
+    const baseline: CallRecord = { kind: "tool_call", role: "assistant", ...identity,
+      ...(sourceIndices && sourceIndices.length > 1 ? { sourceIndices } : {}), text };
+    records.push(!smallOriginalArguments(b.args) && smallOriginalArguments(b.args, Number.MAX_SAFE_INTEGER)
+      ? literalArguments(baseline, b.args, `* ${b.name}${suffix}`) : baseline);
+  }
+  if (b.kind === "tool_result" && b.originalReceipt && b.sourceIndex !== undefined) {
+    const r = b.originalReceipt;
+    // One historical quote carries its own addressed producer, without a
+    // redundant overview for the same original event. Never create native tool messages.
+    records.push({ kind: "tool_receipt", role: "toolResult", sourceIndex: b.sourceIndex,
+      sourceIndices: [r.producer.sourceIndex, b.sourceIndex], historical: true,
+      isError: r.isError, text: r.text, producer: r.producer });
+  }
+  return records;
+};
+
+/** Derived tool summaries can share wording; provenance remains explicit. */
+const payloads = new WeakMap<CallRecord, string>();
+export const callPayload = (r: CallRecord): string => {
+  let payload = payloads.get(r);
+  if (payload === undefined) payloads.set(r, payload = JSON.stringify([r.text, r.arguments, r.argumentsJSONPrefix, r.completeArgumentMembers]));
+  return payload;
+};
+/** Whether `record` is the same call as the `previous` record, shown a second time. */
+export const repeatsCall = (previous: TranscriptRecord | undefined, record: TranscriptRecord): previous is CallRecord & { sourceIndex: number } =>
+  record.kind === "tool_call" && record.sourceIndex !== undefined && previous?.kind === "tool_call" &&
+  previous.sourceIndex !== undefined && callPayload(previous) === callPayload(record);
+/** The earlier record of a repeated call, now also locating the later one. */
+export const absorbCall = (previous: CallRecord & { sourceIndex: number }, record: CallRecord & { sourceIndex: number }): CallRecord =>
+  ({ ...previous, sourceIndices: [...new Set([...(previous.sourceIndices ?? [previous.sourceIndex]), ...(record.sourceIndices ?? [record.sourceIndex])])].sort((a, b) => a - b) as never });
+
+/** A source time for each locator the record names; only briefs of times-carrying blocks have them. */
+export const noticeTimes = (blocks: NormalizedBlock[]): Map<string, SourceTime> =>
+  new Map(blocks.flatMap(b => b.kind === "notice" && b.sourceEntryId && b.sourceTime ? [[b.sourceEntryId, b.sourceTime] as const] : []));
+export const decorateRecord = (record: TranscriptRecord, times: NormalizedBlock["sourceTimes"], entryTimes: ReadonlyMap<string, SourceTime>): TranscriptRecord => {
+  if (!times) return record;
+  if (record.sourceEntryId !== undefined) return { ...record, sourceTime: entryTimes.get(record.sourceEntryId) ?? { basis: "unknown" as const } };
+  const indices = record.sourceIndices ?? (record.sourceIndex === undefined ? [] : [record.sourceIndex]);
+  return indices.length ? { ...record, sourceTimes: indices.map(sourceIndex => ({ sourceIndex, ...(times[sourceIndex] ?? { basis: "unknown" as const }) })) } : record;
+};
+
+export const buildBriefRecords = (blocks: NormalizedBlock[], cache?: ExcerptCache): TranscriptRecord[] => {
+  const records: TranscriptRecord[] = [];
+  const coveredCalls = new Set(blocks.flatMap(b => receiptKey(b) ?? []));
+  const plan = plans.get(blocks);
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    const identity = b.sourceIndex !== undefined ? { sourceIndex: b.sourceIndex } : {};
-    if (b.kind === "user" || b.kind === "notice" || b.kind === "bash") {
-      if (b.kind === "bash") {
-        const stored = plan?.full.has(b) ? "\nstoredShell=" + JSON.stringify({ historical: true,
-          output: b.output, cancelled: b.cancelled ?? "unknown", truncated: b.truncated ?? "unknown" }) : "";
-        records.push({ kind: "bash", role: "bashExecution", ...identity, text: bashRecord(b.command, b.exitCode) + stored });
-      } else if (!isNoiseUser(b.text)) {
-        records.push(...excerpts(b, b.kind === "user" ? "user" : "custom", TRUNCATE_USER));
-      }
-    } else if (b.kind === "assistant") {
-      const closing = plan ? plan.closing.has(b) : isSegmentClosingAssistant(blocks, i);
-      if (b.text) records.push(...excerpts(b, "assistant",
-        closing ? SEGMENT_CLOSING_ASSISTANT_HEAD_WORDS : ASSISTANT_HEAD_WORDS,
-        closing ? SEGMENT_CLOSING_ASSISTANT_TAIL_WORDS : ASSISTANT_TAIL_WORDS));
-    } else if (b.kind === "tool_call") {
-      if (!b.name.trim()) continue;
-      const receipt = b.receipt;
-      if (smallOriginalArguments(b.args) && b.sourceIndex !== undefined && receipt && (receipt.status === "error" || receipt.status === "non-error") &&
-        receipt.sourceIndices.length === 1 && coveredCalls.has(JSON.stringify([
-          b.sourceIndex, b.callId, b.name, receipt.sourceIndices[0], receipt.status === "error"]))) continue;
-      const relation = receipt ? `; receipt=${receipt.status}` +
-        (receipt.sourceIndices.length ? ` source=${receipt.sourceIndices.map(n => `#${n}`).join(",")}` : "") : "";
-      const suffix = (b.callId ? ` call=${excerpt(b.callId, 160)}` : "") + relation;
-      const text = toolOneLiner(b.name, b.args) + suffix;
-      const sourceIndices = b.sourceIndex === undefined ? undefined :
-        [...new Set([b.sourceIndex, ...(receipt?.dependencyIndices ?? [])])].sort((a, b) => a - b);
+    const key = coveredCallKey(b);
+    const view = { full: Boolean(plan?.full.has(b)), closing: plan ? plan.closing.has(b) : isSegmentClosingAssistant(blocks, i),
+      mandatory: plan?.mandatorySources, bounded: Boolean(plan), covered: key !== undefined && coveredCalls.has(key) };
+    for (const record of blockRecords(b, view, cache)) {
       const previous = records.at(-1);
-      const baseline: CallRecord = { kind: "tool_call", role: "assistant", ...identity,
-        ...(sourceIndices && sourceIndices.length > 1 ? { sourceIndices } : {}), text };
-      const record = !smallOriginalArguments(b.args) && smallOriginalArguments(b.args, Number.MAX_SAFE_INTEGER)
-        ? literalArguments(baseline, b.args, `* ${b.name}${suffix}`) : baseline;
-      const payload = (r: CallRecord) => JSON.stringify([r.text, r.arguments, r.argumentsJSONPrefix, r.completeArgumentMembers]);
-      // Derived tool summaries can share wording; provenance remains explicit.
-      if (b.sourceIndex !== undefined && previous?.kind === "tool_call" && payload(previous) === payload(record) && previous.sourceIndex !== undefined) {
-        previous.sourceIndices = [...new Set([...(previous.sourceIndices ?? [previous.sourceIndex]), ...sourceIndices!])].sort((a, b) => a - b);
-      } else records.push(record);
-    }
-    if (b.kind === "tool_result" && b.originalReceipt && b.sourceIndex !== undefined) {
-      const r = b.originalReceipt;
-      // One historical quote carries its own addressed producer, without a
-      // redundant overview for the same original event. Never create native tool messages.
-      records.push({ kind: "tool_receipt", role: "toolResult", sourceIndex: b.sourceIndex,
-        sourceIndices: [r.producer.sourceIndex, b.sourceIndex], historical: true,
-        isError: r.isError, text: r.text, producer: r.producer });
+      if (repeatsCall(previous, record)) records[records.length - 1] = absorbCall(previous, record as CallRecord & { sourceIndex: number });
+      else records.push(record);
     }
   }
   const times = blocks.find(b => b.sourceTimes)?.sourceTimes;
-  const entryTimes = new Map(blocks.flatMap(b => b.kind === "notice" && b.sourceEntryId && b.sourceTime ? [[b.sourceEntryId, b.sourceTime] as const] : []));
-  return [...records, ...(plan?.omissions ?? [])].map(record => {
-    if (!times) return record;
-    if (record.sourceEntryId !== undefined) return { ...record, sourceTime: entryTimes.get(record.sourceEntryId) ?? { basis: "unknown" as const } };
-    const indices = record.sourceIndices ?? (record.sourceIndex === undefined ? [] : [record.sourceIndex]);
-    return indices.length ? { ...record, sourceTimes: indices.map(sourceIndex => ({ sourceIndex, ...(times[sourceIndex] ?? { basis: "unknown" as const }) })) } : record;
-  });
+  const entryTimes = noticeTimes(blocks);
+  return [...records, ...(plan?.omissions ?? [])].map(record => decorateRecord(record, times, entryTimes));
 };
 
 export const compileBrief = (blocks: NormalizedBlock[], cache?: ExcerptCache): string =>
