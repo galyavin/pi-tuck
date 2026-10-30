@@ -1,10 +1,17 @@
 // Everything semantic recall's local runtime is built from: a public source and its SHA-256 for each file. setup.ts downloads and
 // verifies these, and a change to any of them gives the runtime a new id, so an update provisions beside the old runtime, never over it.
 
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 export interface Download { url: string; sha256: string; size: number }
+
+/** Where pi-tuck keeps the runtime, its downloads and the indexes: one folder, so deleting it removes all of them. */
+export const defaultRoot = () => join(getAgentDir(), "pi-tuck");
+
+const MODEL_REVISION = "031f0d4b35536f69ab3509d4893c923264fcf253", TOKENIZER_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b";
+const LLAMA_COMMIT = "988190680d5a89fce97de3c20df2c2813731fd61";
 
 /** A relocatable CPython for macOS arm64; the runtime's virtual environment is made from it and keeps pointing at it. */
 export const PYTHON: Download & { version: string; name: string } = {
@@ -15,13 +22,13 @@ export const PYTHON: Download & { version: string; name: string } = {
 
 /** EmbeddingGemma-2, 8-bit GGUF. */
 export const MODEL: Download = {
-	url: "https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/031f0d4b35536f69ab3509d4893c923264fcf253/embeddinggemma-2-Q8_0.gguf",
+	url: `https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/${MODEL_REVISION}/embeddinggemma-2-Q8_0.gguf`,
 	sha256: "6f1bd4ac6c5df7444f9cca7ca36cafe6cfa34cd6f49fefb1e0b4be8143aed8bc", size: 309855520,
 };
 
 /** The model's own tokenizer: passages are split on its token offsets. */
 export const TOKENIZER: Download = {
-	url: "https://huggingface.co/google/embeddinggemma-2/resolve/914f7f89142e33e77833254d9c9b90c3cef7303b/tokenizer.json",
+	url: `https://huggingface.co/google/embeddinggemma-2/resolve/${TOKENIZER_REVISION}/tokenizer.json`,
 	sha256: "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4", size: 32170510,
 };
 
@@ -68,24 +75,18 @@ export const WHEELS: Record<string, Download> = {
 	"typing_extensions-4.16.0-py3-none-any.whl": pypi("49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", 45571),
 };
 
-export const REQUIREMENTS = [
-	"PyYAML==6.0.3", "anyio==4.15.1", "certifi==2026.7.22", "click==8.5.0", "filelock==4.0.12", "fsspec==2026.9.0", "h11==0.16.0",
-	"hf-xet==1.7.0", "httpcore==1.0.9", "httpx==0.28.1", "huggingface_hub==1.33.0", "idna==3.20", "packaging==26.3", "tokenizers==0.23.2",
-	"tqdm==4.70.1", "typing_extensions==4.16.0",
-];
-
 /** What scripts/eg2-runtime.py checks the runtime against: the model, its encoding contract and the native build. */
 export const PINS = {
-	embedding: { model: "google/embeddinggemma-2", revision: "914f7f89142e33e77833254d9c9b90c3cef7303b", dimensions: 768, maxTokens: 8192,
+	embedding: { model: "google/embeddinggemma-2", revision: TOKENIZER_REVISION, dimensions: 768, maxTokens: 8192,
 		queryInstruction: "task: search result | query: ", documentInstruction: "title: none | text: ",
 		pooling: "mask-aware mean including prompt, projected token states, then float32 L2", dtype: "Q8_0", textOnly: true },
 	runtime: { tokenizers: "0.23.2", python: PYTHON.version },
-	backend: { name: "llama.cpp", commit: "988190680d5a89fce97de3c20df2c2813731fd61", artifact: "Q8_0", computePrecision: "float32", gpuLayers: 0,
+	backend: { name: "llama.cpp", commit: LLAMA_COMMIT, artifact: "Q8_0", computePrecision: "float32", gpuLayers: 0,
 		compute: "CPU float32 with f32 KV; quantized weights where selected", modelRepository: "unsloth/embeddinggemma-2-GGUF",
-		modelRevision: "031f0d4b35536f69ab3509d4893c923264fcf253", modelSHA256: MODEL.sha256 },
+		modelRevision: MODEL_REVISION, modelSHA256: MODEL.sha256 },
 };
 
 /** A digest of every pinned input: a changed pin provisions a new runtime beside the old one instead of mutating it. */
-export const RUNTIME_ID = createHash("sha256").update(JSON.stringify({ PYTHON, MODEL, TOKENIZER, LLAMA, WHEELS, REQUIREMENTS, PINS })).digest("hex").slice(0, 16);
+export const RUNTIME_ID = createHash("sha256").update(JSON.stringify({ PYTHON, MODEL, TOKENIZER, LLAMA, WHEELS, PINS })).digest("hex").slice(0, 16);
 /** The provisioned runtime's configuration, written last by provisioning: its presence means the runtime is complete. */
 export const runtimeConfigPath = (root: string) => join(root, "runtime", RUNTIME_ID, "semantic-recall.json");

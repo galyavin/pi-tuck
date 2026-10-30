@@ -3,6 +3,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { installCompaction } from "./src/compaction";
 import { createSemanticRecall } from "./src/semantic-recall";
+import { defaultRoot } from "./src/assets";
 import { ensureSemanticRuntime } from "./src/setup";
 
 export type { CompactionOptions } from "./src/compaction";
@@ -21,8 +22,7 @@ export default async function (pi: ExtensionAPI) {
 	const handle = await installCompaction(pi, { semanticRecall, onSemanticSetting: async enabled => { off = !enabled; } });
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
 	if (settings.semanticRecall === false) return;
-	const root = join(getAgentDir(), "pi-tuck");
-	let session = 0, said = "", setup: Promise<string> | undefined;
+	let session = 0, said = "", setup: Promise<unknown> | undefined;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
 	const say = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { try { ctx.ui.notify(message, level); } catch { /* ended */ } };
 	const once = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { if (said !== message) { said = message; say(ctx, message, level); } };
@@ -39,12 +39,11 @@ export default async function (pi: ExtensionAPI) {
 			return once(ctx, "pi-tuck: semantic recall is off here because Pi's agent folder is inside this folder; open Pi in a project folder to use it.", "info");
 		if (!ctx.hasUI) return; // a one-shot run (pi -p) would end before a first-time setup could
 		if (!semanticRecall.status().configured) semanticRecall.refuse("Semantic recall is being set up; word recall works meanwhile");
-		setup ??= ensureSemanticRuntime(root, message => say(ctx, message, "info"));
-		setup.then(async config => {
+		setup ??= ensureSemanticRuntime(defaultRoot(), message => say(ctx, message, "info"));
+		setup.then(async () => {
 			if (current !== session || off) return;
 			try {
-				if (!semanticRecall.status().configured) semanticRecall.configure(JSON.parse(readFileSync(config, "utf8")));
-				await handle.setSemanticEnabled(true, ctx);
+				await handle.setSemanticEnabled(true, ctx); // reads the runtime's configuration through the outside-project check
 			} catch (error) {
 				if (current === session) say(ctx, `pi-tuck: semantic recall could not start (${reason(error)}); it tries again when a session starts.`, "warning");
 			}

@@ -50,7 +50,7 @@ export const serializeTranscript = (records: TranscriptRecord[]): string => reco
 /** Starts a summary's closing section, after the record lines. */
 export const CLOSING_SEPARATOR = "\n\n---\n\n";
 /** A summary in this format, split by structure: each record is one JSON line, so the first blank line after the header starts the
- * closing section. Any closing wording, from this build or an earlier one, is accepted and returned byte for byte. */
+ * closing section. Any closing wording, from this build or an earlier one, is accepted; the records are returned byte for byte. */
 export const splitSummary = (summary: string): { body: string; closing: string } | undefined => {
   const header = [TRANSCRIPT_HEADER, LEGACY_TRANSCRIPT_HEADER].find(h => summary.startsWith(h + "\n"));
   if (!header) return undefined;

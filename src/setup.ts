@@ -5,12 +5,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants, createWriteStream, existsSync } from "node:fs";
 import { copyFile, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { LLAMA, MODEL, PINS, PYTHON, REQUIREMENTS, RUNTIME_ID, TOKENIZER, WHEELS, runtimeConfigPath, type Download } from "./assets";
+import { LLAMA, MODEL, PINS, PYTHON, TOKENIZER, WHEELS, runtimeConfigPath, type Download } from "./assets";
 
 const run = promisify(execFile);
 const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex");
@@ -26,7 +26,7 @@ export async function ensureSemanticRuntime(root: string, notice: (message: stri
 	if (existsSync(runtimeConfigPath(root))) return runtimeConfigPath(root);
 	await mkdir(join(root, "runtime"), { recursive: true });
 	root = await realpath(root); // provisioning refuses paths through symlinks
-	const runtime = join(root, "runtime", RUNTIME_ID), config = runtimeConfigPath(root);
+	const config = runtimeConfigPath(root), runtime = dirname(config);
 	const release = await lock(runtime + ".lock");
 	const staging = join(root, `staging-${process.pid}`), lockFile = staging + ".lock.json";
 	try {
@@ -39,11 +39,11 @@ export async function ensureSemanticRuntime(root: string, notice: (message: stri
 		if (bavail * bsize < NEEDED_BYTES) throw new Error(`semantic recall needs ${Math.ceil(NEEDED_BYTES / 1e9)} GB of free disk space`);
 		notice(`pi-tuck: setting up semantic recall, a one-time download of about ${Math.round(DOWNLOAD_BYTES / 1e6)} MB. Word recall works meanwhile.`);
 		const downloads = join(root, "downloads");
-		const [python, llama, model, tokenizer, ...wheels] = await Promise.all([PYTHON, LLAMA, MODEL, TOKENIZER, ...Object.values(WHEELS)]
-			.map(d => fetchVerified(d, downloads)));
-		const interpreter = await installPython(root, python!);
-		await rm(staging, { recursive: true, force: true });
-		const files = await assemble(staging, { llama: llama!, model: model!, tokenizer: tokenizer!, wheels: Object.keys(WHEELS).map((name, i) => [name, wheels[i]!]) });
+		const get = (download: Download) => fetchVerified(download, downloads);
+		const [python, llama, model, tokenizer, wheels] = await Promise.all([get(PYTHON), get(LLAMA), get(MODEL), get(TOKENIZER),
+			Promise.all(Object.entries(WHEELS).map(async ([name, download]) => [name, await get(download)] as [string, string]))]);
+		const interpreter = await installPython(root, python);
+		const files = await assemble(staging, { llama, model, tokenizer, wheels });
 		const wheel = Object.keys(WHEELS).find(name => name.startsWith("tokenizers-"))!;
 		await writeFile(lockFile, JSON.stringify({ format: 1, platform: "darwin-arm64", python: PYTHON.version, wheel: "wheels/" + wheel, files }));
 		await provision(interpreter, ["-I", "-B", join(scripts, "provision-eg2.py"), runtime, "--assets", staging, "--lock", lockFile,
@@ -99,10 +99,10 @@ async function assemble(staging: string, inputs: { llama: string; model: string;
 		await copyFile(from, join(staging, path), constants.COPYFILE_FICLONE);
 		files[path] = sha;
 	};
-	const write = async (path: string, data: string | Uint8Array) => {
+	const write = async (path: string, data: string | Uint8Array, sha = sha256(data)) => {
 		await mkdir(join(staging, path, ".."), { recursive: true });
 		await writeFile(join(staging, path), data);
-		files[path] = sha256(data);
+		files[path] = sha;
 	};
 	await put("model.gguf", inputs.model, MODEL.sha256);
 	await put("models/embedding/tokenizer.json", inputs.tokenizer, TOKENIZER.sha256);
@@ -111,18 +111,20 @@ async function assemble(staging: string, inputs: { llama: string; model: string;
 	await mkdir(unpacked, { recursive: true });
 	try {
 		await run("tar", ["-xzf", inputs.llama, "-C", unpacked]);
-		const from = (name: string) => join(unpacked, LLAMA.folder, name);
-		for (const [name, sha] of [...Object.entries(LLAMA.files), ["LICENSE", LLAMA.license]] as const) {
-			const bytes = await readFile(from(name)); // follows the archive's symlinks, so the copy is a plain file
+		// Reading follows the archive's symlinks, so each copy is a plain file.
+		const member = async (name: string, sha: string, path: string) => {
+			const bytes = await readFile(join(unpacked, LLAMA.folder, name));
 			if (sha256(bytes) !== sha) throw new Error(`llama.cpp archive member does not match its pinned SHA-256: ${name}`);
-			await write(name === "LICENSE" ? "notices/llama.cpp/LICENSE" : "native/" + name, bytes);
-		}
+			await write(path, bytes, sha);
+		};
+		for (const [name, sha] of Object.entries(LLAMA.files)) await member(name, sha, "native/" + name);
+		await member("LICENSE", LLAMA.license, "notices/llama.cpp/LICENSE");
 	} finally { await rm(unpacked, { recursive: true, force: true }); }
-	const hashOf = (requirement: string) => {
-		const name = requirement.split("==")[0]!.toLowerCase().replace(/[-_.]+/g, "_");
-		return WHEELS[Object.keys(WHEELS).find(wheel => wheel.toLowerCase().startsWith(name + "-"))!]!.sha256;
-	};
-	await write("requirements.lock", REQUIREMENTS.map(r => `${r} --hash=sha256:${hashOf(r)}\n`).join(""));
+	// A wheel's filename starts with its distribution name and version.
+	await write("requirements.lock", Object.entries(WHEELS).map(([wheel, { sha256 }]) => {
+		const [name, version] = wheel.split("-");
+		return `${name}==${version} --hash=sha256:${sha256}\n`;
+	}).join(""));
 	await write("pins.json", JSON.stringify(PINS));
 	return files;
 }

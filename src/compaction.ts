@@ -213,8 +213,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const input = counts.reduce((a, b) => a + b, 0), ratio = input / paired.tokens;
         if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
-    pi.on("agent_start", () => { admittedRun = true; pending = undefined; starting = false; });
-    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; decided = false; starting = false; });
+    pi.on("agent_start", () => { admittedRun = true; pending = undefined; phase = "idle"; });
+    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
@@ -279,13 +279,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	};
     // Abort alone is insufficient: Pi starts a fresh abort controller after
     // before_agent_start. Keep this attempt blocked, then recheck on new idle input.
-    // `decided`: `input` has decided for the run it starts, so that run's before_agent_start does not decide again. `starting`: a run is
+    // "decided": `input` has decided for the run it starts, so that run's before_agent_start does not decide again. "starting": a run is
     // between before_agent_start and agent_start, where Pi 1.1 still reports idle but a message joins that run.
-    let decided = false, starting = false;
+    let phase: "idle" | "decided" | "starting" = "idle";
     pi.on("input", async (event, ctx) => {
-        if (!ctx.isIdle() || starting) return; // a steering or follow-up message joins the running request
+        if (!ctx.isIdle() || phase === "starting") return; // a steering or follow-up message joins the running request
         if (failure instanceof CapacityError) failure = undefined;
-        decided = true;
+        phase = "decided";
         try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
         catch (error) { fail(error, ctx); }
     });
@@ -392,7 +392,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		}
 	});
 	pi.on("session_before_tree", (event) => event.preparation.userWantsSummary ? { cancel: true } : undefined);
-    pi.on("session_start", () => { recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; decided = false; starting = false; });
+    pi.on("session_start", () => { recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; phase = "idle"; });
     // The cut before a run. Pi 1.4 counts a run as started before before_agent_start, and ctx.compact() first aborts and waits for an
     // idle session, so a cut asked for there would wait on its own run. A prompt's cut is therefore made on `input`, while the session
     // is idle. before_agent_start decides only for a run no input started (one a custom message starts) and cuts only if the session is
@@ -442,9 +442,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             throw new (afterFits ? Error : CapacityError)("Incoming Pi preflight compaction did not reduce context within the estimated request budget");
     };
     pi.on("before_agent_start", async (event, ctx) => {
-        const prompted = decided;
-        decided = false;
-        starting = true;
+        const prompted = phase === "decided";
+        phase = "starting";
         try {
             if (prompted) access(); // decided on input; a failure latched there still stops the run
             else await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools);
