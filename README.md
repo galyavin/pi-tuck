@@ -8,16 +8,17 @@ by meaning.
 ## Install
 
 ```sh
-pi install npm:pi-tuck
+pi install npm:pi-tuck@1.0.1
 ```
 
 or straight from GitHub:
 
 ```sh
-pi install git:github.com/galyavin/pi-tuck@v1.0.0
+pi install git:github.com/galyavin/pi-tuck@v1.0.1
 ```
 
-Requires Pi 1.1 or later (tested on 1.1.0 and 1.4.0) and macOS. Semantic search needs Apple silicon; on an Intel Mac everything else works.
+Requires Pi 1.1 or later (tested on 1.1.0 and 1.4.0) on macOS or Linux. Semantic search (`tuck_search` by meaning) runs only on macOS
+on Apple silicon; elsewhere `tuck_search` uses keywords and everything else works.
 Start a new Pi session after installing.
 
 ## What it does

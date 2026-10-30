@@ -3,9 +3,28 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-30
+
+First release on npm. 1.0.0 was tagged but never published; its notes below describe what 1.0.1 ships besides these changes.
+
+### Added
+
+- Linux support. Compaction and keyword recall work as on macOS; semantic search stays macOS on Apple silicon only.
+
+### Changed
+
+- The `tuck_recall` and `tuck_search` tool descriptions are shorter: about 1,050 tokens per request instead of 1,670. The parameters
+  accept the same input.
+
+### Fixed
+
+- A long session whose dialogue no longer fit the summary stalled for tens of seconds at every cut (88 s at 3,900 entries), because
+  the ranked view re-rendered the whole candidate summary for each block it considered. It now keeps the summary's size up to date
+  as blocks join, so a cut takes well under a second and grows linearly with the session. Summaries are byte for byte the same.
+
 ## [1.0.0] - 2026-10-30
 
-First release on npm and the Pi package gallery.
+Tagged, not published.
 
 ### Added
 
@@ -43,5 +62,6 @@ First release on npm and the Pi package gallery.
 Source preview on GitHub, not published to npm. Deterministic compaction with `pi_tuck_recall` and `pi_tuck_search`; semantic search
 opt-in, with a runtime the user had to supply.
 
-[1.0.0]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.0
+[1.0.1]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.1
+[1.0.0]: https://github.com/galyavin/pi-tuck/tree/v1.0.0
 [0.2.1]: https://github.com/galyavin/pi-tuck/tree/e00fa99
