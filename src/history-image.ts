@@ -3,7 +3,7 @@ import { isRecallTool } from "./tuck/core/recall-operation";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ATTEMPT_NOTICE, MAX_RECALL_ENTRY_ID_CHARACTERS, createRecall, type RecallPolicy } from "./recall.js";
+import { ATTEMPT_NOTICE, MAX_RECALL_ENTRY_ID_CHARACTERS, createRecall, type ReadableEntry, type RecallPolicy } from "./recall.js";
 
 export const MAX_HISTORY_IMAGE_BYTES = 5 * 1024 * 1024;
 export const ImageRecallInput = Type.Object({
@@ -13,15 +13,14 @@ export const ImageRecallInput = Type.Object({
 }, { additionalProperties: false });
 export interface ImageRead { entryId: string; image: number }
 export interface ImageSource { sourceTime: SourceTime; entryId: string; role: "user" | "toolResult"; imageCount: number; read: ImageRead }
-type ReadableHistoryEntry = NonNullable<ReturnType<ReturnType<typeof createRecall>["readable"]>>;
 export type HistoryAroundPage = {
     status: string; notice: string;
-    entries: (Pick<ReadableHistoryEntry, "entryId" | "role" | "sourceTime"> & Partial<Pick<ReadableHistoryEntry,
+    entries: (Pick<ReadableEntry, "entryId" | "role" | "sourceTime"> & Partial<Pick<ReadableEntry,
         "text" | "toolName" | "toolCallId" | "isError" | "recordedAttempt" | "stopReason">> & {
         totalCharacters?: number; read?: { entryId: string; offset: number; limit: number };
         imageCount?: number; imageRead?: ImageRead })[];
     imageSources: ImageSource[]; omittedImageSourceCount?: number;
-    associatedReceipts?: { sources: (Pick<ReadableHistoryEntry,
+    associatedReceipts?: { sources: (Pick<ReadableEntry,
         "entryId" | "sourceTime" | "toolName" | "toolCallId" | "metadataTruncated" | "recordedAttempt"> & {
         producerTime?: SourceTime; producerRead: { entryId: string; offset: number; limit: number }; read: { entryId: string } })[]; omitted: number };
 };

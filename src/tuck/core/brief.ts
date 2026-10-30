@@ -107,7 +107,7 @@ const excerptRecords = (text: string, role: "user" | "assistant" | "custom", sou
     .filter((seg) => isWord(seg) && !STOP_WORDS.has(seg.segment.toLowerCase())).length);
   const charLimit = 1024;
   const identity = { role, ...(sourceIndex !== undefined ? { sourceIndex } : {}) };
-  if ((!boundedChars || JSON.stringify(text).length <= charLimit) && costs.reduce((sum, cost) => sum + cost, 0) <= headLimit + tailLimit)
+  if ((!boundedChars || text.length <= charLimit && JSON.stringify(text).length <= charLimit) && costs.reduce((sum, cost) => sum + cost, 0) <= headLimit + tailLimit)
     return [{ kind: "excerpt", ...identity, text }];
   let head = 0, headCost = 0, tail = passages.length, tailCost = 0;
   while (head < tail && headCost + costs[head]! <= headLimit && (!boundedChars || JSON.stringify(text.slice(0, passages[head]!.end)).length <= charLimit)) { headCost += costs[head++]!; }
@@ -286,7 +286,7 @@ export const blockRecords = (b: NormalizedBlock, view: BlockView, cache?: Excerp
     // The adapter already renders these complete sources in its mandatory base.
     // Keep them visible to structural grouping without charging them twice.
     if (block.sourceIndex !== undefined && view.mandatory?.has(block.sourceIndex)) return [];
-    if (view.full) return [{ kind: "excerpt" as const, role, ...(block.sourceIndex !== undefined ? { sourceIndex: block.sourceIndex } : {}), text: block.originalText ?? block.text, ...(block.kind === "notice" && block.sourceEntryId !== undefined ? { sourceEntryId: block.sourceEntryId } : {}) }];
+    if (view.full) return [{ kind: "excerpt" as const, role, ...identity, text: block.originalText ?? block.text, ...(block.kind === "notice" && block.sourceEntryId !== undefined ? { sourceEntryId: block.sourceEntryId } : {}) }];
     const key = `${head}:${tail}:${view.bounded}`;
     const saved = cache?.get(block)?.get(key);
     if (saved) return saved;

@@ -2,6 +2,7 @@ import { getCurrentSystemMessage, type ImageContent } from "@earendil-works/pi-a
 import { convertToLlm, estimateTokens, type BeforeAgentStartEvent, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { measurableMessages, projectedMessages } from "./omissions.js";
 import type { RecallPolicy } from "./recall.js";
+import { isDiscardedResponse } from "./protocol.js";
 
 /**
  * The one measure of the next request. The cut triggers, the cut planner (including the draft admission in tuck.ts), the post-cut
@@ -29,7 +30,7 @@ const REPLAYING_APIS: ReadonlySet<string> = new Set(["openai-responses", "azure-
  * Any other API, a turn without a signed thinking block or a recorded `usage.reasoning`, or a turn that ended aborted or in error adds nothing.
  */
 export const replayedReasoningTokens = (message: Converted[number]): number => {
-	if (message.role !== "assistant" || !REPLAYING_APIS.has(message.api) || message.stopReason === "aborted" || message.stopReason === "error") return 0;
+	if (message.role !== "assistant" || !REPLAYING_APIS.has(message.api) || isDiscardedResponse(message)) return 0;
 	const reasoning = message.usage?.reasoning ?? 0;
 	return Number.isFinite(reasoning) && reasoning > 0 && message.content.some((b) => b.type === "thinking" && b.thinkingSignature) ? Math.ceil(reasoning) : 0;
 };

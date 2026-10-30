@@ -5,8 +5,6 @@ import { textOf, extractToolCallArgsText, clip } from "./content";
 import { prepareKeywordQuery, type KeywordMatcher } from "./keyword-query";
 
 export interface SearchHit extends RenderedEntry {
-  /** Context snippet around the first matched term (only when query provided) */
-  snippet?: string;
   /** Number of query terms matched (for ranking) */
   matchCount?: number;
 }
@@ -111,29 +109,6 @@ const bm25Score = (doc: string, terms: readonly KeywordMatcher[], ctx: BM25Conte
   return score;
 };
 
-/** Line-based snippet: ±contextLines around the first match. */
-const lineSnippet = (text: string, matcher: { test(text: string): boolean }, contextLines = 2): string | undefined => {
-  const lines = text.split("\n");
-  let matchIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (matcher.test(lines[i])) {
-      matchIdx = i;
-      break;
-    }
-  }
-  if (matchIdx === -1) return undefined;
-
-  const start = Math.max(0, matchIdx - contextLines);
-  const end = Math.min(lines.length, matchIdx + contextLines + 1);
-  const slice = lines.slice(start, end);
-
-  const parts: string[] = [];
-  if (start > 0) parts.push(`...(${start} lines above)`);
-  parts.push(...slice);
-  if (end < lines.length) parts.push(`...(${lines.length - end} lines below)`);
-  return parts.join("\n");
-};
-
 /**
  * Aggregate character budget for ALL toolCall arguments appended to one
  * message's searchable text — a single shared budget across every toolCall
@@ -178,8 +153,7 @@ const toolCallArgsText = (content: Message["content"]): string => {
 /**
  * Build full searchable text for a message: text parts plus toolCall
  * arguments (bash command, Write/Edit content, etc.) so a match that only
- * exists in a tool call's arguments is still findable and its snippet is
- * derived from the same text.
+ * exists in a tool call's arguments is still findable.
  *
  * The recall tool's own toolResult is excluded (searchable text ""): it
  * echoes back `N matches for "<query>"` from the *previous* recall call, so
@@ -310,13 +284,7 @@ export const searchEntriesDetailed = (
     const hay = docs[i];
     const mc = countMatches(hay, terms);
     if (mc === 0) continue;
-    const score = bm25Score(hay, terms, ctx);
-    const text = messages[i] ? fullText(messages[i]) : e.summary;
-    const snip = lineSnippet(text, prepared);
-    scored.push({
-      hit: { ...e, snippet: snip, matchCount: mc },
-      score,
-    });
+    scored.push({ hit: { ...e, matchCount: mc }, score: bm25Score(hay, terms, ctx) });
   }
 
   // Sort by BM25 score desc, then drop the noisy long tail relative to the

@@ -1,13 +1,16 @@
 import type { convertToLlm } from "@earendil-works/pi-coding-agent";
 type AgentMessage = Parameters<typeof convertToLlm>[0][number];
 
+/** Pi drops a response that failed or was aborted from the context it sends; nothing in it counts. */
+export const isDiscardedResponse = (message: { stopReason?: string }): boolean => message.stopReason === "error" || message.stopReason === "aborted";
+
 /** Native unfinished calls remain Pi-owned; never invent receipts or repair source data. */
 export function assertNativeToolRounds(messages: readonly AgentMessage[]) {
  let calls = new Map<string, string>();
  let results = new Set<string>();
  for (const message of messages) {
   if (message.role === "assistant") {
-   if (message.stopReason === "error" || message.stopReason === "aborted") continue;
+   if (isDiscardedResponse(message)) continue;
    calls = new Map(); results = new Set();
    for (const block of message.content) if (block.type === "toolCall") {
     if (calls.has(block.id)) throw new Error("Duplicate call in native tool round");

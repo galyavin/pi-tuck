@@ -1,6 +1,6 @@
 import { isSourceExport } from "./recall-operation";
 import type { CompilerMessage, NormalizedBlock, ReceiptLink, HistoricalReceipt } from "../types";
-import { textOf } from "./content";
+import { isTextOnly, textOf } from "./content";
 import { sanitize } from "./sanitize";
 import { MAX_RECEIPT_CHARACTERS, smallOriginalArguments } from "./transcript";
 
@@ -35,7 +35,6 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receip
       text: sanitize(textOf(msg.content)),
       sourceIndex: msgIndex,
       originalReceipt: (original?.text.length ?? Infinity) <= MAX_RECEIPT_CHARACTERS ? original : undefined,
-      ...((original?.text.length ?? 0) > MAX_RECEIPT_CHARACTERS ? { oversizedReceipt: original } : {}),
     }];
   }
 
@@ -115,7 +114,7 @@ export const normalize = (
     if ((status === "error" || status === "non-error") && call.index !== undefined && receipt.index !== undefined &&
       Number.isSafeInteger(call.index) && call.index >= 0 && Number.isSafeInteger(receipt.index) && receipt.index > call.index &&
       call.name.trim() && call.name.length <= 160 && id.length <= 160 && smallOriginalArguments(call.args, Number.MAX_SAFE_INTEGER) &&
-      (typeof receipt.content === "string" || Array.isArray(receipt.content) && receipt.content.every(p => p.type === "text"))) {
+      isTextOnly(receipt.content)) {
       const text = textOf(receipt.content);
       if (text) originals.set(id, {
         text, isError: receipt.isError,

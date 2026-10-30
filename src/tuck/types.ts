@@ -31,5 +31,5 @@ export type NormalizedBlock = { sourceTime?: import("./core/source-time").Source
   | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number }
   | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string }
   | { kind: "tool_call"; name: string; args: Record<string, unknown>; callId?: string; receipt?: ReceiptLink; sourceIndex?: number }
-  | { kind: "tool_result"; name: string; text: string; sourceIndex?: number; recallExport?: true; originalReceipt?: HistoricalReceipt; oversizedReceipt?: HistoricalReceipt }
+  | { kind: "tool_result"; name: string; text: string; sourceIndex?: number; recallExport?: true; originalReceipt?: HistoricalReceipt }
   | { kind: "bash"; command: string; output: string; exitCode: number | undefined; cancelled?: boolean; truncated?: boolean; sourceIndex?: number });

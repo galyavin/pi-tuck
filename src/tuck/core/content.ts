@@ -21,6 +21,10 @@ const textParts = (content: Message["content"]): string[] => {
     .map((part) => part.text);
 };
 
+/** Content that is a string or only text blocks: what quoting can deliver whole. */
+export const isTextOnly = (content: string | readonly { type: string }[] | undefined): boolean =>
+  typeof content === "string" || (Array.isArray(content) && content.every((part) => part.type === "text"));
+
 export const textOf = (content: Message["content"]): string =>
   textParts(content).join("\n");
 

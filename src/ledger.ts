@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isLookupTool } from "./tuck/core/recall-operation";
+import { isDiscardedResponse } from "./protocol";
 import { extractPath } from "./tuck/core/tool-args";
 import type { TranscriptRecord } from "./tuck/core/transcript";
 
@@ -28,7 +29,7 @@ export function ledgerItems(entries: readonly SessionEntry[], indices: ReadonlyM
 	const last = new Map<string, { path: string; operation: LedgerItem["operation"]; entry: SessionEntry }>();
 	for (const entry of entries) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		if (entry.message.stopReason === "error" || entry.message.stopReason === "aborted") continue;
+		if (isDiscardedResponse(entry.message)) continue;
 		for (const block of entry.message.content) {
 			if (block.type !== "toolCall" || !block.arguments || typeof block.arguments !== "object") continue;
 			const operation = OPERATIONS.get(block.name);
@@ -76,7 +77,7 @@ export function actionItems(entries: readonly SessionEntry[], indices: ReadonlyM
 	const calls: { text: string; failed: boolean; result?: SessionEntry }[] = [];
 	for (const entry of entries) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		if (entry.message.stopReason === "error" || entry.message.stopReason === "aborted") continue;
+		if (isDiscardedResponse(entry.message)) continue;
 		for (const block of entry.message.content) {
 			if (block.type !== "toolCall" || OPERATIONS.has(block.name) || isLookupTool(block.name)) continue;
 			const args = block.arguments as Record<string, unknown> | undefined;

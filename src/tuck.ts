@@ -1,9 +1,9 @@
 import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { orderByOriginalSource } from "./tuck/core/source-order";
-import { assertNativeToolRounds } from "./protocol.js";
+import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
 import { parseRecords, serializeTranscript, splitSummary, type TranscriptRecord } from "./tuck/core/transcript";
 import { DIALOGUE_SUFFIX, RANKED_SUFFIX } from "./tuck/core/format";
-import { textOf } from "./tuck/core/content";
+import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_TASK_CONTRACT_CHARACTERS, actionItems, actionRecords, head, ledgerItems, ledgerRecords } from "./ledger.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
@@ -19,7 +19,7 @@ export type Measure = (messages: AgentMessage[]) => number;
 export type DraftMode = "dialogue" | "ranked";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
     | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean };
-interface SearchHit { index: number; role: string; summary: string; snippet?: string }
+interface SearchHit { index: number; role: string; summary: string }
 export interface RecallContinuation { query: string; throughEntryId: string; offset: number }
 /** Includes JSON escaping, hit metadata and continuation, not just excerpt text. */
 export const MAX_RANKED_RESPONSE_CHARACTERS = 16000;
@@ -95,7 +95,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     // A preferred tail size must not erase this first exposure when the whole
     // fresh round fits. Existing full-draft admission rejects an impossible round.
     const lastResponse = entries.findLastIndex(entry => entry.type === "message" && entry.message.role === "assistant" &&
-        entry.message.stopReason !== "error" && entry.message.stopReason !== "aborted");
+        !isDiscardedResponse(entry.message));
     const response = entries[lastResponse];
     let freshRound = false;
     if (response?.type === "message" && response.message.role === "assistant") {
@@ -132,7 +132,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const userPosition = entries.findIndex(entry => entry.id === latestUser?.id && entry.type === "message");
     const current = entries[userPosition];
     const userContent = current?.type === "message" && current.message.role === "user" ? current.message.content : undefined;
-    const textOnly = typeof userContent === "string" || (Array.isArray(userContent) && userContent.every(block => block.type === "text"));
+    const textOnly = isTextOnly(userContent);
     // The initiating prompt is the task contract: quoted in every summary that compacts it away. It is the branch's first user
     // source; when a native edit omitted it, nothing is quoted and no later user source is promoted in its place.
     const firstUser = branch.find(entry => entry.type === "message" && entry.message.role === "user");
@@ -178,8 +178,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     // The initiating prompt is quoted first, like the current input below: text only, since quoting cannot deliver other blocks.
     const initiating = firstUserPosition >= 0 && firstUserPosition < boundary && entries[firstUserPosition]!.id !== protectedUser?.id ? entries[firstUserPosition] : undefined;
     const initiatingContent = initiating?.type === "message" && initiating.message.role === "user" ? initiating.message.content : undefined;
-    if (initiating && (typeof initiatingContent === "string" || Array.isArray(initiatingContent) && initiatingContent.every(block => block.type === "text"))) {
-        const text = textOf(initiatingContent), index = indices.get(initiating.id);
+    if (initiating && isTextOnly(initiatingContent)) {
+        const text = textOf(initiatingContent!), index = indices.get(initiating.id);
         if (index === undefined) throw new Error("Missing initiating user source index");
         const quoted = head(text, MAX_TASK_CONTRACT_CHARACTERS), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(initiating) }];
         if (text.trim()) {

@@ -9,7 +9,6 @@ import runpy
 import shutil
 import signal
 import subprocess
-import sys
 
 RUNTIME = runpy.run_path(str(pathlib.Path(__file__).with_name('eg2-runtime.py')))
 RESERVE = 5 * 1024**3
