@@ -1,6 +1,6 @@
 import type { NormalizedBlock } from "../types";
 import { absorbCall, blockRecords, coveredCallKey, decorateRecord, isOmittable, noticeTimes, omissionRecord, receiptKey, repeatsCall, segmentClosing,
-  type CallRecord, type ExcerptCache } from "./brief";
+  type ExcerptCache } from "./brief";
 import { TRANSCRIPT_HEADER, lineUnits, type TranscriptRecord } from "./transcript";
 
 /** A set of integers in [0, size) with ordered neighbour queries, in a tree of 32-bit words. */
@@ -141,7 +141,7 @@ export const createBriefMeter = (blocks: NormalizedBlock[], mandatory: ReadonlyS
       if (!group.length) return;
       const head = records[group[0]!]!;
       const shown = group.length === 1 ? head :
-        [group.slice(1).reduce((all, b) => absorbCall(all as never, records[b]![0] as never), head[0]!)];
+        [group.slice(1).reduce((all, b) => absorbCall(all, records[b]![0]!), head[0]!)];
       for (const record of shown) {
         const length = lengthOf(record);
         contributedChars[group[0]!] += length; contributedUnits[group[0]!] += lineUnits(length); contributedRecords[group[0]!]++;

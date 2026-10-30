@@ -252,13 +252,9 @@ export const selectRankedBriefBlocks = (
     for (const i of added) meter.select(i);
     for (const i of promoted) meter.promote(i);
     if (!fits()) {
-      if (preferFull && indices.some(i => blocks[i].kind === "bash")) {
-        for (const i of promoted) meter.demote(i);
-        for (const i of added) meter.unselect(i);
-        return false;
-      }
       for (const i of promoted.splice(0)) meter.demote(i);
-      if (!fits()) { for (const i of added) meter.unselect(i); return false; }
+      // A whole shell proposal that does not fit is withdrawn, not retried as an excerpt.
+      if ((preferFull && indices.some(i => blocks[i].kind === "bash")) || !fits()) { for (const i of added) meter.unselect(i); return false; }
     }
     for (const i of added) selected.add(i);
     meter.commit(added);

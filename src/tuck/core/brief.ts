@@ -338,7 +338,7 @@ export const blockRecords = (b: NormalizedBlock, view: BlockView, cache?: Excerp
 
 /** Derived tool summaries can share wording; provenance remains explicit. */
 const payloads = new WeakMap<CallRecord, string>();
-export const callPayload = (r: CallRecord): string => {
+const callPayload = (r: CallRecord): string => {
   let payload = payloads.get(r);
   if (payload === undefined) payloads.set(r, payload = JSON.stringify([r.text, r.arguments, r.argumentsJSONPrefix, r.completeArgumentMembers]));
   return payload;
@@ -348,8 +348,8 @@ export const repeatsCall = (previous: TranscriptRecord | undefined, record: Tran
   record.kind === "tool_call" && record.sourceIndex !== undefined && previous?.kind === "tool_call" &&
   previous.sourceIndex !== undefined && callPayload(previous) === callPayload(record);
 /** The earlier record of a repeated call, now also locating the later one. */
-export const absorbCall = (previous: CallRecord & { sourceIndex: number }, record: CallRecord & { sourceIndex: number }): CallRecord =>
-  ({ ...previous, sourceIndices: [...new Set([...(previous.sourceIndices ?? [previous.sourceIndex]), ...(record.sourceIndices ?? [record.sourceIndex])])].sort((a, b) => a - b) as never });
+export const absorbCall = (previous: TranscriptRecord, record: TranscriptRecord): TranscriptRecord =>
+  ({ ...previous, sourceIndices: [...new Set([...(previous.sourceIndices ?? [previous.sourceIndex!]), ...(record.sourceIndices ?? [record.sourceIndex!])])].sort((a, b) => a - b) } as TranscriptRecord);
 
 /** A source time for each locator the record names; only briefs of times-carrying blocks have them. */
 export const noticeTimes = (blocks: NormalizedBlock[]): Map<string, SourceTime> =>
@@ -372,7 +372,7 @@ export const buildBriefRecords = (blocks: NormalizedBlock[], cache?: ExcerptCach
       mandatory: plan?.mandatorySources, bounded: Boolean(plan), covered: key !== undefined && coveredCalls.has(key) };
     for (const record of blockRecords(b, view, cache)) {
       const previous = records.at(-1);
-      if (repeatsCall(previous, record)) records[records.length - 1] = absorbCall(previous, record as CallRecord & { sourceIndex: number });
+      if (repeatsCall(previous, record)) records[records.length - 1] = absorbCall(previous, record);
       else records.push(record);
     }
   }
