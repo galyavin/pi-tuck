@@ -49,8 +49,6 @@ export type OwnCutResult =
       firstKeptEntryId: string;
       compactAll: boolean;
       keptUserTurns: number;
-      totalUserTurns: number;
-      requestedKeepUserTurns: number;
       keepFallbackToCompactAll: boolean;
       budgetCut?: BudgetCutKind;
     }
@@ -114,8 +112,6 @@ export function buildOwnCut(branchEntries: any[], keepUserTurns = 1): OwnCutResu
     firstKeptEntryId: "",
     compactAll: true,
     keptUserTurns: 0,
-    totalUserTurns: userIndices.length,
-    requestedKeepUserTurns: normalizedKeepUserTurns,
     keepFallbackToCompactAll,
   });
 
@@ -140,8 +136,6 @@ export function buildOwnCut(branchEntries: any[], keepUserTurns = 1): OwnCutResu
     firstKeptEntryId: liveMessages[cutIdx].entry.id,
     compactAll: false,
     keptUserTurns: userIndices.length - targetUserIdx,
-    totalUserTurns: userIndices.length,
-    requestedKeepUserTurns: normalizedKeepUserTurns,
     keepFallbackToCompactAll: false,
   };
 }
@@ -199,8 +193,6 @@ export const applyTailBudget = (
     firstKeptEntryId: live[idx].entry.id,
     compactAll: false,
     keptUserTurns: live.slice(idx).filter((m) => m.message.role === "user").length,
-    totalUserTurns: live.filter((m) => m.message.role === "user").length,
-    requestedKeepUserTurns: cut.requestedKeepUserTurns,
     keepFallbackToCompactAll: false,
     budgetCut,
   });

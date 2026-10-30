@@ -66,7 +66,8 @@ export class IncidentRecorder {
  private notify: (status: string) => void = () => {};
  private safeNotify(status: string) { try { this.notify(status); } catch { /* UI failure is diagnostic only. */ } }
  readonly directory: string;
- constructor(private options: RecorderOptions = {}) {
+ private readonly options: RecorderOptions & Required<Pick<RecorderOptions, "maxContentCharacters" | "maxQueueCharacters" | "maxFileBytes" | "maxFiles" | "durationMs">>;
+ constructor(options: RecorderOptions = {}) {
   const bound = (value: number | undefined, fallback: number, max: number) => Number.isSafeInteger(value) && value! > 0 ? Math.min(value!,max) : fallback;
   this.options = { ...options, maxContentCharacters: bound(options.maxContentCharacters,200000,1500000), maxQueueCharacters: bound(options.maxQueueCharacters,500000,3000000), maxFileBytes: bound(options.maxFileBytes,2000000,10000000), maxFiles: bound(options.maxFiles,4,8), durationMs: bound(options.durationMs,120000,600000) };
   this.directory = resolve(options.directory ?? join(homedir(), '.local/state/pi-tuck-incidents')); }
@@ -78,22 +79,22 @@ export class IncidentRecorder {
   const rel = relative(resolve(project), this.directory);
   if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) { notify('Recorder directory must be outside project'); return; }
   this.projectDirectory = resolve(project); this.notify = notify; this.state = 'recording'; this.nextCut = nextCut; this.sawCut = false; this.requests = 0; this.response = false; this.total = 0; this.captureCalls = 0; this.inlineMs = 0; this.hookMs = 0; this.id = randomUUID(); this.path = join(this.directory, 'tuck-incident-' + this.id + '.jsonl');
-  this.timer = setTimeout(() => this.stop(this.sawCut ? 'duration-exhausted' : 'no-cut-expired'), this.options.durationMs ?? 120000); this.timer.unref();
+  this.timer = setTimeout(() => this.stop(this.sawCut ? 'duration-exhausted' : 'no-cut-expired'), this.options.durationMs); this.timer.unref();
   this.capture('start', 'operator-session-control', { id: this.id, build: DIAGNOSTIC_BUILD, nextCut, notice: 'Structural/pattern exclusions; partial replay possible. No semantic secret guarantee.' });
  }
  measureInline<T>(operation: () => T): T { if (!this.enabled) return operation(); const started = performance.now(); try { return operation(); } finally { this.hookMs += performance.now() - started; } }
  capture(kind: string, scope: string, value: unknown, inheritedPartial = false) {
   if (!this.enabled || this.waitingForCut && !['start','replay-input','proposal','observed-entry'].includes(kind)) return;
   const started = performance.now(); this.captureCalls++;
-  const contentLimit = this.options.maxContentCharacters ?? 200000;
-  const queueLimit = this.options.maxQueueCharacters ?? 500000;
-  const available = Math.min(contentLimit, queueLimit - this.queued - 1024, (this.options.maxFileBytes ?? 2000000) / 6 - this.total - 1024);
+  const contentLimit = this.options.maxContentCharacters;
+  const queueLimit = this.options.maxQueueCharacters;
+  const available = Math.min(contentLimit, queueLimit - this.queued - 1024, this.options.maxFileBytes / 6 - this.total - 1024);
   if (available < 32) { this.stop('bound-exhausted'); return; }
   let copy: ReturnType<typeof boundedCopy>;
   try { copy = boundedCopy(value, available); } catch { this.stop('capture-failed-gap'); return; }
   const record: IncidentRecord = { kind, scope, data: copy.data, partial: inheritedPartial || copy.partial };
   const line = JSON.stringify(record) + '\n';
-  if (line.length + this.queued > queueLimit || Buffer.byteLength(line) + this.total * 6 > (this.options.maxFileBytes ?? 2000000)) { this.stop('bound-exhausted'); return; }
+  if (line.length + this.queued > queueLimit || Buffer.byteLength(line) + this.total * 6 > this.options.maxFileBytes) { this.stop('bound-exhausted'); return; }
   this.queue.push(line); this.queued += line.length; this.total += copy.characters;
   if (copy.partial && copy.characters >= available - 16) this.stop('content-exhausted');
   this.inlineMs += performance.now() - started;
@@ -129,12 +130,12 @@ export class IncidentRecorder {
    const names: { name: string; time: number }[] = [];
    for (const name of await readdir(this.directory)) if (/^tuck-incident-[0-9a-f-]{36}\.jsonl$/.test(name)) { const stat = await lstat(join(this.directory,name)); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Retention ownership gap'); names.push({name,time:stat.mtimeMs}); }
    names.sort((a,b)=>a.time-b.time);
-   while (names.length >= (this.options.maxFiles ?? 4)) { const { name } = names.shift()!; if (join(this.directory, name) !== this.path) await unlink(join(this.directory, name)); }
+   while (names.length >= this.options.maxFiles) { const { name } = names.shift()!; if (join(this.directory, name) !== this.path) await unlink(join(this.directory, name)); }
    while (this.queue.length) {
     const line = this.queue.shift()!; this.queued -= line.length;
-    if (Buffer.byteLength(line) > (this.options.maxFileBytes ?? 2000000)) throw new Error('File bound');
+    if (Buffer.byteLength(line) > this.options.maxFileBytes) throw new Error('File bound');
     if (this.options.write) await this.options.write(this.path, line);
-    else { const file = await open(this.path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); try { const stat = await file.stat(); if (stat.size + Buffer.byteLength(line) > (this.options.maxFileBytes ?? 2000000)) throw new Error('File bound'); if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Recorder file ownership/permissions'); await file.write(line); } finally { await file.close(); } }
+    else { const file = await open(this.path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); try { const stat = await file.stat(); if (stat.size + Buffer.byteLength(line) > this.options.maxFileBytes) throw new Error('File bound'); if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Recorder file ownership/permissions'); await file.write(line); } finally { await file.close(); } }
    }
   } catch { this.queue = []; this.queued = 0; if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.state = 'storage-failed-gap'; this.safeNotify('Compaction recorder storage failed; incident has a gap'); }
   finally { this.pumping = undefined; if (this.queue.length) this.schedule(); }

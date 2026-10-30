@@ -1,8 +1,8 @@
 import { isLookupTool } from "./recall-operation";
 import type { Message } from "@earendil-works/pi-ai";
 import type { RenderedEntry } from "./render-entries";
-import { textOf, isContentBearing, extractToolCallText, extractToolCallArgsText, clip } from "./content";
-import { escapeRegex, prepareKeywordQuery, type KeywordMatcher } from "./keyword-query";
+import { textOf, extractToolCallArgsText, clip } from "./content";
+import { prepareKeywordQuery, type KeywordMatcher } from "./keyword-query";
 
 export interface SearchHit extends RenderedEntry {
   /** Context snippet around the first matched term (only when query provided) */
@@ -13,8 +13,7 @@ export interface SearchHit extends RenderedEntry {
 
 /**
  * Result of a search, with enough metadata for a caller to report truncation
- * honestly (see `searchEntriesDetailed`). `searchEntries` stays `SearchHit[]`
- * for existing call sites that only need the hits themselves.
+ * honestly (see `searchEntriesDetailed`).
  */
 export interface SearchResult {
   hits: SearchHit[];
@@ -24,77 +23,8 @@ export interface SearchResult {
   /** True when the hard cap discarded matches (`totalBeforeCap > hits.length`). */
   truncated: boolean;
 }
-/** A file touched in one entry — used by mode:touched aggregation. */
-export interface FileTouch {
-  index: number;
-  toolName: string;
-}
-
-/** Aggregated view of a file touched across multiple entries. */
-export interface TouchedFile {
-  path: string;
-  entries: FileTouch[];
-}
-
-/** Quantifier starting at `i`, if any. Only unbounded forms (+, *, {n,}) can
- *  drive catastrophic backtracking. */
-const quantifierAt = (p: string, i: number): { len: number; unbounded: boolean } => {
-  const c = p[i];
-  if (c === "+" || c === "*") return { len: 1, unbounded: true };
-  if (c === "{") {
-    const end = p.indexOf("}", i);
-    const body = end === -1 ? "" : p.slice(i + 1, end);
-    if (/^\d+(,\d*)?$/.test(body)) return { len: end - i + 1, unbounded: body.endsWith(",") };
-  }
-  return { len: 0, unbounded: false };
-};
-
 /**
- * Detect an unbounded quantifier applied to a group that already contains one,
- * e.g. `(a+)+` or `(\w*)*`. That shape makes the engine explore exponentially
- * many splits on a non-matching input. Alternation overlap like `(a|a)+` is not
- * covered here; the search budget in `searchEntries` is the backstop.
- */
-const hasNestedQuantifier = (pattern: string): boolean => {
-  const groups: boolean[] = []; // per open group: contains an unbounded quantifier
-  let inClass = false;
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === "\\") { i++; continue; }
-    if (inClass) { if (c === "]") inClass = false; continue; }
-    if (c === "[") { inClass = true; continue; }
-    if (c === "(") { groups.push(false); continue; }
-    if (c === ")") {
-      const inner = groups.pop() ?? false;
-      const q = quantifierAt(pattern, i + 1);
-      if (inner && q.unbounded) return true;
-      if (groups.length) groups[groups.length - 1] ||= inner || q.unbounded;
-      i += q.len;
-      continue;
-    }
-    const q = quantifierAt(pattern, i);
-    if (q.unbounded && groups.length) {
-      groups[groups.length - 1] = true;
-      i += q.len - 1;
-    }
-  }
-  return false;
-};
-
-/** Try to compile as regex; fall back to escaped literal. Patterns with nested
- *  unbounded quantifiers are treated as literals rather than compiled. */
-const safeRegex = (pattern: string): RegExp => {
-  if (hasNestedQuantifier(pattern)) return new RegExp(escapeRegex(pattern), "i");
-  try {
-    return new RegExp(pattern, "i");
-  } catch {
-    return new RegExp(escapeRegex(pattern), "i");
-  }
-};
-
-/**
- * Wall-clock budget for one search. A normal query over 400 entries takes ~10ms,
- * so this only trips on pathological patterns that survive `hasNestedQuantifier`.
+ * Wall-clock budget for one search. A normal query over 400 entries takes ~10ms.
  * Aborting loudly beats returning a silently truncated match count.
  *
  * This is a per-entry checkpoint, not a hard per-call ceiling: JavaScript cannot
@@ -116,10 +46,6 @@ const startBudget = (): (() => void) => {
     }
   };
 };
-
-/** Detect if the query looks like a single regex pattern (contains regex metacharacters). */
-const looksLikeRegex = (query: string): boolean =>
-  /[|*+?{}()[\]\\^$.]/.test(query);
 
 /** Count matching terms. Query sequence and duplicates intentionally contribute. */
 const countMatches = (hay: string, terms: readonly KeywordMatcher[]): number =>
@@ -259,7 +185,7 @@ const toolCallArgsText = (content: Message["content"]): string => {
  * echoes back `N matches for "<query>"` from the *previous* recall call, so
  * indexing it would make a repeated query self-match and grow with every
  * search. This only affects search indexing — browse/no-query returns
- * entries before fullText runs (see `searchEntries`), and #N expand reads
+ * entries before fullText runs (see `searchEntriesDetailed`), and #N expand reads
  * the message/entry directly, not through this function, so the toolResult
  * is still fully visible there.
  */
@@ -274,59 +200,6 @@ const fullText = (msg: Message): string => {
   const argsText = toolCallArgsText(msg.content);
   return argsText ? `${text}\n${argsText}` : text;
 };
-
-/**
- * Compute file indicators from a message, counting non-empty content lines
- * per content-bearing file call. Shape-based — no tool-name allowlist.
- *
- * Ported from pi-blackhole (https://github.com/k0valik/pi-blackhole, MIT) by
- * k0valik — a pi-vcc derivative.
- */
-export function getFileIndicators(msg: Message): { toolName: string; path: string; lineCount: number }[] {
-  if (!msg?.content || typeof msg.content === "string") return [];
-  const indicators: { toolName: string; path: string; lineCount: number }[] = [];
-  for (const part of msg.content) {
-    if (!part || typeof part !== "object" || part.type !== "toolCall") continue;
-    const args = part.arguments as Record<string, unknown>;
-    if (!isContentBearing(args)) continue;
-    const path = ["path", "filePath", "file_path", "file"]
-      .map((k) => args[k])
-      .find((v): v is string => typeof v === "string")!;
-    const totalText = extractToolCallText(args);
-    const nonEmpty = totalText.split("\n").filter((l) => l.trim().length > 0);
-    indicators.push({
-      toolName: part.name || "",
-      path,
-      lineCount: nonEmpty.length,
-    });
-  }
-  return indicators;
-}
-
-/**
- * Aggregate file operations across all entries for mode:touched.
- *
- * Ported from pi-blackhole (https://github.com/k0valik/pi-blackhole, MIT) by
- * k0valik — a pi-vcc derivative.
- */
-export function getTouchedFiles(
-  messages: Message[],
-  rendered: RenderedEntry[],
-): TouchedFile[] {
-  const map = new Map<string, TouchedFile>();
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    const indicators = getFileIndicators(msg);
-    for (const fm of indicators) {
-      const index = rendered[i]?.index ?? i;
-      if (!map.has(fm.path)) {
-        map.set(fm.path, { path: fm.path, entries: [] });
-      }
-      (map.get(fm.path) as TouchedFile).entries.push({ index, toolName: fm.toolName });
-    }
-  }
-  return Array.from(map.values());
-}
 
 /**
  * Relative BM25 noise floor for MULTI-TERM natural-language queries only:
@@ -357,8 +230,7 @@ export function getTouchedFiles(
 const BM25_RELATIVE_FLOOR = 0.2;
 
 /**
- * Hard cap on total SEARCH results, applied to both the natural-language
- * (post-floor) and regex result paths so pagination stays bounded regardless
+ * Hard cap on total SEARCH results, applied after the relative floor so pagination stays bounded regardless
  * of how noisy or broad a query is.
  *
  * The inherited cap is retained unchanged. This is a resource bound, not
@@ -367,11 +239,8 @@ const BM25_RELATIVE_FLOOR = 0.2;
 const SEARCH_RESULT_CAP = 50;
 
 /**
- * Tuning overrides for `searchEntriesDetailed`. Exists only so the offline
- * benchmark harness and targeted tests can
- * exercise the real scoring/capping pipeline against candidate constants —
- * production call sites (`searchEntries`, the recall tool) never pass this
- * and always get `BM25_RELATIVE_FLOOR`/`SEARCH_RESULT_CAP`.
+ * Tuning overrides for `searchEntriesDetailed`; without them a search uses `BM25_RELATIVE_FLOOR` and
+ * `SEARCH_RESULT_CAP`. `tuckRecall` passes a floor of 0 and a cap of every row, because it pages its own responses.
  */
 export interface SearchTuning {
   relativeFloor?: number;
@@ -395,14 +264,8 @@ const applyRelativeFloor = (
  * Bound `hits` to `cap` entries, reporting the pre-cap count so callers can
  * signal truncation honestly instead of understating "total matches".
  *
- * Order preserved, never re-sorted: for the BM25 path that's already
- * highest-score-first, so `slice(0, cap)` keeps the top `cap` hits. For the
- * regex path there is no score — hits are collected in entry/chronological
- * iteration order, so `slice(0, cap)` keeps the OLDEST `cap` matches, not
- * the most recent or most relevant ones. That is an explicit, documented
- * preservation choice for this change, not a new selection/ranking policy —
- * changing which matches a truncated regex search keeps (e.g. newest-first)
- * is a separate decision, out of scope here.
+ * Order preserved, never re-sorted: hits are already highest-score-first, so
+ * `slice(0, cap)` keeps the top `cap` hits.
  */
 const capHits = (hits: SearchHit[], cap: number): SearchResult => {
   const totalBeforeCap = hits.length;
@@ -410,11 +273,7 @@ const capHits = (hits: SearchHit[], cap: number): SearchResult => {
   return { hits: capped, totalBeforeCap, truncated: capped.length < totalBeforeCap };
 };
 
-/**
- * Full search with truncation metadata. `searchEntries` below is a thin
- * `.hits`-only wrapper kept for existing call sites; use this directly when
- * a caller (the recall tool) needs to report a capped result set honestly.
- */
+/** BM25 keyword search with truncation metadata. */
 export const searchEntriesDetailed = (
   entries: RenderedEntry[],
   messages: Message[],
@@ -428,42 +287,8 @@ export const searchEntriesDetailed = (
   const rawQuery = query.trim();
   const checkBudget = startBudget();
 
-  // If the query looks like a single regex pattern (contains metacharacters),
-  // treat the whole thing as one pattern — don't split into terms.
-  //
-  // The detection is deliberately loose, so ordinary prose trips it: a trailing
-  // "?" or "." turns the whole sentence into one pattern that must match
-  // verbatim. On real sessions that path returned nothing 47.5% of the time
-  // versus 1.1% for term search. Mode detection must never silently lose
-  // results, so an empty regex result falls through to term search below.
-  //
-  // No relative-floor filtering here: regex matches are boolean (matched or
-  // not), there's no score to be relative to. Only the hard cap applies.
-  if (looksLikeRegex(rawQuery)) {
-    const regex = safeRegex(rawQuery);
-    const hits: SearchHit[] = [];
-    for (let i = 0; i < entries.length; i++) {
-      checkBudget();
-      const e = entries[i];
-      const msg = messages[i];
-      const text = msg ? fullText(msg) : e.summary;
-      const filePart = e.files?.join(" ") ?? "";
-      const hay = `${e.role} ${text} ${filePart}`;
-      if (regex.test(hay)) {
-        const snip = lineSnippet(text, regex);
-        hits.push({ ...e, snippet: snip, matchCount: 1 });
-      }
-    }
-    if (hits.length > 0 || hasNestedQuantifier(rawQuery)) return capHits(hits, cap);
-  }
-
   // Natural language / multi-word query: BM25 scoring
-  // A failed regex-mode attempt falls back to natural keywords, not regex
-  // punctuation accidentally embedded in those keywords.
-  const keywordQuery = looksLikeRegex(rawQuery)
-    ? rawQuery.replace(/[|*+?{}()[\]\\^$.]/g, " ")
-    : rawQuery;
-  const prepared = prepareKeywordQuery(keywordQuery);
+  const prepared = prepareKeywordQuery(rawQuery);
   const terms = prepared.terms;
 
   // Build all docs for BM25 context
@@ -508,9 +333,3 @@ export const searchEntriesDetailed = (
   const floored = effectiveTermCount >= 2 ? applyRelativeFloor(scored, relativeFloor) : scored;
   return capHits(floored.map((s) => s.hit), cap);
 };
-
-export const searchEntries = (
-  entries: RenderedEntry[],
-  messages: Message[],
-  query?: string,
-): SearchHit[] => searchEntriesDetailed(entries, messages, query).hits;
