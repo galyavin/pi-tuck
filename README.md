@@ -1,6 +1,6 @@
 # pi-tuck
 
-**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** A cut takes about a tenth of a second. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
+**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** In our live run, a cut took a median 0.09 s. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
 
 ```sh
 pi install npm:pi-tuck
@@ -8,22 +8,22 @@ pi install npm:pi-tuck
 
 ## pi-tuck against Pi's built-in compaction
 
-Pi's built-in compaction asks a model to write a summary. pi-tuck builds the summary from the session itself.
+Pi's built-in compaction asks a model to write a summary. pi-tuck builds the summary from the session itself. The two time and context rows compare pi-tuck 1.0.1 with Pi 1.4.0's built-in compaction, where a local model writes the summary.
 
-| | Pi's built-in | pi-tuck |
+| | Pi's built-in (local model writes the summary) | pi-tuck |
 |---|---|---|
 | Model call per cut | One, to a model you pay for or wait on | None |
 | Time per cut | **269 s** (median) | **0.09 s** (median) |
 | Context carried after a cut | 29,200 tokens | 27,800 tokens (about the same) |
-| Same session, same summary | No | Yes |
-| Can the agent get dropped detail back | No recall tool. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
+| Same session, same summary | Not guaranteed, since a model writes it | Yes |
+| Can the agent get dropped detail back | No recall tool in Pi 1.4.0. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
 | Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally, and no text leaves your machine. Elsewhere it searches by keyword |
-| Can the summary invent history | Yes, a model wrote it | No, it holds only recorded text |
+| Can the summary invent history | It can, since a model writes it | No, it holds only recorded text |
 | What the summary leaves out | Whatever the model dropped | Tool output only; the agent reads it back exactly |
-| Billed input from cutting early (simulated) | | 10–18% less than cutting at the full room |
-| Answer quality against LLM compactors | | **Being measured. Not claimed yet.** |
+| Billed input at the default 60% cut point (simulated) | Not measured | 10–18% less than pi-tuck cutting at the full room. This is not a comparison with the built-in |
+| Answer quality against Pi's own summarize prompts, on a local model and on a frontier model | | **Being measured. Not claimed yet.** |
 
-The time and context rows are live runs on a local model with a 131k window: 27 cuts per arm over 5 chains, interim, pi-tuck 1.0.1. Every number comes from a file in this repository. Conditions, sample sizes and links are in [Benchmarks](#benchmarks). The last row is the one that matters most, and it is not finished: see [What is proven, and what is not](#what-is-proven-and-what-is-not).
+The time and context rows are live runs with a 131k window: 27 cuts per arm over 5 chains, interim. Every number comes from a file in this repository. Conditions, sample sizes and links are in [Benchmarks](#benchmarks). The last row is the one that matters most, and it is not finished: see [What is proven, and what is not](#what-is-proven-and-what-is-not).
 
 ## Ask your history
 
@@ -89,14 +89,14 @@ Both tools cost about 1,050 tokens of tool description per request.
 
 ## What is proven, and what is not
 
-**Measured so far:** a cut takes a fraction of a second, where a model-written summary takes minutes on a local model. A cut calls no model, so it costs no tokens. pi-tuck carries about as many tokens after a cut as the built-in does, not fewer. Cutting early saves billed input in simulation, and answers held in replay.
+**Measured so far:** in the live run, a pi-tuck cut took a median 0.09 s, where Pi's built-in compaction with a local model writing the summary took a median 269 s. A cut calls no model, so it costs no tokens. After a cut, pi-tuck carried about as many tokens as the built-in did, not fewer. In simulation, cutting at 60% of the room instead of 100% saved billed input for pi-tuck itself, and answers held in replay.
 
-**Not proven yet: that the summary is as good as a model-written one.** The claim is that pi-tuck compacts as well as the best LLM compactors, in far less time and at no cost. That claim has a pre-registered test. The test is running now. It was written down before any result came in, and a failed test will be reported as failed. When the result is final, it goes in [`benchmark/`](benchmark) and in this README. Until then, this README does not claim that pi-tuck is as good as, or better than, an LLM compactor.
+**Not proven yet: that the summary is as good as a model-written one.** The claim is that pi-tuck compacts as well as an LLM compactor, in far less time and at no cost. The comparators are Pi's own summarize prompts, run on a local model (`mac-studio/main`) and on a frontier model (`openai/gpt-6-astra`); see [`benchmark/PINS.md`](benchmark/PINS.md). That claim has a pre-registered test. The test is running now. It was written down before any result came in, and a failed test will be reported as failed. When the result is final, it goes in [`benchmark/`](benchmark) and in this README. Until then, this README does not claim that pi-tuck is as good as, or better than, any LLM compactor.
 
 The test has three parts:
 
-1. **A live run** at a 128k window on a local model. Ten chains of 30 SWE-bench Verified tasks per arm, with Pi's built-in compaction in one arm and pi-tuck in the other. Official grading.
-2. **A paired replay with probe questions.** The same cuts, made by pi-tuck and by LLM compactors, then questions about facts that fell before the cut. Pre-registered rule: the claim holds only if pi-tuck is no more than 3 points worse than the better LLM compactor, with a 95% bound.
+1. **A live run** at a 128k window on a local model, with pi-tuck 1.0.1. Ten chains of 30 SWE-bench Verified tasks per arm, with Pi's built-in compaction in one arm and pi-tuck in the other. Official grading.
+2. **A paired replay with probe questions.** The same cuts, made by pi-tuck and by Pi's summarize prompts on the two models above, then questions about facts that fell before the cut. Pre-registered rule: the claim holds only if pi-tuck is no more than 3 points worse than the better of those two compactors, with a 95% bound.
 3. **A 32k suite**, where tasks are bigger than the room, so cuts must summarise work in progress.
 
 The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.md`](benchmark/PREREG-32K.md), and every change after the freeze in [`benchmark/DEVIATIONS.md`](benchmark/DEVIATIONS.md).
