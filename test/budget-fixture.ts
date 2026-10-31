@@ -101,6 +101,12 @@ export interface Options {
  onRequest?: (request: number, context: { setHost: (tokens: number) => void; pi: ExtensionAPI }) => void;
  compaction?: Partial<CompactionOptions>;
  compactionEnabled?: boolean;
+ /** The model's window and maximum output when they are not the 272,000 and 128,000 the pins assume (a small-room test). The fixture then does not check the room. */
+ limits?: { contextWindow: number; maxTokens: number };
+ /** Tokens of the system prompt (default 12,000, about the size of a real host's). */
+ system?: number;
+ /** Every tool a live session carries is active: Pi's read, bash, edit and write, and pi-tuck's own two, beside the fixture's `effect`. */
+ liveTools?: boolean;
 }
 
 /** Pi's system prompt carries the session directory, so budgets pinned here assume a macOS-length $TMPDIR (48 characters). A shorter one,
@@ -119,9 +125,9 @@ export async function harness(options: Options) {
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
  const cleanup = async () => { if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
-  const runtime = await scriptedModelRuntime(), model = runtime.getModel('openai-codex', 'gpt-6.1-sol');
+  const runtime = await scriptedModelRuntime(options.limits), model = runtime.getModel('openai-codex', 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
-  expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
+  if (!options.limits) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
   const manager = SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
   const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
   // Repeated text lets the compactor summarize almost everything away; unique text (oneTurn) makes the cut keep as much as the plan allows.
@@ -150,7 +156,7 @@ export async function harness(options: Options) {
   let bigResult = 1, bigText = 'x', host = options.host;
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
   const note = 'Queued operator note. ';
-  const systemPrompt = 'Host input contact. ' + text(12000) + 'p'.repeat(options.pad ?? 0);
+  const systemPrompt = 'Host input contact. ' + text(options.system ?? 12000) + 'p'.repeat(options.pad ?? 0);
   // The host's view can grow during a run (attempt effects are recorded in it).
   const exact = (n: number) => { const t = text(n); return t.length >= n * 4 ? t.slice(0, n * 4) : t + 'z'.repeat(n * 4 - t.length); };
   const hostInput = () => ({ role: 'custom' as const, customType: 'host.view', content: exact(host), display: false, timestamp: 0 });
@@ -192,7 +198,7 @@ export async function harness(options: Options) {
    pi.on('context_with_system', (event, ctx) => { guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); });
   }] });
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-  ({ session } = await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: manager, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
+  ({ session } = await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: manager, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
    name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
    execute: async () => {
     state.effects++;
