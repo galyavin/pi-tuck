@@ -1,6 +1,6 @@
 # pi-tuck
 
-**Compaction for [Pi](https://pi.dev) with no model call.** A cut takes about a tenth of a second. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back any earlier message or tool result, word for word.
+**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** A cut takes about a tenth of a second. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
 
 ```sh
 pi install npm:pi-tuck
@@ -16,12 +16,36 @@ Pi's built-in compaction asks a model to write a summary. pi-tuck builds the sum
 | Time per cut | **269 s** (median) | **0.09 s** (median) |
 | Context carried after a cut | 29,200 tokens | 27,800 tokens (about the same) |
 | Same session, same summary | No | Yes |
+| Can the agent get dropped detail back | No recall tool. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
+| Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally, and no text leaves your machine. Elsewhere it searches by keyword |
 | Can the summary invent history | Yes, a model wrote it | No, it holds only recorded text |
 | What the summary leaves out | Whatever the model dropped | Tool output only; the agent reads it back exactly |
 | Billed input from cutting early (simulated) | | 10–18% less than cutting at the full room |
 | Answer quality against LLM compactors | | **Being measured. Not claimed yet.** |
 
 The time and context rows are live runs on a local model with a 131k window: 27 cuts per arm over 5 chains, interim, pi-tuck 1.0.1. Every number comes from a file in this repository. Conditions, sample sizes and links are in [Benchmarks](#benchmarks). The last row is the one that matters most, and it is not finished: see [What is proven, and what is not](#what-is-proven-and-what-is-not).
+
+## Ask your history
+
+A summary cannot hold everything. So pi-tuck lets the agent look things up instead of guess. Say you fixed a login bug two hours ago, and the summary no longer holds the details. You ask:
+
+> "What was the reason we dropped the retry on the token refresh?"
+
+The original message says "removing the backoff loop from the auth renewal". The words differ, so a keyword search finds nothing. The agent calls `tuck_search`, which also searches by meaning:
+
+```json
+{ "query": "why did we drop the retry on token refresh" }
+```
+
+It gets back the original passage, with a pointer such as `#212`. It reads the whole message, exactly as it was written:
+
+```json
+{ "index": 212 }
+```
+
+That is `tuck_recall`. The agent answers from the original text, not from a model's memory of it.
+
+*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. It runs only on macOS with Apple silicon. Elsewhere, `tuck_search` uses keywords, and the example above would not find its match.
 
 ## Install
 
