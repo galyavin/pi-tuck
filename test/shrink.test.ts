@@ -352,3 +352,26 @@ test('when prompts alone would fill the allowance, the newest assistant text wit
 		expect(Math.min(...assistant), `limit ${limit}`).toBeGreaterThan(Math.max(...omitted));
 	}
 });
+
+test('the recent assistant third holds text even when every assistant message is one long sentence that a clip empties', () => {
+	const blocks: NormalizedBlock[] = [];
+	const add = (block: NormalizedBlock) => blocks.push({ ...block, sourceIndex: blocks.length });
+	for (let t = 0; t < 50; t++) {
+		const prompt = prose(t, 12), reply = sentence(800 + t, 80 + (t * 37) % 121);
+		add({ kind: 'user', text: prompt, originalText: prompt });
+		add({ kind: 'assistant', text: reply, originalText: reply });
+	}
+	const input: DialogueInput = { blocks, sourceIndices: blocks.map(b => b.sourceIndex) };
+	const records = recordsOf(wholeDialogue(input));
+	const cost = (r: TranscriptRecord) => JSON.stringify(r).length + 1;
+	const usersOnly = records.filter(r => r.kind === 'excerpt' && r.role === 'user').reduce((n, r) => n + cost(r), 0);
+	const replies = records.filter(r => r.kind === 'excerpt' && r.role === 'assistant');
+	const total = replies.reduce((n, r) => n + (r.text ?? "").length, 0), longest = Math.max(...replies.map(cost));
+	// Prompts alone exceed each allowance, so users give way and the newest assistant third is reserved first.
+	for (const limit of [Math.floor(usersOnly * 0.95), Math.floor(usersOnly * 0.8), Math.floor(usersOnly * 0.5)]) {
+		const shrunk = shrinkDialogue(input, limit);
+		const assistant = [...kept(recordsOf(shrunk.text), 'assistant').values()].reduce((n, c) => n + c, 0);
+		expect(assistant, `limit ${limit} ${shrunk.step}`).toBeGreaterThanOrEqual(Math.min(limit / 3 - 2 * longest, total));
+		expect(assistant, `limit ${limit} ${shrunk.step}`).toBeGreaterThan(0);
+	}
+});

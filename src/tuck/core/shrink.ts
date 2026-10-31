@@ -168,7 +168,7 @@ export const wholeDialogue = (input: DialogueInput): string => {
 /**
  * The same dialogue shrunk until its summary text is at most `limit` characters, oldest first. The first configuration that fits wins:
  *   A. the newest k assistant units whole, the older ones clipped to tier 1, 2, 3 (the largest k that fits, for each tier in turn);
- *   B. every assistant unit at tier 3, the oldest d dropped, but never the newest that fit a third of the limit;
+ *   B. the newest assistant units that fit a third of the limit whole, the older ones at tier 3 with the oldest d dropped;
  *   C. the newest assistant units that fit a third of the limit at tier 3, the rest dropped; then the oldest u user units clipped to tier 1, 2, 3;
  *   D. every user unit at tier 3, the oldest dropped;
  *   E. the oldest notices dropped, then the oldest of the remaining assistant units.
@@ -193,20 +193,26 @@ export const shrinkDialogue = (input: DialogueInput, limit: number): Shrunk => {
   if (hit) return hit;
   for (const t of tiers) for (let k = assistant.n; k >= 0; k--)
     if (hit = found(`A${t}`, { user: WHOLE, assistant: { drop: 0, tier: t, end: assistant.n - k }, notice: clipped })) return hit;
-  // The newest assistant units that fit a third of the limit at tier 3 are kept until users have given way: B drops older ones only.
+  // The newest assistant units that fit a third of the limit whole are kept until users have given way: B clips and drops only older ones.
+  // A clip can keep no text at all, so the third is sized on whole units; when the newest alone is over the third, it keeps its largest clip
+  // that fits and still has text.
   let kept = 0;
-  while (kept < assistant.n && assistant.sum(3)[assistant.n]! - assistant.sum(3)[kept]! > limit / 3) kept++;
-  for (let d = 0; d <= kept; d++)
-    if (hit = found("B", { user: WHOLE, assistant: { drop: d, tier: 3, end: assistant.n }, notice: clipped })) return hit;
+  while (kept < assistant.n && assistant.sum(0)[assistant.n]! - assistant.sum(0)[kept]! > limit / 3) kept++;
+  let recent: Setting = { drop: kept, tier: 3, end: kept };
+  if (kept === assistant.n && assistant.n > 0) for (const t of tiers) {
+    const cost = assistant.level(t)[assistant.n - 1]!.cost;
+    if (cost > 0 && cost <= limit / 3) { recent = { drop: assistant.n - 1, tier: t, end: assistant.n }; break; }
+  }
+  for (let d = 0; d <= recent.drop; d++)
+    if (hit = found("B", { user: WHOLE, assistant: { ...recent, drop: d, end: Math.max(recent.end, recent.drop) }, notice: clipped })) return hit;
   // From here users give way, and the assistant keeps only that recent third.
-  const recent: Setting = { drop: kept, tier: 3, end: assistant.n };
   for (const t of tiers) for (let u = 0; u <= user.n; u++)
     if (hit = found(`C${t}`, { user: { drop: 0, tier: t, end: u }, assistant: recent, notice: clipped })) return hit;
   for (let d = 0; d <= user.n; d++)
     if (hit = found("D", { user: { drop: d, tier: 3, end: user.n }, assistant: recent, notice: clipped })) return hit;
   for (let d = 0; d <= notice.n; d++)
     if (hit = found("E1", { user: gone(user), assistant: recent, notice: { drop: d, tier: 1, end: notice.n } })) return hit;
-  for (let d = kept; d <= assistant.n; d++)
-    if (hit = found("E2", { user: gone(user), assistant: { drop: d, tier: 3, end: assistant.n }, notice: gone(notice) })) return hit;
+  for (let d = recent.drop; d <= assistant.n; d++)
+    if (hit = found("E2", { user: gone(user), assistant: { drop: d, tier: recent.tier, end: Math.max(recent.end, d) }, notice: gone(notice) })) return hit;
   return { text: "", step: "none", size: 0 };
 };
