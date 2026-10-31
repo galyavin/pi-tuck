@@ -5,6 +5,7 @@ import { exportSource } from "./source-export.js";
 import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
+import { applyClips, clipFor, type Clip } from "./clip.js";
 import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
 import { isContextOverflow } from "@earendil-works/pi-ai";
@@ -268,10 +269,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     };
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).
-    const measureFor = (ctx: ExtensionContext) => (messages: Messages) => projectedConversationTokens(messages, ctx, options.recallPolicy);
+    const measureFor = (ctx: ExtensionContext) => (messages: Messages) => projectedConversationTokens(applyClips(messages, clips), ctx, options.recallPolicy);
     // The planner counts with the same function, except that it does not fail on a summary in another format: a cut can replace one
     // (an operator's /compact repairs a session whose saved summary is foreign). Identical to the strict one for this compactor's summaries.
-    const plannerMeasureFor = (ctx: ExtensionContext) => (messages: Messages) => measurableConversationTokens(messages, ctx, options.recallPolicy);
+    const plannerMeasureFor = (ctx: ExtensionContext) => (messages: Messages) => measurableConversationTokens(applyClips(messages, clips), ctx, options.recallPolicy);
     const hostTokens = (ctx: ExtensionContext) => options.hostMessages ? conversationTokens(options.hostMessages(ctx)) : 0;
     const toolShapes = (names: Iterable<string>): ToolShape[] => {
         const selected = new Set(names);
@@ -285,6 +286,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     let pendingCut: { mandatory: number; before: number; host: number; opportunistic: boolean; proposed: boolean } | undefined;
     let failure: Error | undefined;
     let pendingBoundaryCommit = false;
+    // Fresh tool results the room cannot hold, by call id: each request carries the clip in their place; the session keeps them whole.
+    const clips = new Map<string, Clip>();
 	const fail = (error: unknown, ctx: ExtensionContext) => {
 		recorder.stop("native-attempt-failed");
         const notify = !failure && error instanceof CapacityError;
@@ -421,7 +424,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		}
 	});
 	pi.on("session_before_tree", (event) => event.preparation.userWantsSummary ? { cancel: true } : undefined);
-    pi.on("session_start", () => { recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; phase = "idle"; });
+    pi.on("session_start", () => { clips.clear(); recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; phase = "idle"; });
     // The cut before a run. Pi 1.4 counts a run as started before before_agent_start, and ctx.compact() first aborts and waits for an
     // idle session, so a cut asked for there would wait on its own run. A prompt's cut is therefore made on `input`, while the session
     // is idle. before_agent_start decides only for a run no input started (one a custom message starts) and cuts only if the session is
@@ -500,9 +503,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const host = hostTokens(ctx);
             const queued = event.context.pendingMessages.length ? conversationTokens(event.context.pendingMessages as Messages) : 0;
             const mandatory = system + host + queued;
-            const before = measure(saved);
             const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
-            const decision = decideCut({
+            const decide = () => {
+                const before = measure(saved);
+                return decideCut({
                 total: before + mandatory, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx),
                 unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
                 plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
@@ -517,7 +521,23 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     assertNativeToolRounds(messages);
                     return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve };
                 },
-            });
+                });
+            };
+            let decision = decide();
+            // Only a request that would be refused is clipped. A fresh result is kept whole by every cut (it has not reached the model yet), so
+            // one larger than the room refuses the run. In its place the request carries its head and tail, at most half of what the room
+            // leaves the conversation, and a tuck_recall locator to the rest. When even that is refused the refusal stands.
+            if (decision.kind === "fault") {
+                const branch = ctx.sessionManager.getBranch();
+                const entryIdOf = (toolCallId: string) => branch.findLast(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === toolCallId)?.id;
+                const clip = clipFor(event.toolResults, entryIdOf, Math.floor((room - mandatory) / 2));
+                if (clip) {
+                    clips.set(clip.toolCallId, clip);
+                    const clippedDecision = decide();
+                    if (clippedDecision.kind === "fault") clips.delete(clip.toolCallId); else decision = clippedDecision;
+                }
+            }
+            const before = measure(saved);
             if (decision.kind === "fault") throw new (decision.capacity ? CapacityError : Refusal)(decision.message);
             if (decision.kind !== "cut") return;
             const compaction = captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, "tool-loop", before, true, false, previousSummary,
@@ -531,7 +551,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         try {
             if (!active()) return;
             access();
-            return { messages: projectedMessages(event.messages, ctx, options.recallPolicy) };
+            return { messages: applyClips(projectedMessages(event.messages, ctx, options.recallPolicy), clips) };
         } catch (error) { try { fail(error, ctx); } finally { return { messages: [] }; } }
     });
 	pi.on("session_compact_failed", (event, ctx) => {
