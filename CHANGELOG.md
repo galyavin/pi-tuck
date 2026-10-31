@@ -59,9 +59,10 @@ First release on npm. 1.0.0 was tagged but never published; its notes below desc
 
 ### Fixed
 
-- A long session whose dialogue no longer fit the summary stalled for tens of seconds at every cut (88 s at 3,900 entries), because
-  the ranked view re-rendered the whole candidate summary for each block it considered. It now keeps the summary's size up to date
-  as blocks join, so a cut takes well under a second and grows linearly with the session. Summaries are byte for byte the same.
+- A long session whose dialogue no longer fit the summary stalled for tens of seconds at every cut, because the ranked view re-rendered
+  the whole candidate summary for each block it considered. It now keeps the summary's size up to date as blocks join, so a cut takes
+  well under a second and grows linearly with the session: 72 s before and 174 ms after at 3,888 entries, measured on one machine with the
+  same synthetic session. Summaries are byte for byte the same.
 
 ## [1.0.0] - 2026-10-30
 
