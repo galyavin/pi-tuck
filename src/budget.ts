@@ -120,20 +120,28 @@ export type Verdict<D extends object = {}> = Exclude<Decision<D>, { kind: "defer
  * taken only when the room can plan a cut too and with the same mode (a lossy view the room could not even plan is a quality change with
  * no fault to prevent). At or above the room, where a cut is due, a band plan of another mode gives way to the room plan (today's
  * view), and a band plan stands when the room has none (a cut instead of a fault).
+ * A lean band, one the cut point binds (`band < bandOf(room)`), is planned first and the room plan landing below it is not taken for that:
+ * the room plan keeps a native tail of up to half the room, so it can land just under a band that far below the room, and the next round
+ * would cut again, freeing little. The room is planned only where the rules above use it: to compare the mode, or when the band has no plan
+ * and a cut is due. With the default cut point the band is never lean and the order and the decisions are those above.
  * The margin adds no new decision fault. Exceptions thrown by `plan` are not caught here: they are faults, and they now surface at
  * boundaries inside the band too, where no planner ran before the margin.
  */
 export function chooseCut<D extends object = {}>(input: CutInput<D> & { opportunistic: boolean }): Verdict<D> {
 	const { before, mandatory, room, band, fits, plan, unreduced } = input;
-	const exact = plan("room");
-	if (exact.draft && exact.after < before && fits(exact.after + mandatory, band)) return { kind: "cut", target: "room", plan: exact };
+	const lands = (p: Plan<D>): p is Extract<Plan<D>, { draft: true }> => p.draft && p.after < before && fits(p.after + mandatory, band);
+	let roomPlan: Plan<D> | undefined;
+	const exact = () => roomPlan ??= plan("room");
+	if (band >= bandOf(room)) { const e = exact(); if (lands(e)) return { kind: "cut", target: "room", plan: e }; }
 	const preferred = plan("band");
 	if (input.opportunistic) {
-		if (!(preferred.draft && preferred.after < before && fits(preferred.after + mandatory, band))) return { kind: "none" };
-		return exact.draft && exact.mode === preferred.mode ? { kind: "cut", target: "band", plan: preferred } : { kind: "none" };
+		if (!lands(preferred)) return { kind: "none" };
+		const e = exact();
+		return e.draft && e.mode === preferred.mode ? { kind: "cut", target: "band", plan: preferred } : { kind: "none" };
 	}
+	const e = exact();
 	let chosen: Plan<D> = preferred, target: Target = "band";
-	if (!preferred.draft || (exact.draft && exact.mode !== preferred.mode)) { chosen = exact; target = "room"; }
+	if (!preferred.draft || (e.draft && e.mode !== preferred.mode)) { chosen = e; target = "room"; }
 	if (!chosen.draft) return { kind: "fault", capacity: chosen.capacityRejected, message: chosen.reason };
 	if (chosen.after >= before || !fits(chosen.after + mandatory, room))
 		return { kind: "fault", capacity: !fits(chosen.after + mandatory, room), message: unreduced };

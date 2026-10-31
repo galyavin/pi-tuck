@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, expectParity, harness, nonSystem, receiptOf, scenario } from './budget-fixture';
-import { TRIGGER_MARGIN_FRACTION, bandOf, validCutAt } from '../src/budget';
+import { TRIGGER_MARGIN_FRACTION, bandOf, decideCut, validCutAt, type Plan } from '../src/budget';
 import { installCompaction } from '../src/compaction';
 
 // The cut point `cutAt` (F): a cut is triggered at, and preferably planned to, the band min(room - margin, floor(F * room)). The exact room
@@ -77,6 +77,63 @@ test('installCompaction takes a valid cutAt and refuses any other before it regi
 		await expect(installCompaction(pi, { cutAt }), String(cutAt)).rejects.toThrow('cutAt must be a number above 0 and at most 1');
 		expect(registered, String(cutAt)).toEqual([]);
 	}
+});
+
+// A lean band is one the cut point binds (band < bandOf(room)). There the band is planned first and the room plan is not taken for landing
+// below it; it is planned only to compare the view, and taken only where a cut is due and the band has no plan or one of another view.
+// Room 1,000, lean band 600, mandatory input 100: a plan lands below the band when its `after` is at most 499.
+type Target = 'band' | 'room';
+type Tagged = Plan<{ tag: string }>;
+const plan = (plans: Partial<Record<Target, Tagged>>, calls: Target[]) => (target: Target): Tagged => { calls.push(target); const p = plans[target]; if (!p) throw new Error('unexpected plan ' + target); return p; };
+const draft = (after: number, tag: string, mode = 'bounded'): Tagged => ({ draft: true, after, mode, tag });
+const nothing = (reason = 'no cut', capacityRejected = false): Tagged => ({ draft: false, capacityRejected, reason });
+const fitsBelow = (tokens: number, limit: number) => tokens < limit;
+const choose = (cutAt: number, total: number, plans: Partial<Record<Target, Tagged>>, calls: Target[] = [], before = 2000) =>
+	decideCut({ total, mandatory: 100, before, room: 1000, band: bandOf(1000, cutAt), fits: fitsBelow, plan: plan(plans, calls), unreduced: 'did not reduce' });
+
+test('a lean band is planned first and the room plan landing below it is not taken for that', () => {
+	expect(bandOf(1000, 0.6)).toBe(600);
+	// Inside the band: a band plan that lands is the cut, though the room plan lands below the band too; the room is planned only to compare the view.
+	for (const total of [600, 999]) {
+		const calls: Target[] = [];
+		expect(choose(0.6, total, { band: draft(300, 'band'), room: draft(450, 'room') }, calls)).toEqual({ kind: 'cut', target: 'band', plan: { draft: true, after: 300, mode: 'bounded', tag: 'band' } });
+		expect(calls).toEqual(['band', 'room']);
+	}
+	// A room plan that lands below the band does not rescue a band that has no plan, or whose plan does not land, or whose view differs: inside the band, nothing is cut.
+	for (const [name, band] of [['no plan', nothing()], ['does not land', draft(500, 'band')], ['does not reduce', draft(2000, 'band')]] as const) {
+		const calls: Target[] = [];
+		expect(choose(0.6, 999, { band, room: draft(450, 'room') }, calls), name).toEqual({ kind: 'none' });
+		expect(calls, name).toEqual(['band']);
+	}
+	const calls: Target[] = [];
+	expect(choose(0.6, 999, { band: draft(300, 'band', 'shrunk'), room: draft(450, 'room', 'dialogue') }, calls)).toEqual({ kind: 'none' });
+	expect(calls).toEqual(['band', 'room']);
+	// At or above the room a cut is due: the band plan stands when the room has the same view or no plan; the room plan stands when the band has none or another view.
+	for (const total of [1000, 5000]) {
+		expect(choose(0.6, total, { band: draft(300, 'band'), room: draft(450, 'room') })).toMatchObject({ kind: 'cut', target: 'band', plan: { tag: 'band' } });
+		expect(choose(0.6, total, { band: draft(300, 'band'), room: nothing() })).toMatchObject({ kind: 'cut', target: 'band' });
+		expect(choose(0.6, total, { band: nothing(), room: draft(450, 'room') })).toMatchObject({ kind: 'cut', target: 'room', plan: { tag: 'room' } });
+		expect(choose(0.6, total, { band: nothing(), room: draft(850, 'room') })).toMatchObject({ kind: 'cut', target: 'room' }); // fits the room, not the band
+		expect(choose(0.6, total, { band: draft(300, 'band', 'shrunk'), room: draft(450, 'room', 'dialogue') })).toMatchObject({ kind: 'cut', target: 'room', plan: { tag: 'room' } });
+	}
+	// The exact room still owns every fault: no plan, no reduction, or a plan that does not fit the room.
+	expect(choose(0.6, 1000, { band: nothing('band reason'), room: nothing('room reason', true) })).toEqual({ kind: 'fault', capacity: true, message: 'room reason' });
+	expect(choose(0.6, 1000, { band: nothing(), room: draft(900, 'room') })).toEqual({ kind: 'fault', capacity: true, message: 'did not reduce' });
+	expect(choose(0.6, 1000, { band: draft(300, 'band'), room: nothing() }, [], 300)).toEqual({ kind: 'fault', capacity: false, message: 'did not reduce' });
+});
+
+test('a band the cut point does not bind is not lean: the room is planned first and a room plan below the band is taken as before', () => {
+	// F = 0.98 and above leave the band at the room less the margin (980), whatever F is.
+	for (const cutAt of [1, 0.99, 0.98]) {
+		expect(bandOf(1000, cutAt)).toBe(980);
+		const calls: Target[] = [];
+		expect(choose(cutAt, 999, { band: draft(300, 'band'), room: draft(450, 'room') }, calls)).toMatchObject({ kind: 'cut', target: 'room', plan: { tag: 'room' } });
+		expect(calls).toEqual(['room']);
+	}
+	// F = 0.97 binds (the band is 970): lean.
+	const calls: Target[] = [];
+	expect(choose(0.97, 999, { band: draft(300, 'band'), room: draft(450, 'room') }, calls)).toMatchObject({ kind: 'cut', target: 'band' });
+	expect(calls).toEqual(['band', 'room']);
 });
 
 // F = 0.6: the lean band is 86,400 of the room of 144,000 (the default band is 141,120).
@@ -180,11 +237,14 @@ test('cutAt 0.6, the guard is the exact room: between the lean band and the room
 		}
 		return seen;
 	};
-	// The old history is all a cut can take, so the depth at which a cut still reaches the band is the same at any cut point.
+	// The old history is all a cut can take. A lean cut must land below the band by a plan made for it, so it is taken no deeper into the band than
+	// the default cut is (that one can take a room plan that happens to land below its band); neither is taken where the history cannot reach the band.
 	const ds = [0, 100, 500, 1000, 2000, 2800];
 	const lean = await depth(F, [...ds, ROOM - LEAN - 1, ROOM - LEAN - 100]);
-	expect(lean.slice(0, ds.length)).toEqual(await depth(undefined, ds));
-	expect(lean.slice(0, ds.length).map(s => s.cuts > 0)).toEqual([true, true, true, true, false, false]);
+	const standard = await depth(undefined, ds);
+	for (let i = 0; i < ds.length; i++) expect(lean[i]!.cuts, JSON.stringify({ lean: lean[i], standard: standard[i] })).toBeLessThanOrEqual(standard[i]!.cuts);
+	expect(lean.slice(0, 3).map(s => s.cuts), JSON.stringify(lean)).toEqual([1, 1, 1]);
+	for (const s of [...lean.slice(4, ds.length), ...standard.slice(4)]) expect(s.cuts, JSON.stringify(s)).toBe(0);
 	for (const s of lean.slice(ds.length)) expect(s.cuts, JSON.stringify(s)).toBe(0);
 	// Over the room the very request fails closed, as it does at the default cut point: no request is made.
 	for (const cutAt of [F, undefined]) {

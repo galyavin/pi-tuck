@@ -49,12 +49,12 @@ test('a cut on a small window frees at least a tenth of the room, so the next ro
     for (const cut of r.cuts) expect(cut.before - cut.after, JSON.stringify(cut)).toBeGreaterThanOrEqual(r.room / 10);
   }
 }, 600_000);
-// The same session at a lean cut point (0.6): every cut still lands below the band, or below the room when it was due, and frees at least a tenth
-// of the room, and nothing faults. Only on windows where that holds: on a 32k window the room plan (a native tail of up to half the room, the
-// dialogue summary and the mandatory input) lands just under a band at 0.6 of the room, so it is taken as it is and the next rounds cut
-// again (68 cuts in 150 turns against 10 at the default, some freeing under 1,000 tokens). The yield property is therefore held at F = 1 there.
-test('a lean cut point (0.6) on a large window: cuts land below the band, free at least a tenth of the room, and are more frequent than at the default', () => {
-  for (const [window, response, mandatory, turns] of [[272000, 128000, 18000, 400], [128000, 16384, 12000, 300]] as const)
+// The same session at a lean cut point (0.6), on the small windows too: every cut lands below the band, or below the room when it was due, frees
+// at least a tenth of the room, and nothing faults. A lean band is planned first (chooseCut): taking the room plan because it lands below the band
+// left a 32k session just under a band at 0.6 of the room after each cut (122 cuts in 150 turns at 32k/16k, 68 at 32k/8k, the smallest freeing 654
+// tokens), because the room plan keeps a native tail of up to half the room.
+test('a lean cut point (0.6), on small and large windows: cuts land below the band, free at least a tenth of the room, and are more frequent than at the default', () => {
+  for (const [window, response, mandatory, turns] of [[32768, 16384, 3000, 150], [32768, 8192, 3000, 150], [128000, 16384, 12000, 300], [272000, 128000, 18000, 400]] as const)
     for (const shape of ['low-prose', 'prose'] as const) {
       const lean = drive(window, response, mandatory, turns, shape, 500, 0.6), standard = drive(window, response, mandatory, turns, shape);
       const why = JSON.stringify({ window, response, shape });
