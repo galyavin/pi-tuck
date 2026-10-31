@@ -104,7 +104,7 @@ The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.m
 Known limits today:
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up. Each look-up costs a tool call.
-- Small windows: in a small window, an upstream that spends far more context on tool schemas (some OpenRouter upstreams do) can leave too little room, and pi-tuck then refuses to cut rather than overflow. This is what made 1.0.1 refuse at a 32k window with Pi's default 16,384 reserve. 1.0.3 runs the evaluated 32k chain at that setting, but with little headroom. Version 1.0.4, in preparation, fixes a related bug, where a refusal could make the next prompt fail, and makes the refusal notice name the provider's counting as the likely cause. Pin a different upstream, lower the reserve, or use a larger window; see [Small windows](#small-windows).
+- Small windows: an upstream that spends far more context on tool schemas than others (some OpenRouter upstreams do) can leave a small input room too little space, and pi-tuck then refuses to cut rather than overflow. This is what made 1.0.1 refuse at a 32k window with Pi's default 16,384 reserve. Since 1.0.4 the notice says when the provider is counting far above pi-tuck's estimate, and a refusal no longer affects the next prompt. Pin a different upstream, lower the reserve, or use a larger window; see [Small windows](#small-windows).
 - Semantic search runs only on macOS with Apple silicon.
 
 ## Benchmarks
