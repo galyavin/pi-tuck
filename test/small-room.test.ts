@@ -81,9 +81,9 @@ const small = { limits: { contextWindow: WINDOW, maxTokens: RESPONSE }, reserveT
 	compaction: { requestReserve: () => ({ response: RESPONSE, responseExact: true as const }) } };
 const routes = {
 	// System part and host input alone exceed the room: no cut can help, and the guard refuses.
-	'system part and host input exceed the room': { options: { ...small, system: 2000, host: 17000, at: 'impossible' as const, complete: 8000 }, free: (h: Awaited<ReturnType<typeof harness>>) => h.setHost(100), refused: 'Complete Pi context and response reserve exceed' },
+	'system part and host input exceed the room': { options: { ...small, system: 2000, host: 17000, at: 'impossible' as const, complete: 8000 }, free: (h: Awaited<ReturnType<typeof harness>>) => h.setHost(100), refused: 'Complete Pi context and response reserve exceed', again: 'refused' as const },
 	// The tool round fresh from the last call is larger than the room: a cut keeps it native, so no cut can help, and the trigger refuses.
-	'a fresh tool round larger than the room': { options: { ...small, system: 1500, host: 100, at: 'tool' as const, complete: 24000, fresh: 15000 }, free: (h: Awaited<ReturnType<typeof harness>>) => { (h.session.model as { contextWindow: number }).contextWindow = 272000; }, refused: 'cannot fit or reduce the request budget' },
+	'a fresh tool round larger than the room': { options: { ...small, system: 1500, host: 100, at: 'tool' as const, complete: 24000, fresh: 15000 }, free: (h: Awaited<ReturnType<typeof harness>>) => { (h.session.model as { contextWindow: number }).contextWindow = 272000; }, refused: 'cannot fit or reduce the request budget', again: 'answered' as const },
 };
 const marks = (h: Awaited<ReturnType<typeof harness>>) => ({ requests: h.state.requests, aborts: h.state.aborts, faults: h.faults.length, notices: h.notices.length });
 const since = (h: Awaited<ReturnType<typeof harness>>, m: ReturnType<typeof marks>) => ({ requests: h.state.requests - m.requests, aborts: h.state.aborts - m.aborts, faults: h.faults.slice(m.faults), notices: h.notices.slice(m.notices) });
@@ -97,12 +97,18 @@ for (const [name, route] of Object.entries(routes))
 				expect(first.faults.join(' '), first.probe).toContain(route.refused);
 				expect(first.aborts, first.probe).toBeGreaterThan(0);
 				expect(first.notices.join(' '), first.probe).toContain('shorten the input');
-				// While nothing has changed the next run is refused, on a fresh decision, not let through.
+				// The next prompt decides afresh. While the host view still fills the room it is refused again. The refused tool round was left
+				// behind by its ended run: the next prompt's cut summarizes it, and that prompt is answered.
 				const again = marks(h);
 				await h.session.prompt('Try again');
-				expect(since(h, again).requests).toBe(0);
-				expect(since(h, again).faults.join(' ')).toContain(route.refused);
-				expect(since(h, again).notices.join(' ')).toContain('shorten the input');
+				if (route.again === 'refused') {
+					expect(since(h, again).requests).toBe(0);
+					expect(since(h, again).faults.join(' ')).toContain(route.refused);
+					expect(since(h, again).notices.join(' ')).toContain('shorten the input');
+				} else {
+					expect(since(h, again).faults, first.probe).toEqual([]);
+					expect(since(h, again).requests, first.probe).toBeGreaterThan(0);
+				}
 				// Room is available: the host view shrinks, or the user changes to a model with a larger window.
 				route.free(h);
 				const freed = marks(h);

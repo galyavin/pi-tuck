@@ -58,11 +58,12 @@ export function historicalAllowance(window: number, reserve: number, base: numbe
     return Math.max(0, Math.min(Math.floor(free / 4), before - base - 1)) * 4;
 }
 /** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation. */
-export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false) {
- return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual }, ctx, reserveTokens, measure, policy, retainCurrentInput);
+export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false, newPrompt = false) {
+ return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual, newPrompt }, ctx, reserveTokens, measure, policy, retainCurrentInput);
 }
 /** Shared compiler observes canonical branch and current token estimate; no native preparation utility. */
-export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean }, ctx: ExtensionContext,
+/** `newPrompt`: the cut is planned for a prompt Pi has not appended yet, or by the operator's manual cut; either moves on from an ended run. */
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
  const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
@@ -104,10 +105,11 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             entry.message.role === "toolResult" && calls.has(entry.message.toolCallId));
         // A run that ended without a response to its receipts (aborted or failed, its reply discarded) and was followed by a new prompt has
         // left them behind: they can no longer reach the model as that round's answer, so they are ordinary history. Kept native, a receipt
-        // that never fits would refuse every later prompt.
+        // that never fits would refuse every later prompt. The prompt may be the one this cut is planned for, which Pi appends only after it
+        // (or an operator's manual cut); a retry has no new prompt and keeps them.
         const later = entries.slice(lastResponse + 1);
         const ended = later.findIndex(entry => entry.type === "message" && entry.message.role === "assistant" && isDiscardedResponse(entry.message));
-        const superseded = ended >= 0 && later.slice(ended + 1).some(entry => entry.type === "message" && entry.message.role === "user");
+        const superseded = ended >= 0 && (input.newPrompt || later.slice(ended + 1).some(entry => entry.type === "message" && entry.message.role === "user"));
         freshRound = hasFreshReceipt && !superseded;
         const keptId = cut.firstKeptEntryId;
         const chosenBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === keptId);

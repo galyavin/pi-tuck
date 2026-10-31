@@ -12,7 +12,7 @@ const reply = (content: unknown[], stopReason: string, at: number) =>
 const words = (n: number, seed: number) => Array.from({ length: n }, (_, i) => `w${(i * 7 + seed) % 101}`).join(' ');
 
 type After = 'nothing' | 'aborted' | 'aborted, then a prompt' | 'a prompt';
-function session(after: After) {
+function session(after: After, newPrompt = false) {
 	let clock = 1_700_000_000_000;
 	const manager = SessionManager.inMemory('/testbed');
 	const user = (text: string) => manager.appendMessage({ role: 'user', content: text, timestamp: clock += 1000 });
@@ -28,7 +28,7 @@ function session(after: After) {
 	const ctx = { sessionManager: manager, cwd: '/testbed', model: { contextWindow: 32768, maxTokens: 16384, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
 	const measure = (messages: never[]) => measurableConversationTokens(messages, ctx);
 	const before = measure(manager.buildSessionProjection().messages as never);
-	return { draft: tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before }, ctx, 20000, measure as never, {}, true), manager, receipt, before };
+	return { draft: tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before, newPrompt }, ctx, 20000, measure as never, {}, true), manager, receipt, before };
 }
 
 test.each<After>(['nothing', 'aborted', 'a prompt'])('a receipt that is still the round\'s answer stays native and the cut is refused (after: %s)', after => {
@@ -69,4 +69,12 @@ test('a prompt too large for the room is refused once; the next prompt cuts it a
 	const next = draft();
 	expect(next.unavailable).toBeUndefined();
 	expect((next.compaction!.details as { tokensAfter: number }).tokensAfter + 20000).toBeLessThan(32768);
+});
+
+// Pi appends a prompt only after the cut planned for it, so that cut sees the ended run and no prompt after it yet. eval live32 t01-C on
+// efb63e0: the prompt right after each refused task was refused too (tasks 3 and 28), and only the one after that recovered.
+test('the cut planned for a new prompt treats an ended run as left behind; a retry, with no new prompt, does not', () => {
+	expect(session('aborted', true).draft.unavailable).toBeUndefined();
+	expect(session('aborted', false).draft.unavailable).toBe("pi-tuck's mandatory context cannot fit or reduce the request budget");
+	expect(session('nothing', true).draft.unavailable).toBe("pi-tuck's mandatory context cannot fit or reduce the request budget");
 });
