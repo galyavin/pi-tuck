@@ -22,8 +22,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      # The semantic runtime is macOS on Apple silicon only, so its Python suites run there.
+      # The semantic runtime is macOS on Apple silicon only, so its Python suites run there, and so do the two worker-recovery tests
+      # whose timing assertions assume that host (semantic-heal, semantic-native-owner).
       - if: runner.os == 'macOS'
         run: npm test
       - if: runner.os == 'Linux'
-        run: npx vitest run --config vitest.config.ts
+        run: npx vitest run --config vitest.config.ts --exclude test/semantic-heal.test.ts --exclude test/semantic-native-owner.test.ts
