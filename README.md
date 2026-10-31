@@ -150,6 +150,12 @@ pi-tuck keeps room for the model's reply: the larger of the model's output limit
 { "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 8192 } } } }
 ```
 
+If you reach the model through OpenRouter, you can also pin one upstream, so that the token count stays the same from request to request. Put this in `models.json` in Pi's agent folder, and name the upstream you want:
+
+```json
+{ "providers": { "openrouter": { "compat": { "openRouterRouting": { "only": ["your-upstream"], "allow_fallbacks": false } } } } }
+```
+
 ## Semantic search
 
 Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on the CPU. No text leaves your machine. Elsewhere, `tuck_search` uses keywords, and everything else works.
