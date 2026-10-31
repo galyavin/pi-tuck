@@ -92,3 +92,14 @@ test('a worker that missed its start deadline is retried in the same session and
  expect(states).toContain('unavailable');expect(states.at(-1)).toBe('ready');
  await controller.close();
 },60000);
+// A loaded worker on a starved CPU: an embed batch takes longer than a call on a loaded model may take. Its deadline grows with the texts it
+// carries, so indexing slows down instead of failing (R&D's repro at load 85-99: 72 of 1,606 units, then unavailable at 432 s).
+test('a loaded worker whose embed batch outlasts the per-call deadline slows down and does not fail: the deadline grows with the batch',async()=>{
+ const {runtimeRoot,config,provider}=slowStart(0);
+ writeFileSync(join(runtimeRoot,'embed-delay-ms'),'700');
+ const controller=new SemanticRecallController(config,{callDeadlineMs:300,embedTextMs:1000,startDeadlineMs:5000,healDelaysMs:[60],healSteadyMs:60});
+ controller.enable();
+ expect((await controller.search('encoder',provider)).status).toBe('ok');
+ expect(controller.status()).toMatchObject({state:'ready',lastError:null,recovery:null});
+ await controller.close();
+},60000);

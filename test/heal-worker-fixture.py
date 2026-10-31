@@ -35,6 +35,12 @@ def run(request):
     if op == "tokenize":
         return {"ranges": [[{"start": 0, "end": len(text.encode("utf-16-le")) // 2, "tokens": 3}] for text in request["texts"]], "offsetUnit": "utf16"}
     if op == "embed":
+        # A starved CPU: each embed call takes this long (set by the test in the runtime root).
+        try:
+            with open(os.path.join(root, "embed-delay-ms")) as handle:
+                time.sleep(int(handle.read()) / 1000)
+        except FileNotFoundError:
+            pass
         global broken
         if broken or not encoder_alive():
             broken = True

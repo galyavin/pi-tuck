@@ -12,12 +12,13 @@ WINDOWS=os.name=='nt';encoder_port=None;encoder_token=None
 class LocalHTTP(http.client.HTTPConnection):
  def connect(self):
   self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(self.timeout);self.sock.connect('encoder.sock')
-def request(path,data=None):
+# A native request's timeout: 55 s, plus 30 s per text it embeds (the host's EMBED_TEXT_MS), so a starved CPU slows a batch down and does not fail it.
+def request(path,data=None,texts=0):
  if path not in ('/health','/props','/v1/embeddings'):raise Refusal('native_path_failure')
  if WINDOWS:
   if encoder_port is None or not encoder_token:raise Refusal('native_transport_unavailable')
-  connection=http.client.HTTPConnection('127.0.0.1',encoder_port,timeout=55)
- else:connection=LocalHTTP('localhost',timeout=55)
+  connection=http.client.HTTPConnection('127.0.0.1',encoder_port,timeout=55+30*texts)
+ else:connection=LocalHTTP('localhost',timeout=55+30*texts)
  try:
   headers={'Content-Type':'application/json'}
   if WINDOWS:headers['Authorization']='Bearer '+encoder_token
@@ -26,6 +27,7 @@ def request(path,data=None):
   if len(payload)>16*1024*1024:raise Refusal('native_response_bound')
   if response.status!=200:raise Refusal('native_request_failure')
   return json.loads(payload)
+ except TimeoutError:raise Refusal('native_request_failure')
  finally:connection.close()
 def native_executable():
  executable=ROOT/('native/llama-server.exe' if WINDOWS else 'native/llama-server')
@@ -133,7 +135,7 @@ def run(req):
   if len(a)>8:raise Refusal('batch_limit')
   ids=[enc(framed(t,kind)) for t in a]
   if not a:return {'vectors':[],'identity':IDENTITY}
-  load();out=request('/v1/embeddings',{'input':ids,'encoding_format':'float','truncate':False})['data'];out.sort(key=lambda row:row['index']);vectors=[row['embedding'] for row in out]
+  load();out=request('/v1/embeddings',{'input':ids,'encoding_format':'float','truncate':False},len(ids))['data'];out.sort(key=lambda row:row['index']);vectors=[row['embedding'] for row in out]
   if len(vectors)!=len(a) or any(len(v)!=768 or any(not math.isfinite(x) for x in v) or abs(sum(x*x for x in v)**.5-1)>1e-5 for v in vectors):raise Refusal('invalid_vector')
   return {'vectors':vectors,'identity':IDENTITY,'nativePID':server.pid}
  if op=='index':return index(req)
