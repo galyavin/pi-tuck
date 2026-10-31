@@ -396,7 +396,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     : "Compaction did not reduce context within the estimated request budget",
                 plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>; reserve: number }> => {
                     const reserve = planReserve(target, room, mandatory, ctx);
-                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, Boolean(incoming) || operatorManual);
+                    // Every cut asked while no run is admitted (a prompt's preflight, an operator's cut, Pi's own cut before a run a custom message
+                    // starts) is planned for a run that has not begun: the session has moved on from any run that ended. A retry is inside its run.
+                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, Boolean(incoming) || operatorManual || !admittedRun);
                     return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction, reserve }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 },
