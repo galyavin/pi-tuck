@@ -45,7 +45,7 @@ It gets back the original passage, with a pointer such as `#212`. It reads the w
 
 That is `tuck_recall`. The agent answers from the original text, not from a model's memory of it.
 
-*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. It runs only on macOS with Apple silicon. Elsewhere, `tuck_search` uses keywords, and the example above would not find its match.
+*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** A test of it is pre-registered in [`benchmark/PREREG-RECALL.md`](benchmark/PREREG-RECALL.md); it has no result yet. The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. It runs only on macOS with Apple silicon. Elsewhere, `tuck_search` uses keywords, and the example above would not find its match.
 
 ## Install
 
