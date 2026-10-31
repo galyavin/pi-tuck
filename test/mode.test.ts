@@ -11,7 +11,8 @@ import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
 // Each cut records which summary view produced it: the whole pre-cut dialogue, or the same dialogue shrunk when it exceeds the
 // allowance. Both views carry the file ledger and end with the closing instruction.
 const MODES: DraftMode[] = ['dialogue', 'shrunk'];
-const LEDGER = '"kind":"section","title":"Files"';
+// A section record of the file ledger: its heading is the line that begins "Files:" (TUCK-TRANSCRIPT/2).
+const LEDGER = '\nFiles: Files touched by read, write and edit';
 const OMITTED_ACTIONS = 'Historical tool actions and observations omitted';
 const BODY = 'Observed mechanical test data.';
 
@@ -50,7 +51,7 @@ test(`the mode recorded is the view that produced the summary: ${target}`, () =>
 		// Both views are the dialogue: tool output is not in either. Both carry the file ledger (the read calls f0..f11) and the closing.
 		expect(summary).toContain(OMITTED_ACTIONS);
 		expect(summary).not.toContain(BODY);
-		expect(summary).not.toContain('"kind":"tool_receipt"');
+		expect(summary).not.toContain('tool_receipt');
 		expect(summary).toContain(LEDGER);
 		expect(summary).toContain('- read f0');
 		expect(summary.endsWith(CLOSING_INSTRUCTION)).toBe(true);
@@ -89,9 +90,9 @@ test('an empty compiler offer still yields the mandatory floor (initiating promp
 		const draft = tuckObservedDraft(empty, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		expect(draft.mode).toBe('shrunk');
-		expect(draft.compaction.summary).toContain('"text":"Earlier request 0"');
+		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 0$/m);
 		expect(draft.compaction.summary).toContain(LEDGER);
-		expect(draft.compaction.summary).not.toContain('Earlier request 1"');
+		expect(draft.compaction.summary).not.toContain('Earlier request 1\n');
 	} finally { s.dispose(); }
 });
 
@@ -125,9 +126,9 @@ test('a cut at the tool boundary records its mode', async () => {
 });
 
 test('a history whose dialogue exceeds the allowance is cut to the shrunk view, which still carries the file ledger', async () => {
-	// Hundreds of turns: the whole dialogue outgrows the one allowance (there is no 3x multiplier), so the same dialogue is shrunk to it.
+	// Many hundreds of turns (cycles of 60 tokens): the whole dialogue outgrows the one allowance (there is no 3x multiplier), so the same dialogue is shrunk to it.
 	// The shrunk view is never a view without tool history: the ledger and closing instruction are in it.
-	const r = await scenario({ at: 'prompt', complete: ROOM + 500, host: HOST, cycleSize: 150 });
+	const r = await scenario({ at: 'prompt', complete: ROOM + 500, host: HOST, cycleSize: 60 });
 	expect(r.faults, r.probe).toEqual([]);
 	expect(r.cuts, r.probe).toBe(1);
 	const entry = r.entries[0]!;

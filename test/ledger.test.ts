@@ -148,7 +148,7 @@ test.each([['earlier build', '\n\n---\n\n' + EARLIER_BUILD_NOTE], ['future wordi
 	const ctx = { sessionManager: manager, cwd: '/legacy', model: { contextWindow: 272000 } } as unknown as ExtensionContext;
 	const summary = (projectedMessages(manager.buildSessionProjection().messages, ctx).find(m => m.role === 'compactionSummary') as { summary: string }).summary;
 	expect(summary).toBe(serializeTranscript([{ kind: 'omission', reason: 'Earlier work.' }]) + legacySuffix);
-	expect(summary).not.toContain('"text":"old"');
+	expect(summary).not.toContain('user: old');
 });
 
 test('B: a later native omission of one ledger entry removes only its own line', () => {

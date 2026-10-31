@@ -183,13 +183,13 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (index === undefined) throw new Error("Missing initiating user source index");
         const quoted = head(text, MAX_TASK_CONTRACT_CHARACTERS), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(initiating) }];
         if (text.trim()) {
-            mandatory.push({ kind: "excerpt", role: "user", sourceIndex: index, sourceTimes, text: quoted });
-            if (quoted.length < text.length) mandatory.push({ kind: "omission", role: "user", sourceIndex: index, sourceTimes,
-                reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}` });
+            mandatory.push({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
+            if (quoted.length < text.length) mandatory.push({ kind: "omission", role: "user", sourceIndex: index,
+                reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
         }
     }
     if (protectedUser?.type === "message" && protectedUser.message.role === "user")
-        mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }], text: textOf(protectedUser.message.content) });
+        mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, text: textOf(protectedUser.message.content), sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }] });
     // The file ledger and the action trail of the compacted history are mandatory, so they are charged in base like the quotes above.
     // A locator is given only where tuck_recall {index} resolves it: a unique global index of a readable entry.
     const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
@@ -223,9 +223,9 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     // Both views use the same parser, mandatory insertion, native preview and guard, and end with the same closing section.
     const assemble = (compiled: string) => {
         if (typeof compiled !== "string") throw new Error("pi-tuck returned an invalid summary");
-        const split = compiled ? splitSummary(compiled) : { body: "" };
+        const split = compiled ? splitSummary(compiled) : { body: "", version: 2 as const };
         if (!split) throw new Error("pi-tuck returned an invalid summary");
-        const records = parseRecords(split.body);
+        const records = parseRecords(split.body, split.version);
         for (const record of mandatory) {
             const insertion = records.findIndex(row => row.sourceIndex !== undefined && row.sourceIndex > record.sourceIndex!);
             records.splice(insertion < 0 ? records.length : insertion, 0, record);

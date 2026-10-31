@@ -15,7 +15,7 @@ const draft = (turns: number) => {
 };
 
 test('a shrunk draft over four times the entries takes less than eight times as long', () => {
-	const small = draft(300), large = draft(1200);
+	const small = draft(500), large = draft(2100);
 	expect(large.entries / small.entries).toBeGreaterThanOrEqual(4);
 	expect(large.ms / small.ms, JSON.stringify({ small, large })).toBeLessThan(8);
 }, 600_000);

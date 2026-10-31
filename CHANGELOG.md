@@ -9,6 +9,11 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 
 - A dialogue that does not fit the summary is now shortened, oldest assistant text first, instead of replaced by a ranked selection of
   records.
+- Summaries are headed `TUCK-TRANSCRIPT/2` and hold one line of plain text per record (`#12 user @2026-10-30T14:00:00Z: text`) instead
+  of one JSON object, which makes them about 30 percent shorter on sessions where the assistant writes little and about 14 percent on
+  prose-heavy ones. A passage a clip leaves out names the call that reads it back (`tuck_recall {"index":12,"offset":523}`). Summaries
+  saved by 1.0.x (`TUCK-TRANSCRIPT/1`, and `VCC-TRANSCRIPT/1` before them) are read as before and keep their format when a native
+  omission filters them.
 
 ## [1.0.1] - 2026-10-30
 

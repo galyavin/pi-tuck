@@ -5,11 +5,11 @@ import { sanitize } from "./sanitize";
 import { MAX_RECEIPT_CHARACTERS, smallOriginalArguments } from "./transcript";
 
 const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receipts: Map<string, ReceiptLink>, originals: Map<string, HistoricalReceipt>): NormalizedBlock[] => {
-  if (msg.role === "custom") return [{ kind: "notice", text: sanitize(textOf(msg.content)), originalText: textOf(msg.content), sourceIndex: msgIndex }];
+  if (msg.role === "custom") return [{ kind: "notice", text: sanitize(textOf(msg.content)), originalText: textOf(msg.content), sourceIndex: msgIndex, startsSource: true }];
   if (msg.role === "user") {
     const blocks: NormalizedBlock[] = [];
     const text = sanitize(textOf(msg.content));
-    if (text) blocks.push({ kind: "user", text, originalText: textOf(msg.content), sourceIndex: msgIndex });
+    if (text) blocks.push({ kind: "user", text, originalText: textOf(msg.content), sourceIndex: msgIndex, startsSource: true });
     if (msg.content && typeof msg.content !== "string") {
       for (const part of msg.content) {
         if (part.type === "image") {
@@ -41,14 +41,18 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receip
   if (msg.role === "assistant") {
     if (!msg.content) return [];
     if (typeof msg.content === "string") {
-      return [{ kind: "assistant", text: sanitize(msg.content), originalText: msg.content, sourceIndex: msgIndex }];
+      return [{ kind: "assistant", text: sanitize(msg.content), originalText: msg.content, sourceIndex: msgIndex, startsSource: true }];
     }
 
     const blocks: NormalizedBlock[] = [];
+    // The readable text of a message is its text and tool-call parts in order: only the first part starts it.
+    let readable = false;
     for (const part of msg.content) {
       if (part.type === "text") {
-        blocks.push({ kind: "assistant", text: sanitize(part.text), originalText: part.text, sourceIndex: msgIndex });
+        blocks.push({ kind: "assistant", text: sanitize(part.text), originalText: part.text, sourceIndex: msgIndex, ...(readable ? {} : { startsSource: true as const }) });
+        readable = true;
       } else if (part.type === "toolCall") {
+        readable = true;
         blocks.push({
           kind: "tool_call",
           name: part.name,

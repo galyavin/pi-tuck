@@ -2,7 +2,7 @@ import type { NormalizedBlock } from "../types";
 import { blockRecords, decorateRecord, isDialogue, isOmittable, omissionRecord, type Clip, type DialogueBlock } from "./brief";
 import { DIALOGUE_SUFFIX } from "./format";
 import { orderByOriginalSource } from "./source-order";
-import { serializeTranscript, TRANSCRIPT_HEADER, type TranscriptRecord } from "./transcript";
+import { serializeRecord, serializeTranscript, TRANSCRIPT_HEADER, type TranscriptRecord } from "./transcript";
 
 type Role = "user" | "assistant" | "notice";
 const ROLES: readonly Role[] = ["user", "assistant", "notice"];
@@ -35,9 +35,9 @@ export interface Shrunk {
   size: number;
 }
 
-/** What one unit renders in a configuration, and its serialized size: each record's JSON plus a newline. */
+/** What one unit renders in a configuration, and its serialized size: each record's line plus a newline. */
 interface Rendered { records: TranscriptRecord[]; cost: number }
-const rendered = (records: TranscriptRecord[]): Rendered => ({ records, cost: records.reduce((n, r) => n + JSON.stringify(r).length + 1, 0) });
+const rendered = (records: TranscriptRecord[]): Rendered => ({ records, cost: records.reduce((n, r) => n + serializeRecord(r).length + 1, 0) });
 
 /** Units [0, drop) of a role are dropped, [drop, end) are clipped to `tier`, and the rest stay whole. */
 interface Setting { drop: number; tier: number; end: number }

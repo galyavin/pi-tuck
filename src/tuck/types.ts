@@ -20,10 +20,11 @@ export interface HistoricalReceipt {
   );
 }
 
+/** `startsSource`: the block's original text begins the message's readable text, so an offset into it is a tuck_recall offset into the source. */
 export type NormalizedBlock = { sourceTimes?: Record<number, import("./core/source-time").SourceTime> } & (
-  | { kind: "user"; text: string; originalText?: string; sourceIndex?: number }
-  | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number }
-  | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string }
+  | { kind: "user"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
+  | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
+  | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string; startsSource?: true }
   | { kind: "tool_call"; name: string; args: Record<string, unknown>; callId?: string; receipt?: ReceiptLink; sourceIndex?: number }
   | { kind: "tool_result"; name: string; text: string; sourceIndex?: number; recallExport?: true; originalReceipt?: HistoricalReceipt }
   | { kind: "bash"; command: string; output: string; exitCode: number | undefined; cancelled?: boolean; truncated?: boolean; sourceIndex?: number });

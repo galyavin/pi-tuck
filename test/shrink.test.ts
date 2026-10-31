@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import { shrinkDialogue, wholeDialogue, type DialogueInput, type Step } from '../src/tuck/core/shrink';
 import type { DialogueBlock } from '../src/tuck/core/brief';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
-import { parseRecords, serializeRecords, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from '../src/tuck/core/transcript';
+import { parseRecords, serializeRecord, serializeRecords, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from '../src/tuck/core/transcript';
 import type { NormalizedBlock } from '../src/tuck/types';
 import { session } from './random-sessions';
 
@@ -110,7 +110,7 @@ test('every record of every view round-trips, and every clipped excerpt keeps it
 			expect(x.span.totalCharacters).toBe(text.length);
 			expect(x.span.end).toBeLessThanOrEqual(text.length);
 			if (x.kind === 'excerpt') { clipped++; expect(text.slice(x.span.start, x.span.end)).toBe(x.text); }
-			else expect(x.reason).toContain('source truncated');
+			else expect(x.reason).toBe(`tuck_recall {"index":${x.sourceIndex}}`);
 		}
 	}
 	expect(clipped).toBeGreaterThan(100);
@@ -135,7 +135,7 @@ test('the summary text is never longer than the allowance, and is as long as the
 });
 
 test('dropped assistant units are counted in one omission, with the first eight locators of the oldest', () => {
-	const r = shrinkDialogue(S.input, 15000);
+	const r = shrinkDialogue(S.input, 10000);
 	expect(r.step).toBe('B');
 	const records = recordsOf(r.text), replies = textBlocks(S.blocks, 'assistant');
 	const shown = kept(records, 'assistant'), dropped = replies.filter(b => !shown.has(b.sourceIndex!));
@@ -155,7 +155,7 @@ test('dropped assistant units are counted in one omission, with the first eight 
 });
 
 test('dropped prompts are counted the same way, oldest first, after the assistant text is gone', () => {
-	const r = shrinkDialogue(S.input, 7000);
+	const r = shrinkDialogue(S.input, 4000);
 	expect(r.step).toBe('D');
 	const records = recordsOf(r.text), prompts = textBlocks(S.blocks, 'user');
 	const shown = kept(records, 'user'), dropped = prompts.filter(b => !shown.has(b.sourceIndex!));
@@ -170,9 +170,9 @@ test('dropped prompts are counted the same way, oldest first, after the assistan
 	expect(omission(records, 'assistant')!.count).toBe(assistant.length - replies.size);
 	// Those are the newest units, and they fill at most a third of the allowance: one more would not fit it.
 	expect([...replies.keys()]).toEqual(assistant.slice(assistant.length - replies.size).map(b => b.sourceIndex));
-	const third = records.filter(x => x.role === 'assistant' && x.count === undefined).reduce((n, x) => n + JSON.stringify(x).length + 1, 0);
-	expect(third).toBeLessThanOrEqual(7000 / 3);
-	expect(third + third / replies.size).toBeGreaterThan(7000 / 3);
+	const third = records.filter(x => x.role === 'assistant' && x.count === undefined).reduce((n, x) => n + serializeRecord(x).length + 1, 0);
+	expect(third).toBeLessThanOrEqual(4000 / 3);
+	expect(third + third / replies.size).toBeGreaterThan(4000 / 3);
 	// The order of the records: user notice, assistant notice, tool notice.
 	expect(records.slice(-3).map(x => x.role ?? 'tools')).toEqual(['user', 'assistant', 'tools']);
 });
@@ -339,7 +339,7 @@ test('a clip that keeps no text renders nothing: its unit joins the one omission
 test('when prompts alone would fill the allowance, the newest assistant text within a third of it is kept', () => {
 	// Prompts that fit only if every assistant text goes: B may drop older assistant text, but the newest third stays and users give way.
 	const many = dialogue({ turns: 60, user: 12, assistant: 6 });
-	const usersOnly = recordsOf(many.whole).filter(r => r.kind === 'excerpt' && r.role === 'user').reduce((n, r) => n + JSON.stringify(r).length + 1, 0);
+	const usersOnly = recordsOf(many.whole).filter(r => r.kind === 'excerpt' && r.role === 'user').reduce((n, r) => n + serializeRecord(r).length + 1, 0);
 	for (const limit of [Math.floor(usersOnly * 1.05), Math.floor(usersOnly * 0.9), Math.floor(usersOnly * 0.6)]) {
 		const shrunk = shrinkDialogue(many.input, limit);
 		expect(rank(shrunk.step), `limit ${limit}`).toBeGreaterThanOrEqual(rank('C1'));
@@ -363,7 +363,7 @@ test('the recent assistant third holds text even when every assistant message is
 	}
 	const input: DialogueInput = { blocks, sourceIndices: blocks.map(b => b.sourceIndex) };
 	const records = recordsOf(wholeDialogue(input));
-	const cost = (r: TranscriptRecord) => JSON.stringify(r).length + 1;
+	const cost = (r: TranscriptRecord) => serializeRecord(r).length + 1;
 	const usersOnly = records.filter(r => r.kind === 'excerpt' && r.role === 'user').reduce((n, r) => n + cost(r), 0);
 	const replies = records.filter(r => r.kind === 'excerpt' && r.role === 'assistant');
 	const total = replies.reduce((n, r) => n + (r.text ?? "").length, 0), longest = Math.max(...replies.map(cost));

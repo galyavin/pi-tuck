@@ -32,7 +32,8 @@ Start a new Pi session after installing.
 
 Tool output is left out of the summary; it stays in the session file. If the dialogue itself is too long for the room left, it is
 shortened, oldest assistant text first, instead of being replaced by a ranked selection. Each summary ends with a short instruction to
-the agent: re-read a file before editing it, and look things up rather than guess.
+the agent: re-read a file before editing it, and look things up rather than guess. The summary is plain text, one line per record
+(`#12 user: ...`, where 12 is the index `tuck_recall` takes); summaries written by earlier versions are still read.
 
 **`tuck_recall`** finds earlier text by keyword and reads any original message or tool result exactly, by the index shown in a summary.
 It can also write an original back out to a file.

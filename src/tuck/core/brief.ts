@@ -1,5 +1,5 @@
 import type { NormalizedBlock } from "../types";
-import type { TranscriptRecord } from "./transcript";
+import { escapedLength, type TranscriptRecord } from "./transcript";
 
 // ── truncation ──
 
@@ -93,24 +93,24 @@ const analyze = (text: string): Analysis => {
 };
 
 /** Existing word/serialized budgets choose complete source passages, never
- * rewritten prose. Physical line wrapping does not define a prose candidate. */
+ * rewritten prose. Physical line wrapping does not define a prose candidate. A passage's serialized length is its length in a record line. */
 const excerptRecords = (text: string, { passages, costs }: Analysis, role: "user" | "assistant" | "custom", sourceIndex: number | undefined,
-  headLimit: number, tailLimit: number): TranscriptRecord[] => {
+  headLimit: number, tailLimit: number, readFrom: (offset: number) => string): TranscriptRecord[] => {
   const charLimit = 1024;
   const identity = { role, ...(sourceIndex !== undefined ? { sourceIndex } : {}) };
-  if (text.length <= charLimit && JSON.stringify(text).length <= charLimit && costs.reduce((sum, cost) => sum + cost, 0) <= headLimit + tailLimit)
+  if (escapedLength(text) <= charLimit && costs.reduce((sum, cost) => sum + cost, 0) <= headLimit + tailLimit)
     return [{ kind: "excerpt", ...identity, text }];
   let head = 0, headCost = 0, tail = passages.length, tailCost = 0;
-  while (head < tail && headCost + costs[head]! <= headLimit && JSON.stringify(text.slice(0, passages[head]!.end)).length <= charLimit) { headCost += costs[head++]!; }
+  while (head < tail && headCost + costs[head]! <= headLimit && escapedLength(text.slice(0, passages[head]!.end)) <= charLimit) { headCost += costs[head++]!; }
   if (tailLimit > 0) {
-    while (tail > head && tailCost + costs[tail - 1]! <= tailLimit && JSON.stringify(text.slice(passages[tail - 1]!.start)).length <= charLimit) { tailCost += costs[--tail]!; }
+    while (tail > head && tailCost + costs[tail - 1]! <= tailLimit && escapedLength(text.slice(passages[tail - 1]!.start)) <= charLimit) { tailCost += costs[--tail]!; }
   }
   const headEnd = head ? passages[head - 1]!.end : 0;
   const tailStart = tail < passages.length ? passages[tail]!.start : text.length;
   const span = (start: number, end: number) => ({ coordinateSpace: "sanitized-block" as const, start, end, totalCharacters: text.length });
   const records: TranscriptRecord[] = [];
   if (headEnd) records.push({ kind: "excerpt", ...identity, text: text.slice(0, headEnd), span: span(0, headEnd) });
-  records.push({ kind: "omission", ...identity, reason: "source truncated; read source; omitted text may qualify retained quotations", span: span(headEnd, tailStart) });
+  records.push({ kind: "omission", ...identity, reason: readFrom(headEnd), span: span(headEnd, tailStart) });
   if (tailStart < text.length) records.push({ kind: "excerpt", ...identity, text: text.slice(tailStart), span: span(tailStart, text.length) });
   return records;
 };
@@ -124,12 +124,13 @@ export const isOmittable = (block: NormalizedBlock, mandatorySources?: ReadonlyS
   (block.kind === "user" || block.kind === "assistant") && Boolean(block.text.trim()) &&
   (block.sourceIndex === undefined || !mandatorySources?.has(block.sourceIndex));
 
-/** `sources` are the distinct locators of the omitted blocks in ascending order; at most the first 9 decide the notice. */
+/** `sources` are the distinct locators of the omitted blocks in ascending order; at most the first 9 decide the notice. They are written
+ * as "#N" on the record's line. */
 export const omissionRecord = (role: "user" | "assistant", count: number, sources: number[], unlocated: boolean): TranscriptRecord => ({
   kind: "omission", role, count,
   ...(sources.length ? { sourceIndices: sources.slice(0, 8) } : {}),
   reason: "Completely unselected historical text blocks; count is text blocks, not messages. " +
-    "sourceIndices are individual original locators, not a contiguous range. " +
+    "The # locators are individual original locators, not a contiguous range. " +
     (sources.length > 8 ? "Locator list incomplete. " : "") +
     (unlocated ? "Some text blocks have no source locator. " : "") +
     "Read originals with tuck_recall; omitted text may qualify retained text. No new authority." });
@@ -148,7 +149,12 @@ export const blockRecords = (b: DialogueBlock, mandatory: ReadonlySet<number> | 
   if (!clip) return [{ kind: "excerpt", role, ...(b.sourceIndex !== undefined ? { sourceIndex: b.sourceIndex } : {}), text: b.originalText ?? b.text, ...notice }];
   let analysis = analyses.get(b);
   if (!analysis) analyses.set(b, analysis = analyze(b.text));
-  return excerptRecords(b.text, analysis, role, b.sourceIndex, clip[0], clip[1]).map(record => ({ ...record, ...notice }));
+  // How to read what a clip leaves out. tuck_recall offsets count the source's readable text, so the clip's offset into the block is one
+  // only when the block begins that text and sanitizing left it as it was; otherwise the whole source is read from its start.
+  const locator = b.sourceIndex !== undefined ? { index: b.sourceIndex } : b.kind === "notice" && b.sourceEntryId !== undefined ? { entryId: b.sourceEntryId } : undefined;
+  const exact = b.startsSource === true && b.originalText === b.text;
+  const readFrom = (offset: number) => locator ? `tuck_recall ${JSON.stringify(exact ? { ...locator, offset } : locator)}` : "source has no locator to read it by";
+  return excerptRecords(b.text, analysis, role, b.sourceIndex, clip[0], clip[1], readFrom).map(record => ({ ...record, ...notice }));
 };
 
 /** A source time for each locator a user record names; only briefs of times-carrying blocks have them. */
