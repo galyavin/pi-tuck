@@ -19,7 +19,7 @@ Conditions that matter for the arm A figure: the summary is one call to the loca
 
 ## 2. Paired replay (the full run's method)
 
-The same recorded sessions are cut at identical positions by each compactor (`PREREG.md`, "Paired replay"). Recordings are the live arms' own sessions. The local summarizer is `mac-studio/main` (`xhigh`), the frontier summarizer `openai/gpt-6-astra` (`high`, ChatGPT-plan access). The six recordings `s01`-`s03` (both arms) are the ones all three have finished; pi-tuck has also run on `s04`-`s05`.
+The same recorded sessions are cut at identical positions by each compactor (`PREREG.md`, "Paired replay"). Recordings are the live arms' own sessions. The local summarizer is `mac-studio/main` (`xhigh`), the frontier summarizer `openai/gpt-6-astra` (`high`, ChatGPT-plan access). (That model was retired on 2026-10-31 under the project owner's Codex model policy; the frontier row below stays as the measurement it was, on those recordings, and feeds no test.) The six recordings `s01`-`s03` (both arms) are the ones all three have finished; pi-tuck has also run on `s04`-`s05`.
 
 | compactor | recordings | cuts | median seconds per cut | range (seconds) | context carried after a cut: median (range), tokens |
 |---|---|---|---|---|---|

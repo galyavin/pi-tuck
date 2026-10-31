@@ -34,7 +34,7 @@ const [spec, thinking] = agentSpec.split(":");
 const runtime = await ModelRuntime.create({ authPath: join(process.env.HOME!, ".pi/agent/auth.json"), modelsPath: join(agentDir, "models.json") });
 const model = runtime.getModel(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1));
 if (!model) throw new Error(`no model ${spec}`);
-const WALL_MS = 15 * 60_000;
+const WALL_MS = 15 * 60_000, INDEX_WAIT_MS = 10 * 60_000;
 
 const promptFor = (set: any[]) => [
 	"Before we continue, I need to check your memory of this session. Answer each question below about earlier work in this session. Use your tools if they help you find an answer. Do not modify any files.",
@@ -51,6 +51,7 @@ async function ask(cut: number, set: any[]) {
 	const usesTuck = variant.startsWith("tuck");
 	let handle: any;
 	let activeTools: string[] | undefined;
+	let index: Record<string, unknown> | undefined;
 	const extensionFactories = usesTuck ? [(pi: any) => {
 		const semanticRecall = tuckIndex.createSemanticRecall();
 		return tuckIndex.installCompaction(pi, { semanticRecall }).then((h: any) => {
@@ -59,6 +60,17 @@ async function ask(cut: number, set: any[]) {
 			if (variant === "tuck") pi.on("session_start", async (_e: any, ctx: any) => {
 				await h.setSemanticEnabled(true, ctx);
 				if (warm) await semanticRecall.search("tasks files tests errors", () => memoizedEligibleSources(ctx, undefined, () => {}), undefined, [], undefined).catch(() => {});
+				if (warm) {
+					// Wait for the index to be complete (PREREG-RECALL.md amendment): in a long session pi-tuck indexes in the background as history grows, so a
+					// question is asked against a finished index; a cold start measures the indexer's speed on a shared machine instead.
+					const t0 = Date.now();
+					for (;;) {
+						const s = h.semanticStatus?.()?.local;
+						if (!s || s.indexingComplete || s.state === "unavailable" || Date.now() - t0 > INDEX_WAIT_MS) break;
+						await new Promise(r => setTimeout(r, 1000));
+					}
+					index = { waitedMs: Date.now() - t0, ...(h.semanticStatus?.()?.local ? { state: h.semanticStatus().local.state, coveredUnits: h.semanticStatus().local.coveredUnits, totalUnits: h.semanticStatus().local.totalUnits } : {}) };
+				}
 			});
 		});
 	}] : [];
@@ -89,7 +101,7 @@ async function ask(cut: number, set: any[]) {
 	const semantic = handle?.semanticStatus?.()?.local;
 	session.dispose();
 	await handle?.close?.().catch(() => {});
-	return { answer, ms: Date.now() - started, usage, tools, toolResultChars, error, activeTools, semantic: semantic ? { state: semantic.state, coveredUnits: semantic.coveredUnits, totalUnits: semantic.totalUnits } : undefined, messages: added.length };
+	return { answer, ms: Date.now() - started, usage, tools, toolResultChars, error, activeTools, index, semantic: semantic ? { state: semantic.state, coveredUnits: semantic.coveredUnits, totalUnits: semantic.totalUnits } : undefined, messages: added.length };
 }
 
 mkdirSync(join(outPath, ".."), { recursive: true });

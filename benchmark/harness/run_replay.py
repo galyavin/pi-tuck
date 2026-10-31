@@ -6,7 +6,7 @@ RECORDINGS_DIR holds <name>.jsonl session files. With --collect, finished live s
 running until --expected recordings are done. Slots (parallel jobs) come from --slots-file (JSON {"local": n, "plan": n, "cpu": n}), re-read
 every cycle, so the load on mac-studio can follow the live runs.
 
-Priorities: frontier summaries (cuts:native-frontier) come first, in recording-name order, because the claim is about the best summarizer; frontier
+Priorities: plan-billed summaries (cuts:native-terra, GPT-6.1 Terra; the astra variant was withdrawn, PREREG-TERRA.md) come first, in recording-name order, because the claim is about the best summarizer; frontier
 *agent* sessions (resource "plan-agent") start only once every expected frontier summary exists, spending whatever quota is left."""
 import argparse
 import json
@@ -20,7 +20,7 @@ from pathlib import Path
 BENCH = Path(__file__).resolve().parent.parent
 JITI = str(BENCH.parent / "node_modules" / ".bin" / "jiti")
 REPLAY = str(BENCH / "replay")
-VARIANTS = ["tuck", "tuck-lexical", "native-local", "native-frontier"]
+VARIANTS = ["tuck", "tuck-lexical", "native-local", "native-terra"]
 LOCAL_AGENT, PLAN_AGENT = "mac-studio/main:xhigh", "openai/gpt-6-astra:medium"
 
 
@@ -36,8 +36,10 @@ def jobs_for(rec: Path, out: Path, tuck: str, agents: list[str], extra: str):
     jobs = [(f"{rec.stem}:probes", "cpu", f"{jit}/probes.ts {r} {o}/probes.json {extra}", d / "probes.json", []),
             (f"{rec.stem}:cuts:tuck", "cpu", f"{jit}/cuts.ts {r} {o} --variants tuck --tuck-dir {t} {extra}", d / "cuts-tuck.json", []),
             (f"{rec.stem}:cuts:native-local", "local", f"{jit}/cuts.ts {r} {o} --variants native-local --tuck-dir {t} {extra}", d / "cuts-native-local.json", []),
-            (f"{rec.stem}:cuts:native-frontier", "plan", f"{jit}/cuts.ts {r} {o} --variants native-frontier --tuck-dir {t} {extra}", d / "cuts-native-frontier.json", [])]
+            (f"{rec.stem}:cuts:native-terra", "plan", f"{jit}/cuts.ts {r} {o} --variants native-terra --tuck-dir {t} {extra}", d / "cuts-native-terra.json", [])]
     for agent in agents:
+        if agent == PLAN_AGENT:
+            raise SystemExit("openai/gpt-6-astra was withdrawn by the project owner on 2026-10-31 (PREREG-TERRA.md)")
         for variant in VARIANTS:
             source = "tuck" if variant == "tuck-lexical" else variant
             ans, sc = shlex.quote(str(d / f"answers-{tag(agent)}-{variant}.jsonl")), d / f"scores-{tag(agent)}-{variant}.jsonl"
@@ -63,7 +65,7 @@ def main():
     parser.add_argument("--tuck", required=True)
     parser.add_argument("--collect")
     parser.add_argument("--expected", type=int, default=0)
-    parser.add_argument("--agents", default=f"{LOCAL_AGENT},{PLAN_AGENT}")
+    parser.add_argument("--agents", default=LOCAL_AGENT)
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--slots-file")
     parser.add_argument("--local", type=int, default=1)
@@ -106,7 +108,7 @@ def main():
             if future.done():
                 (done if future.result() else failed).add(name)
                 del running[name]
-        frontier = [n for n in jobs if n.endswith(":cuts:native-frontier")]
+        frontier = [n for n in jobs if n.endswith(":cuts:native-terra")]
         frontier_all_done = len(frontier) >= args.expected and all(n in done for n in frontier)
         busy: dict[str, int] = {}
         for _, (_, res) in running.items():

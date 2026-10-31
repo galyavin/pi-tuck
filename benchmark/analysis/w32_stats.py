@@ -14,6 +14,7 @@ from sessionlog import session_cuts
 
 TASK = re.compile(r"Task (\d+) of \d+")
 REFUSAL = "mandatory context cannot fit"
+ROOM = 16384  # window 32,768 less the 16,384 reply reserve: the most a request may carry without the window being nominal
 
 
 def text_of(content) -> str:
@@ -42,6 +43,42 @@ def summarising_tasks(folder: Path) -> set[int]:
     return found
 
 
+def scan_events(folder: Path):
+    """Per task from the RPC events: tasks where pi-tuck's refusal notice fired, and the largest prompt (input plus cache reads) of any request.
+    A refused run ends in an instant 'aborted' error, so a refusal is read from the notice, not from the stop reason."""
+    path = folder / "events.jsonl"
+    refused, largest, task, idle, carry = set(), {}, 0, False, False
+    if not path.exists():
+        return refused, largest
+    for line in path.read_text().splitlines():
+        if REFUSAL not in line and '"usage"' not in line and "Task " not in line and "agent_" not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        m = e.get("message") or {}
+        if e.get("type") == "agent_settled":
+            idle = True
+        elif e.get("type") == "agent_start":
+            idle = False
+        if e.get("type") == "message_start" and m.get("role") == "user":
+            found = TASK.search(text_of(m.get("content") or ""))
+            task = int(found.group(1)) if found else task
+            if carry:  # the refusal came on the input, before the task's prompt was logged
+                refused.add(task)
+                carry = False
+        elif e.get("type") == "message_end" and m.get("role") == "assistant" and m.get("usage"):
+            u = m["usage"]
+            largest[task] = max(largest.get(task, 0), u["input"] + u.get("cacheRead", 0))
+        elif e.get("type") == "extension_ui_request" and e.get("notifyType") == "error" and REFUSAL in e.get("message", ""):
+            if idle:
+                carry = True
+            else:
+                refused.add(task)
+    return refused, largest
+
+
 def load(folder: Path):
     tasks = {}
     if (folder / "tasks.jsonl").exists():
@@ -50,8 +87,11 @@ def load(folder: Path):
                 t = json.loads(line)
                 tasks[t["index"]] = t
     stats = json.loads((folder / "stats.json").read_text()) if (folder / "stats.json").exists() else None
-    refusals = (folder / "events.jsonl").read_text().count(REFUSAL) if (folder / "events.jsonl").exists() else 0
-    return {"tasks": tasks, "stats": stats, "summarising": summarising_tasks(folder), "cuts": session_cuts(folder), "refusals": refusals}
+    refused, largest = scan_events(folder)
+    sent = lambda t: sum((t.get("usage") or {}).get(k, 0) for k in ("input", "output", "cacheRead")) > 0  # a request that carried tokens went out
+    dead = {k for k in refused if k in tasks and not sent(tasks[k])}  # PREREG-32K addendum: refused before any request was sent
+    return {"tasks": tasks, "stats": stats, "summarising": summarising_tasks(folder), "cuts": session_cuts(folder), "refused": refused, "dead": dead,
+            "over_room": {t for t, n in largest.items() if n > ROOM}, "largest": max(largest.values(), default=0)}
 
 
 def bootstrap(values, boot, rng):
@@ -65,14 +105,17 @@ def compare(data, sessions, base, other, boot, rng):
         a, b = data.get((s, base)), data.get((s, other))
         if not a or not b:
             continue
+        first = min(a["refused"] | b["refused"], default=10**9)  # first task of the chain in which pi-tuck refused, in either arm
         for k in sorted(set(a["tasks"]) & set(b["tasks"])):
             x, y = a["tasks"][k], b["tasks"][k]
-            rows.append({"session": s, "k": k, "ra": int(bool(x["grade"].get("resolved"))), "rb": int(bool(y["grade"].get("resolved"))), "ta": x["turns"], "tb": y["turns"],
+            rows.append({"session": s, "k": k, "pre": k < first, "lost": k >= first and first < 10**9, "ra": int(bool(x["grade"].get("resolved"))), "rb": int(bool(y["grade"].get("resolved"))), "ta": x["turns"], "tb": y["turns"],
                          "in_a": k in a["summarising"], "in_b": k in b["summarising"]})
     print(f"\n=== {other} vs {base}: {len(rows)} paired tasks ===")
     subsets = {"all paired tasks": rows, "S: a cut summarised the task in either arm": [r for r in rows if r["in_a"] or r["in_b"]],
                f"in {base} only": [r for r in rows if r["in_a"] and not r["in_b"]], f"in {other} only": [r for r in rows if r["in_b"] and not r["in_a"]],
-               "in both": [r for r in rows if r["in_a"] and r["in_b"]]}
+               "in both": [r for r in rows if r["in_a"] and r["in_b"]],
+               "secondary, added after t01 and t02 were read: tasks before the chain's first pi-tuck refusal": [r for r in rows if r["pre"]],
+               "secondary: tasks from the chain's first pi-tuck refusal on": [r for r in rows if r["lost"]]}
     for label, sub in subsets.items():
         if not sub:
             print(f"  {label}: none")
@@ -114,13 +157,16 @@ def main():
         cuts = [c for d in mine for c in d["cuts"]]
         cost = sum((d["stats"] or {}).get("cost") or 0 for d in mine if d["stats"] and not isinstance(d["stats"].get("cost"), dict))
         tokens = [d["stats"]["tokens"]["total"] for d in mine if d["stats"]]
-        print(f"  arm {arm}: {len(mine)} sessions, {len(tasks)} tasks, resolved {sum(1 for t in tasks if t['grade'].get('resolved'))}, stopped by cap or provider error {capped}, "
+        print(f"  arm {arm}: {len(mine)} sessions, {len(tasks)} tasks, resolved {sum(1 for t in tasks if t['grade'].get('resolved'))}, stopped by cap or ended in an error stop (provider error or pi-tuck refusal) {capped}, "
               f"turns/task mean {statistics.fmean(t['turns'] for t in tasks) if tasks else 0:.1f}, cuts {len(cuts)} ({len(cuts) / max(1, len(mine)):.1f}/session), "
-              f"tasks with a cut summarising part of them {sum(len(d['summarising']) for d in mine)}, refusals {sum(d['refusals'] for d in mine)}, "
+              f"tasks with a cut summarising part of them {sum(len(d['summarising']) for d in mine)}, tasks refused by pi-tuck {sum(len(d['refused']) for d in mine)} (dead, refused before any request: {sum(len(d['dead']) for d in mine)}; refused mid-run: {sum(len(d['refused'] - d['dead']) for d in mine)}), "
+              f"tasks with a request over the {ROOM:,}-token room {sum(len(d['over_room']) for d in mine)}, largest prompt {max((d['largest'] for d in mine), default=0):,}, "
               f"tokens/session {statistics.fmean(tokens) if tokens else 0:,.0f}, cost ${cost:.2f}")
     if "A" in arms:
         for other in [a for a in arms if a != "A"]:
             compare(data, sessions, "A", other, args.boot, rng)
+        if "B" in arms and "M" in arms:
+            compare(data, sessions, "M", "B", args.boot, rng)
         if "B" in arms and "T" in arms:
             compare(data, sessions, "B", "T", args.boot, rng)
 

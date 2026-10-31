@@ -17,7 +17,7 @@ export async function complete(spec: string, text: string, label: string): Promi
 		const response: any = await runtime.completeSimple(model, { messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }] }, { reasoning: thinking as any } as any);
 		if (response.stopReason === "error" && attempt < 5) { await new Promise(r => setTimeout(r, 5000 * (attempt + 1))); continue; }
 		mkdirSync(dirname(SPEND), { recursive: true });
-		appendFileSync(SPEND, JSON.stringify({ label, spec, cost: response.usage?.cost?.total ?? 0, input: response.usage?.input, output: response.usage?.output, at: new Date().toISOString() }) + "\n");
+		appendFileSync(SPEND, JSON.stringify({ label, spec, responseId: response.responseId, cost: response.usage?.cost?.total ?? 0, input: response.usage?.input, output: response.usage?.output, at: new Date().toISOString() }) + "\n");
 		return response.content.map((b: any) => b.type === "text" ? b.text : "").join("");
 	}
 }

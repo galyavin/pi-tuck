@@ -37,7 +37,8 @@ def grade(instance_id: str, patch: str) -> dict:
             run = subprocess.run(["docker", "exec", "-i", name, "bash", "-s"], input=spec.eval_script, capture_output=True, text=True, timeout=EVAL_TIMEOUT)
             log = run.stdout + run.stderr
         except subprocess.TimeoutExpired as error:
-            log = (error.stdout or "") + "\nTESTS_TIMEOUT"
+            partial = error.stdout or ""  # TimeoutExpired carries bytes even when text=True was asked for
+            log = (partial.decode(errors="replace") if isinstance(partial, bytes) else partial) + "\nTESTS_TIMEOUT"
         with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
             handle.write(log)
         report = get_eval_report(spec, {"instance_id": instance_id, "model_name_or_path": "pi", "model_patch": patch}, handle.name, True)[instance_id]

@@ -10,7 +10,8 @@ from collections import defaultdict
 from pathlib import Path
 
 SUT = "tuck"
-LLMS = ["native-frontier", "native-local"]
+LLMS = ["native-terra", "native-local"]
+PARTIAL = False
 Z_ALPHA, Z_BETA = 1.645, 0.842
 
 
@@ -71,11 +72,21 @@ def bootstrap(by_rec, boot, rng):
     return draws
 
 
+def chain_bootstrap(by_rec, boot, rng):
+    """PREREG-CLUSTER.md: the robustness bootstrap. The A and B recordings of one chain hold the same tasks, so the chain is resampled with its recordings together."""
+    chains = defaultdict(list)
+    for rec in by_rec:
+        chains[rec.split("-")[0]].append(rec)
+    keys = list(chains)
+    draws = sorted(diff(by_rec, [r for c in (rng.choice(keys) for _ in keys) for r in chains[c]]) for _ in range(boot))
+    return draws
+
+
 def report(rows, cuts, evidence, margin, boot, seed):
     rows = [r for r in rows if not r["failed"] and usable(r, cuts, evidence, r["variant"])]
     rng = random.Random(seed)
     agents = sorted({r["agent"] for r in rows})
-    verdicts = {}
+    verdicts, robust = {}, {}
     for agent in agents:
         print(f"\n=== agent {agent} ===")
         for variant in [SUT, "tuck-lexical", *LLMS]:
@@ -102,15 +113,17 @@ def report(rows, cuts, evidence, margin, boot, seed):
             d = diff(by_rec, list(by_rec))
             draws = bootstrap(by_rec, boot, rng)
             lower, upper = draws[int(0.05 * boot)], draws[int(0.95 * boot)]
+            lower_c = chain_bootstrap(by_rec, boot, rng)[int(0.05 * boot)]
             discord = sum(1 for v in by_rec.values() for x, y, _ in v if x != y) / n
             se = statistics.pstdev(draws) / 100
             target = margin / 100 / (Z_ALPHA + Z_BETA)
             need = n * (se / target) ** 2
             mark = "  <- comparator" if llm == best else ""
-            print(f"  {SUT} - {llm}: {d:+.1f} pts, one-sided 95% lower bound {lower:+.1f}; paired disagreement {100 * discord:.0f}% of {n} probes; "
+            print(f"  {SUT} - {llm}: {d:+.1f} pts, one-sided 95% lower bound {lower:+.1f} (chain-clustered robustness bound {lower_c:+.1f}); paired disagreement {100 * discord:.0f}% of {n} probes; "
                   f"probes needed for a {margin}-pt bound at 80% power (cluster-aware): {need:,.0f}{mark}")
             if llm == best:
                 verdicts[agent] = lower > -margin
+                robust[agent] = lower_c > -margin
         mech = [r for r in rows if r["agent"] == agent and r["type"] != "next_step"]
         for llm in [best]:
             by_rec = defaultdict(list)
@@ -137,10 +150,12 @@ def report(rows, cuts, evidence, margin, boot, seed):
                 sel = [r for r in rows if r["agent"] == agent and r["variant"] == variant and r["cut"] == k]
                 cells.append(f"{100 * sum(r['correct'] for r in sel) / len(sel):5.1f} (n={len(sel)})" if sel else "  n/a")
             print(f"    cut {k}: {' / '.join(cells)}")
-    if verdicts:
+    if verdicts and not PARTIAL:
         passed = all(verdicts.values())
         print(f"\nCLAIM 1 ({SUT} no more than {margin} pts below the best LLM summary, one-sided 95%): "
               + ("SUPPORTED" if passed else "NOT SUPPORTED") + "  " + json.dumps(verdicts))
+        same = all(verdicts[a] == robust[a] for a in verdicts)
+        print("  chain-clustered robustness bound (PREREG-CLUSTER.md): " + ("agrees with the registered bound on clearing the margin  " if same else "DISAGREES with the registered bound on clearing the margin  ") + json.dumps(robust))
 
 
 def cut_tables(cuts):
@@ -166,8 +181,15 @@ if __name__ == "__main__":
     parser.add_argument("--boot", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--sut", default="tuck", help="the pi-tuck variant under test, e.g. tuck-lean")
+    parser.add_argument("--llms", help="comma-separated LLM compactor variants, default native-terra,native-local")
+    parser.add_argument("--partial", action="store_true", help="print a labelled partial view and no claim line (e.g. the withdrawn astra recordings)")
     args = parser.parse_args()
     SUT = args.sut
+    if args.llms:
+        LLMS[:] = args.llms.split(",")
+    PARTIAL = args.partial
+    if PARTIAL:
+        print("PARTIAL VIEW, NOT A TEST: " + ", ".join(LLMS))
     rows, cuts, evidence = load(Path(args.root))
     report(rows, cuts, evidence, args.margin, args.boot, args.seed)
     cut_tables(cuts)
