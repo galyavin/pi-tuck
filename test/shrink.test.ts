@@ -67,7 +67,7 @@ test('age grades the clipping: older assistant text is never longer than newer, 
 	const replies = textBlocks(S.blocks, 'assistant');
 	for (const fraction of [0.97, 0.7, 0.45, 0.25, 0.15]) {
 		const r = shrinkDialogue(S.input, Math.floor(S.whole.length * fraction));
-		expect(['A1', 'A2', 'A3', 'B'], `${fraction}: ${r.step}`).toContain(r.step);
+		expect(['A1', 'A2', 'A3', 'B', 'C1', 'C2', 'C3', 'D'], `${fraction}: ${r.step}`).toContain(r.step);
 		const records = kept(recordsOf(r.text), 'assistant');
 		const retained = replies.map(b => records.get(b.sourceIndex!) ?? 0);
 		for (let i = 1; i < retained.length; i++) expect(retained[i]!, `${fraction} ${r.step} #${i}`).toBeGreaterThanOrEqual(retained[i - 1]!);
@@ -305,7 +305,7 @@ test('random sessions: every step renders exactly the length it computed, within
 		}
 	}
 	expect(checked).toBeGreaterThan(500);
-	expect([...steps]).toEqual(expect.arrayContaining(['whole', 'A1', 'B', 'none']));
+	expect([...steps]).toEqual(expect.arrayContaining(['whole', 'A1', 'C1', 'D', 'none']));
 });
 
 test('a clip that keeps no text renders nothing: its unit joins the one omission notice instead of carrying a notice of its own', () => {
@@ -333,5 +333,22 @@ test('a clip that keeps no text renders nothing: its unit joins the one omission
 		expect(whole_ + (omission(records, 'assistant')?.count ?? 0), `limit ${limit}`).toBe(40);
 		// Users are never sacrificed while assistant text could still go.
 		if (whole_ === 0 && rank(shrunk.step) <= rank('B')) expect(kept(records, 'user').size).toBe(40);
+	}
+});
+
+test('when prompts alone would fill the allowance, the newest assistant text within a third of it is kept', () => {
+	// Prompts that fit only if every assistant text goes: B may drop older assistant text, but the newest third stays and users give way.
+	const many = dialogue({ turns: 60, user: 12, assistant: 6 });
+	const usersOnly = recordsOf(many.whole).filter(r => r.kind === 'excerpt' && r.role === 'user').reduce((n, r) => n + JSON.stringify(r).length + 1, 0);
+	for (const limit of [Math.floor(usersOnly * 1.05), Math.floor(usersOnly * 0.9), Math.floor(usersOnly * 0.6)]) {
+		const shrunk = shrinkDialogue(many.input, limit);
+		expect(rank(shrunk.step), `limit ${limit}`).toBeGreaterThanOrEqual(rank('C1'));
+		const records = recordsOf(shrunk.text);
+		const assistant = [...kept(records, 'assistant').keys()];
+		expect(assistant.length, `limit ${limit}`).toBeGreaterThan(0);
+		// They are the newest: every assistant source kept is later than every assistant source omitted.
+		const all = textBlocks(many.blocks, 'assistant').map(b => b.sourceIndex!);
+		const omitted = all.filter(s => !assistant.includes(s));
+		expect(Math.min(...assistant), `limit ${limit}`).toBeGreaterThan(Math.max(...omitted));
 	}
 });

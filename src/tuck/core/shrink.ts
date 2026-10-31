@@ -168,7 +168,7 @@ export const wholeDialogue = (input: DialogueInput): string => {
 /**
  * The same dialogue shrunk until its summary text is at most `limit` characters, oldest first. The first configuration that fits wins:
  *   A. the newest k assistant units whole, the older ones clipped to tier 1, 2, 3 (the largest k that fits, for each tier in turn);
- *   B. every assistant unit at tier 3, the oldest d dropped;
+ *   B. every assistant unit at tier 3, the oldest d dropped, but never the newest that fit a third of the limit;
  *   C. the newest assistant units that fit a third of the limit at tier 3, the rest dropped; then the oldest u user units clipped to tier 1, 2, 3;
  *   D. every user unit at tier 3, the oldest dropped;
  *   E. the oldest notices dropped, then the oldest of the remaining assistant units.
@@ -193,11 +193,12 @@ export const shrinkDialogue = (input: DialogueInput, limit: number): Shrunk => {
   if (hit) return hit;
   for (const t of tiers) for (let k = assistant.n; k >= 0; k--)
     if (hit = found(`A${t}`, { user: WHOLE, assistant: { drop: 0, tier: t, end: assistant.n - k }, notice: clipped })) return hit;
-  for (let d = 0; d <= assistant.n; d++)
-    if (hit = found("B", { user: WHOLE, assistant: { drop: d, tier: 3, end: assistant.n }, notice: clipped })) return hit;
-  // From here users give way, and the assistant keeps only its newest units that fit a third of the limit.
+  // The newest assistant units that fit a third of the limit at tier 3 are kept until users have given way: B drops older ones only.
   let kept = 0;
   while (kept < assistant.n && assistant.sum(3)[assistant.n]! - assistant.sum(3)[kept]! > limit / 3) kept++;
+  for (let d = 0; d <= kept; d++)
+    if (hit = found("B", { user: WHOLE, assistant: { drop: d, tier: 3, end: assistant.n }, notice: clipped })) return hit;
+  // From here users give way, and the assistant keeps only that recent third.
   const recent: Setting = { drop: kept, tier: 3, end: assistant.n };
   for (const t of tiers) for (let u = 0; u <= user.n; u++)
     if (hit = found(`C${t}`, { user: { drop: 0, tier: t, end: u }, assistant: recent, notice: clipped })) return hit;
