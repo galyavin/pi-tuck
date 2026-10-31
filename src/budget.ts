@@ -16,8 +16,17 @@ export interface ToolShape { name: string; description: string; parameters: unkn
 
 /** Triggers fire this fraction of the room early. The margin absorbs request growth a boundary cannot see; it never enters the calibration factor. */
 export const TRIGGER_MARGIN_FRACTION = 0.02;
-/** The limit a cut is triggered at and preferably planned to; the exact room stays the limit of every throw and fault. */
-export const bandOf = (room: number): number => room - Math.ceil(Math.max(0, room) * TRIGGER_MARGIN_FRACTION);
+/** Whether `value` is a cut point: a fraction of the room above 0 and at most 1. */
+export const validCutAt = (value: unknown): value is number => typeof value === "number" && value > 0 && value <= 1;
+/**
+ * The one owner of the band: the limit a cut is triggered at and preferably planned to. It is the room less the margin, or the cut point
+ * `cutAt` (a fraction of the room) when that is lower. The exact room stays the limit of every throw, fault and the complete-context guard,
+ * whatever the cut point. With `cutAt` 1 the band is the room less the margin alone.
+ */
+export const bandOf = (room: number, cutAt = 1): number => {
+	const positive = Math.max(0, room);
+	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), Math.floor(positive * cutAt));
+};
 
 /** The APIs whose request converter (pi-ai openai-responses-shared) sends each signed thinking block back as an input reasoning item. */
 const REPLAYING_APIS: ReadonlySet<string> = new Set(["openai-responses", "azure-openai-responses", "openai-codex-responses"]);
@@ -105,7 +114,7 @@ export interface CutInput<D extends object = {}> {
 export type Verdict<D extends object = {}> = Exclude<Decision<D>, { kind: "defer" }>;
 /**
  * Rule 4. The exact room is planned first. When its plan already lands below the band it is taken as it is (target "room"): it keeps the
- * room plan's content exactly, because every allowance of the planner is derived from the reserve and the band's is 2% smaller. Only
+ * room plan's content exactly, because every allowance of the planner is derived from the reserve and the band's is smaller. Only
  * otherwise is the band planned. Inside the band a cut is opportunistic, so a failed plan is never a fault and never falls back to the
  * room (a cut that still lands in the band would trigger again every round); the exact room would cut nothing there, so a band cut is
  * taken only when the room can plan a cut too and with the same mode (a lossy view the room could not even plan is a quality change with

@@ -59,6 +59,8 @@ with a window of 32k tokens or less, lower the reserve for that model in Pi's `s
 { "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 4096 } } } }
 ```
 
+**Cut point.** To cut earlier and leave less, set `"cutAt"` in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`) to a number above 0 and at most 1, default 1: `{ "cutAt": 0.6 }` cuts once a request passes 60% of the input room, a lower value cuts earlier and smaller, and the guard is unaffected, because the whole room still decides which request is refused.
+
 ## Semantic search
 
 Semantic search is on by default and runs entirely on your Mac: an embedding model,

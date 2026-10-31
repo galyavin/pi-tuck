@@ -5,7 +5,7 @@ import { exportSource } from "./source-export.js";
 import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
-import { bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart,
+import { bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -83,6 +83,10 @@ export interface CompactionOptions {
 	/** Optional estimated complete-input ceiling, separate from physical output reservation.
 	 * The host owns final serialization/transport counting; this is not an exact wire-token cap. */
 	activeInputTokens?: number | ((ctx: ExtensionContext) => number);
+	/** The cut point: a fraction of the input room, above 0 and at most 1 (default 1). A cut is triggered at, and preferably planned to, the band,
+	 * which is the room less 2% of it, or this fraction of the room when that is lower; a lower value cuts earlier and leaves less. The exact room
+	 * stays the limit of every throw, fault and the complete-context guard. Anything else is rejected when the compactor is installed. */
+	cutAt?: number;
 	/** The response reserve: the input room is the context window less this. By default the room never exceeds the window less the model's
 	 * catalogue maximum output, because a transport may omit the output cap and the reply can then grow to that maximum. A host that knows its
 	 * transport's behavior declares an exact reserve with `responseExact: true`, and the room is then the window less `response` exactly. */
@@ -101,6 +105,8 @@ export interface CompactionOptions {
 }
 
 export async function installCompaction(pi: ExtensionAPI, options: CompactionOptions = {}) {
+    const cutAt = options.cutAt ?? 1;
+    if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
     const semantic = options.semanticRecall ?? createSemanticRecall();
     let semanticTransition: Promise<void> = Promise.resolve();
     let semanticRequest = 0;
@@ -115,7 +121,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (found) { recorder.capture("observed-entry", "current-native-branch-memory-not-durable", { entryId: found.id, diagnosticReceiptId: proposalId, details: found.type === "compaction" ? found.details : undefined }); recorder.cut(); proposalId = undefined; }
     });
     const captureDraft = (draft: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>, ctx: ExtensionContext, reserve: number, reason: string, tokensBefore: number, retainCurrentInput: boolean, operatorManual: boolean, previousSummary?: string, budget?: { response: number; host: number; mandatory: number; target: Target; margin: number }) => recorder.measureInline(() => {
-        const attached = attachReceipt(draft, reason, reserve, ctx.model?.contextWindow ?? 0, { responseReserveTokens: budget?.response, hostInputTokens: budget?.host, mandatoryInputTokens: budget?.mandatory, target: budget?.target, triggerMarginTokens: budget?.margin, calibrationFactor: factor, calibrationWindow: [...ratios], calibrationIdentity: identity, activeInputCeilingTokens: lastCeiling });
+        const attached = attachReceipt(draft, reason, reserve, ctx.model?.contextWindow ?? 0, { responseReserveTokens: budget?.response, hostInputTokens: budget?.host, mandatoryInputTokens: budget?.mandatory, target: budget?.target, triggerMarginTokens: budget?.margin, ...(cutAt === 1 ? {} : { cutAt }), calibrationFactor: factor, calibrationWindow: [...ratios], calibrationIdentity: identity, activeInputCeilingTokens: lastCeiling });
         proposalId = receiptId(attached);
         if (recorder.enabled) { try {
             const filtered = permittedEntries(ctx.sessionManager.getEntries(), options.recallPolicy);
@@ -186,7 +192,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The cut planner's raw reserve for the target limit, on the same factor as every other consumer.
     const planReserve = (target: Target, room: number, mandatory: number, ctx: ExtensionContext) => {
         identityFor(ctx);
-        return planningReserve(ctx.model?.contextWindow ?? 0, target === "band" ? bandOf(room) : room, factor, mandatory);
+        return planningReserve(ctx.model?.contextWindow ?? 0, target === "band" ? bandOf(room, cutAt) : room, factor, mandatory);
     };
     pi.on("message_end", (event, ctx) => {
         if (event.message.role !== "assistant") return;
@@ -237,10 +243,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             throw new Error("Invalid active-input token ceiling");
         return Math.min((ctx.model?.contextWindow ?? 0) - response, ceiling ?? Infinity);
     };
-    // The exact room, and the band a cut is triggered at (budget.ts); every throw and every fault uses the exact room.
+    // The exact room, and the band a cut is triggered at (budget.ts, from this session's cutAt); every throw and every fault uses the exact room.
     const limits = (ctx: ExtensionContext) => {
         const { response } = requestReserve(ctx), room = inputRoom(response, ctx);
-        return { response, room, band: bandOf(room) };
+        return { response, room, band: bandOf(room, cutAt) };
     };
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).

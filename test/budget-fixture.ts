@@ -310,7 +310,7 @@ export async function scenario(options: Options) {
 
 /** The settings a cut recorded about its own arithmetic (diagnostics.ts), and the view and mode of its summary. */
 export function receiptOf(entry: Extract<SessionEntry, { type: 'compaction' }>) {
- const details = entry.details as { tokensAfter: number; view: string; mode: string; diagnosticReceipt: { reason: string; settings: { draftReservedTokens: number; hostInputTokens?: number; mandatoryInputTokens?: number; target?: 'band' | 'room'; triggerMarginTokens?: number; responseReserveTokens?: number; calibrationFactor?: number; calibrationWindow?: number[]; calibrationIdentity?: string } } };
+ const details = entry.details as { tokensAfter: number; view: string; mode: string; diagnosticReceipt: { reason: string; settings: { draftReservedTokens: number; hostInputTokens?: number; mandatoryInputTokens?: number; target?: 'band' | 'room'; triggerMarginTokens?: number; cutAt?: number; responseReserveTokens?: number; calibrationFactor?: number; calibrationWindow?: number[]; calibrationIdentity?: string } } };
  return { ...details.diagnosticReceipt.settings, reason: details.diagnosticReceipt.reason, tokensAfter: details.tokensAfter, view: details.view, mode: details.mode };
 }
 

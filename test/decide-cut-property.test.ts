@@ -18,12 +18,12 @@ interface Case {
 	room: number; band0: number; band: number; fits: (t: number, l: number) => boolean; reach: (limit: number) => number;
 	mandatory: number; before: number; floor: number | undefined; costs: number[]; trims: number[]; seed: number; blocked: boolean;
 }
-function makeCase(seed: number): Case {
+function makeCase(seed: number, cutAt = 1): Case {
 	const rng = prng(seed), int = (n: number) => Math.floor(rng() * n);
 	const factor = FACTORS[int(FACTORS.length)]!;
 	const room = 2000 + int(300000);
 	const fits = (t: number, l: number) => Math.ceil(t * factor) < l;
-	const band = bandOf(room);
+	const band = bandOf(room, cutAt);
 	// The largest raw token count that fits a limit.
 	const reach = (limit: number) => { let t = Math.floor(limit / factor) + 2; while (t > 0 && !fits(t, limit)) t--; return t; };
 	const mandatory = rng() < 0.08 ? reach(room) - int(5) + 1 : int(Math.floor(room * (rng() < 0.7 ? 0.3 : 1.1)));
@@ -66,12 +66,16 @@ function planner(c: Case, band: number, calls: Target[]) {
 const decide = (c: Case, band: number, calls: Target[] = []) =>
 	decideCut({ total: c.before + c.mandatory, mandatory: c.mandatory, before: c.before, room: c.room, band, fits: c.fits, plan: planner(c, band, calls), unreduced: 'did not reduce' });
 
-test('monotone safety: a margin adds no fault, changes no view, every cut lands below the room, an opportunistic cut below the band, and nothing thrashes', () => {
+// The properties hold for any cut point: none of them uses the width of the band, only that the band is below the room. The default cut
+// point 1 leaves the band 2% under the room; 0.6 puts it 40% under, so the band cases lie well apart from the room cases.
+for (const cutAt of [1, 0.6]) {
+const label = cutAt === 1 ? '' : ` (cut point ${cutAt})`;
+test(`monotone safety: a margin adds no fault, changes no view, every cut lands below the room, an opportunistic cut below the band, and nothing thrashes${label}`, () => {
 	const kinds: Record<string, number> = { none: 0, defer: 0, cut: 0, fault: 0 };
 	const cuts: Record<string, number> = { opportunistic: 0, band: 0, fallback: 0, other: 0, declined: 0, declinedNoRoom: 0, forcedNoRoom: 0, roomFirstInBand: 0, roomFirstDue: 0 };
 	let cases = 0;
 	for (let seed = 1; seed <= 24000; seed++) {
-		const c = makeCase(seed);
+		const c = makeCase(seed, cutAt);
 		const total = c.before + c.mandatory;
 		const withMargin = decide(c, c.band, []);
 		const withoutMargin = decide(c, c.band0, []);
@@ -137,12 +141,13 @@ test('monotone safety: a margin adds no fault, changes no view, every cut lands 
 	for (const kind of Object.keys(cuts)) expect(cuts[kind], stats).toBeGreaterThan(100);
 });
 
-test('the cases reach what a margin on the triggers alone would turn into faults, so the property above is not vacuous', () => {
+test(`the cases reach what a margin on the triggers alone would turn into faults, so the property above is not vacuous${label}`, () => {
 	// Inside the band, with mandatory input that fits and no cut that reaches the band: a naive margin would fault; this procedure does nothing.
 	let naive = 0;
 	for (let seed = 1; seed <= 6000; seed++) {
-		const c = makeCase(seed), total = c.before + c.mandatory;
+		const c = makeCase(seed, cutAt), total = c.before + c.mandatory;
 		if (c.fits(total, c.room) && !c.fits(total, c.band) && c.fits(c.mandatory, c.room) && !planner(c, c.band, [])('band').draft) naive++;
 	}
 	expect(naive).toBeGreaterThan(100);
 });
+}
