@@ -525,16 +525,16 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             };
             let decision = decide();
             // Only a request that would be refused is clipped. A fresh result is kept whole by every cut (it has not reached the model yet), so
-            // one larger than the room refuses the run. In its place the request carries its head and tail, at most half of what the room
-            // leaves the conversation, and a tuck_recall locator to the rest. When even that is refused the refusal stands.
+            // a round larger than the room refuses the run. In their place the request carries the results' heads and tails, together at most
+            // half of what the room leaves the conversation, each with a tuck_recall locator to its rest. When even that is refused the refusal stands.
             if (decision.kind === "fault") {
                 const branch = ctx.sessionManager.getBranch();
                 const entryIdOf = (toolCallId: string) => branch.findLast(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === toolCallId)?.id;
-                const clip = clipFor(event.toolResults, entryIdOf, Math.floor((room - mandatory) / 2));
-                if (clip) {
-                    clips.set(clip.toolCallId, clip);
+                const round = clipFor(event.toolResults, entryIdOf, Math.floor((room - mandatory) / 2));
+                if (round.length) {
+                    for (const clip of round) clips.set(clip.toolCallId, clip);
                     const clippedDecision = decide();
-                    if (clippedDecision.kind === "fault") clips.delete(clip.toolCallId); else decision = clippedDecision;
+                    if (clippedDecision.kind === "fault") for (const clip of round) clips.delete(clip.toolCallId); else decision = clippedDecision;
                 }
             }
             const before = measure(saved);

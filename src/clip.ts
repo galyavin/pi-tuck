@@ -16,19 +16,29 @@ const clipped = (text: string, keep: number, entryId: string): ToolResultMessage
         `tuck_recall {"entryId":"${entryId}","offset":${head}}, up to ${MAX_RECALL_CHARACTERS} characters a call]\n` + text.slice(text.length - tail) }];
 };
 
-/** The largest of the round's text results, clipped to the most head and tail characters that keep it within `budget` tokens. None when
- * it already fits, or when not even the locator alone fits. Deterministic: the same result and budget always clip the same way. */
-export function clipFor(results: readonly ToolResultMessage[], entryIdOf: (toolCallId: string) => string | undefined, budget: number): Clip | undefined {
+/** The round's text results within `budget` tokens together: each result smaller than an equal share of what is left stays whole, and the
+ * rest are clipped to that share, keeping the most head and tail characters that fit it. None when the round already fits, or when a share
+ * cannot hold even the locator. A round of one result gets the whole budget. Deterministic: the same round and budget always clip the same way. */
+export function clipFor(results: readonly ToolResultMessage[], entryIdOf: (toolCallId: string) => string | undefined, budget: number): Clip[] {
     const tokens = (message: ToolResultMessage) => conversationTokens([message] as Messages);
-    const largest = results.filter(result => textOf(result) !== undefined).reduce<ToolResultMessage | undefined>((most, result) =>
-        !most || tokens(result) > tokens(most) ? result : most, undefined);
-    const entryId = largest && entryIdOf(largest.toolCallId);
-    if (!largest || !entryId || tokens(largest) <= budget) return undefined;
-    const text = textOf(largest)!, fits = (keep: number) => tokens({ ...largest, content: clipped(text, keep, entryId) }) <= budget;
-    if (!fits(0)) return undefined;
-    let low = 0, high = text.length;
-    while (low < high) { const mid = Math.ceil((low + high) / 2); if (fits(mid)) low = mid; else high = mid - 1; }
-    return { toolCallId: largest.toolCallId, content: clipped(text, low, entryId) };
+    const round = results.flatMap(result => { const text = textOf(result), entryId = entryIdOf(result.toolCallId);
+        return text === undefined || !entryId ? [] : [{ result, text, entryId, size: tokens(result) }]; })
+        .sort((a, b) => a.size - b.size);
+    if (round.reduce((sum, item) => sum + item.size, 0) <= budget) return [];
+    const clips: Clip[] = [];
+    let left = budget;
+    for (const [at, { result, text, entryId, size }] of round.entries()) {
+        const share = Math.floor(left / (round.length - at));
+        if (size <= share) { left -= size; continue; }
+        const fits = (keep: number) => tokens({ ...result, content: clipped(text, keep, entryId) }) <= share;
+        if (!fits(0)) return [];
+        let low = 0, high = text.length;
+        while (low < high) { const mid = Math.ceil((low + high) / 2); if (fits(mid)) low = mid; else high = mid - 1; }
+        const content = clipped(text, low, entryId);
+        clips.push({ toolCallId: result.toolCallId, content });
+        left -= tokens({ ...result, content });
+    }
+    return clips;
 }
 
 /** The messages with each clipped result replaced; the same array when nothing is clipped. */
