@@ -61,7 +61,7 @@ export async function drive(session: SessionManager, options: Partial<Compaction
   registerCommand: () => {}, registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [] } as unknown as ExtensionAPI;
  const errors: unknown[] = [];
  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 } });
- const handle = await installCompaction(pi, { settings, ...EXACT_RESERVE, fail: error => errors.push(error), ...options });
+ const handle = await installCompaction(pi, { cutAt: 1, settings, ...EXACT_RESERVE, fail: error => errors.push(error), ...options });
  const ctx = { model: MODEL, cwd: '/x', abort: vi.fn(), getSystemPrompt: () => 'system', ui: { notify: () => {} }, sessionManager: session } as unknown as Drive['ctx'];
  const emit = async (name: string, event: unknown) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
  return { errors, ctx, close: () => handle.close(),

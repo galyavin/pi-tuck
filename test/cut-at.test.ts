@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, expectParity, harness, nonSystem, receiptOf, scenario } from './budget-fixture';
-import { TRIGGER_MARGIN_FRACTION, bandOf, decideCut, validCutAt, type Plan } from '../src/budget';
+import { DEFAULT_CUT_AT, TRIGGER_MARGIN_FRACTION, bandOf, decideCut, validCutAt, type Plan } from '../src/budget';
 import { installCompaction } from '../src/compaction';
 
 // The cut point `cutAt` (F): a cut is triggered at, and preferably planned to, the band min(room - margin, floor(F * room)). The exact room
@@ -323,7 +323,20 @@ test('receipts: cutAt is recorded when it is not 1, and a default receipt is as 
 	expect(receiptOf(standard.entries[0]!).triggerMarginTokens).toBe(2880);
 });
 
-test('cutAt 1 is the default: the same requests give the same decisions, receipts and guard counts', async () => {
+test('the default cut point is 0.6: with no cutAt a request past 60% of the room is cut, and its receipt records the cut point', async () => {
+	expect(DEFAULT_CUT_AT).toBe(0.6);
+	for (const at of ['prompt', 'tool'] as const) {
+		const lean = bandOf(ROOM, DEFAULT_CUT_AT);
+		const below = await scenario({ at, complete: lean - 1, host: HOST, cutAtDefault: true });
+		expect(below.cuts, below.probe).toBe(0);
+		const inside = await scenario({ at, complete: Math.floor((lean + BAND) / 2), host: HOST, cutAtDefault: true });
+		expect(inside.cuts, inside.probe).toBe(1);
+		expect(inside.entries.map(receiptOf)[0]?.cutAt, inside.probe).toBe(DEFAULT_CUT_AT);
+		expect(inside.faults, inside.probe).toEqual([]);
+	}
+});
+
+test('cutAt 1 restores the earlier cut point: the same requests give the same decisions, receipts and guard counts as the harness pin', async () => {
 	for (const at of ['prompt', 'tool'] as const) for (const d of [-1, 0, 1, 500, 5000]) for (const base of [BAND, ROOM]) {
 		const complete = base + d;
 		if (complete >= ROOM + 1500) continue;

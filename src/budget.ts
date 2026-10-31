@@ -23,6 +23,9 @@ export const validCutAt = (value: unknown): value is number => typeof value === 
  * `cutAt` (a fraction of the room) when that is lower. The exact room stays the limit of every throw, fault and the complete-context guard,
  * whatever the cut point. With `cutAt` 1 the band is the room less the margin alone.
  */
+/** The default cut point: a cut once a request passes 60% of the room. Measured against 1 with paired replays (no answer loss) and billed
+ * input under automatic and explicit prompt caching (about 17% less at 128k, 10-14% at 32k). */
+export const DEFAULT_CUT_AT = 0.6;
 export const bandOf = (room: number, cutAt = 1): number => {
 	const positive = Math.max(0, room);
 	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), Math.floor(positive * cutAt));

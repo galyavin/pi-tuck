@@ -8,8 +8,13 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 ### Added
 
 - `"cutAt"` in `pi-tuck.json` (and the `cutAt` option of `installCompaction`) sets the fraction of the input room at which a cut is triggered and
-  planned: a number above 0 and at most 1, 1 by default, which changes nothing. The room still decides every refusal. A cut's receipt records
-  `cutAt` when it is not 1.
+  planned: a number above 0 and at most 1. The room still decides every refusal. A cut's receipt records `cutAt` when it is not 1.
+
+### Changed
+
+- Cuts happen once a request passes 60% of the input room (`cutAt` 0.6) instead of just under the whole room. Each cut leaves room to grow,
+  so fewer tokens are carried per request: in paired replays against cutting at the full room, answers held and billed input fell about 17%
+  at a 128k window and 10-14% at 32k, with prompt caching automatic or by explicit breakpoints. `{"cutAt": 1}` restores the earlier point.
 
 ## [1.0.2] - 2026-10-31
 

@@ -12,7 +12,7 @@ async function harness() {
 	} as unknown as ExtensionAPI;
 	const errors: unknown[] = [];
 	const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 0 } });
-	const handle = await installCompaction(pi, { settings, requestReserve: () => ({ response: 100 }), fail: error => errors.push(error) });
+	const handle = await installCompaction(pi, { cutAt: 1, settings, requestReserve: () => ({ response: 100 }), fail: error => errors.push(error) });
 	const notices: string[] = [];
 	const context = (model: unknown) => ({
 		model, cwd: '/x', signal: undefined, isIdle: () => true, abort: vi.fn(), getSystemPrompt: () => 'system', ui: { notify: (message: string) => notices.push(message) },

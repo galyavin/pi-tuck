@@ -59,7 +59,7 @@ with a window of 32k tokens or less, lower the reserve for that model in Pi's `s
 { "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 4096 } } } }
 ```
 
-**Cut point.** To cut earlier and leave less, set `"cutAt"` in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`) to a number above 0 and at most 1, default 1: `{ "cutAt": 0.6 }` cuts once a request passes 60% of the input room, a lower value cuts earlier and smaller, and the guard is unaffected, because the whole room still decides which request is refused.
+**Cut point.** pi-tuck cuts once a request passes 60% of the input room, so each cut leaves room to grow and fewer tokens are carried (and billed) per request; measured against cutting at the full room, answers held and billed input fell 10-18%. Set `"cutAt"` in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`) to change it, a number above 0 and at most 1: `{ "cutAt": 1 }` restores cutting at the full room, a lower value cuts earlier and smaller. The guard is unaffected, because the whole room still decides which request is refused.
 
 ## Semantic search
 

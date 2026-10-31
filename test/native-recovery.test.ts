@@ -105,7 +105,7 @@ async function installed(diagnostics?: { directory: string }) {
   registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [] } as unknown as ExtensionAPI;
  const errors: unknown[] = [], notices: string[] = [], abort = vi.fn();
  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 } });
- const handle = await installCompaction(pi, { settings, ...EXACT_RESERVE, ...(diagnostics ? { diagnostics } : {}), fail: error => errors.push(error) });
+ const handle = await installCompaction(pi, { cutAt: 1, settings, ...EXACT_RESERVE, ...(diagnostics ? { diagnostics } : {}), fail: error => errors.push(error) });
  const ctx = { model: { provider: 'p', api: 'a', id: 'm', contextWindow: WINDOW, maxTokens: 128000 }, cwd: '/x', abort, getSystemPrompt: () => 'system', ui: { notify: (message: string) => { notices.push(message); } } } as unknown as ExtensionContext;
  return {
   errors, notices, aborts: () => abort.mock.calls.length, close: () => handle.close(),

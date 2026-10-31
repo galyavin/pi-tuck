@@ -30,7 +30,7 @@ test(`current input source remains complete or explicitly fails: ${kind}`,async(
   if(kind==='superseded'){manager.appendMessage({role:'user',content:'NEW_CURRENT_SOURCE',timestamp:0});for(let i=0;i<5;i++)cycle('new-'+i,1800);}
   const originals=manager.getEntries().map(e=>({id:e.id,json:JSON.stringify(e)}));
   const settings=SettingsManager.inMemory({retry:{enabled:false},compaction:{enabled:true,reserveTokens:model.maxTokens+8192,keepRecentTokens:0}});
-  const loader=new DefaultResourceLoader({cwd:dir,agentDir:dir,settingsManager:settings,noExtensions:true,noSkills:true,noContextFiles:true,noPromptTemplates:true,noThemes:true,systemPrompt:'Free current-source invariant',extensionFactories:[async pi=>{handle=await installCompaction(pi,{settings,fail:e=>faults.push(String(e))});}]});
+  const loader=new DefaultResourceLoader({cwd:dir,agentDir:dir,settingsManager:settings,noExtensions:true,noSkills:true,noContextFiles:true,noPromptTemplates:true,noThemes:true,systemPrompt:'Free current-source invariant',extensionFactories:[async pi=>{handle=await installCompaction(pi,{cutAt:1,settings,fail:e=>faults.push(String(e))});}]});
   await loader.reload();({session}=await createAgentSession({cwd:dir,modelRuntime:runtime,model,thinkingLevel:'low',sessionManager:manager,settingsManager:settings,resourceLoader:loader,tools:['tuck_recall','read'],customTools:[{name:'read',label:'Read',description:'Free observed current-round witness',parameters:Type.Object({}),execute:async()=>({content:[{type:'text',text:'New observed mechanical data.\n'.repeat(1800)}],details:{}})}]}));await session.bindExtensions({});session.agent.streamFunction=()=>{throw Error('Unexpected model request');};
   if(kind==='active-auto'){
    let requests=0;
