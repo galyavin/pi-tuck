@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { BAND, HOST, ROOM, expectParity, receiptOf, scenario } from './budget-fixture';
+import { BAND, HOST, ROOM, expectParity, harness, receiptOf, scenario } from './budget-fixture';
 
 const PROMPT = 2; // 'Continue'
 
@@ -114,3 +114,19 @@ test('a prompt for which Pi has nothing to compact ("Already compacted") inside 
  expect(over.requests, over.probe).toBe(0);
  expect(over.faults.join(' '), over.probe).toContain('Already compacted');
 });
+
+// Pi's "nothing to compact" on a needed cut refuses that request only. It was a fault, which stays: every later prompt of the session failed
+// on it, however small (R&D's clip replay of eval live32 t03-B: a 6k-token prompt after short exchanges, then tasks 24 to 30 lost).
+test('a needed cut that Pi has nothing to make refuses its request, and the next prompt that fits is answered', async () => {
+	const h = await harness({ at: 'prompt', complete: ROOM + 500, host: HOST, compactedLast: true });
+	try {
+		const over = await h.run();
+		expect(over.requests, over.probe).toBe(0);
+		expect(over.faults.join(' '), over.probe).toContain('Already compacted');
+		expect(over.notices.join(' '), over.probe).toContain('shorten the input');
+		const faults = h.faults.length, requests = h.state.requests;
+		await h.session.prompt('A short prompt');
+		expect(h.faults.slice(faults), over.probe).toEqual([]);
+		expect(h.state.requests - requests, over.probe).toBe(1);
+	} finally { await h.cleanup(); }
+}, 120000);

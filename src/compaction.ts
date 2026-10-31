@@ -450,7 +450,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     // An opportunistic cut is not needed to send the request, which is below the room: the guard decides. However it ends (the
                     // planner declined it, Pi had nothing to compact, an earlier handler cancelled it) it is no fault, unless a failure is latched
                     // or the compactor proposed a cut that then failed to commit (the session may hold what the file lacks).
+                    // A needed cut that Pi has nothing to make (no history older than its keepRecentTokens since the last cut) is a refusal of
+                    // this request, which ends with it: as a fault it stayed, and every later prompt of the session failed on it.
                     if (cut.opportunistic && !failure && !cut.proposed) resolve();
+                    else if (!cut.proposed && isNoWork(error.message)) reject(new CapacityError(`The request needs a cut and Pi has none to make (${error.message})`));
                     else reject(error.message === "Compaction cancelled" && failure instanceof Refusal ? failure : error);
                 } }));
         } finally { pendingCut = undefined; }
