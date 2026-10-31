@@ -104,13 +104,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const calls = new Set(response.message.content.flatMap(block => block.type === "toolCall" ? [block.id] : []));
         const hasFreshReceipt = entries.slice(lastResponse + 1).some(entry => entry.type === "message" &&
             entry.message.role === "toolResult" && calls.has(entry.message.toolCallId));
-        // A run that ended without a response to its receipts (aborted or failed, its reply discarded) and was followed by a new prompt has
-        // left them behind: they can no longer reach the model as that round's answer, so they are ordinary history. Kept native, a receipt
-        // that never fits would refuse every later prompt. The prompt may be the one this cut is planned for, which Pi appends only after it
-        // (or an operator's manual cut); a retry has no new prompt and keeps them.
-        const later = entries.slice(lastResponse + 1);
-        const ended = later.findIndex(entry => entry.type === "message" && entry.message.role === "assistant" && isDiscardedResponse(entry.message));
-        const superseded = ended >= 0 && (input.newPrompt || later.slice(ended + 1).some(entry => entry.type === "message" && entry.message.role === "user"));
+        // Fresh means the receipts are the answer the next request of this run carries. Once the session has moved on (the cut is planned for a
+        // run that has not begun, or a prompt has arrived since them) they are ordinary history, whatever ended their run: a reply discarded
+        // or one Pi hid when it recovered. Kept native, a receipt that never fits would refuse every later prompt. A retry is inside its run.
+        const superseded = input.newPrompt || entries.slice(lastResponse + 1).some(entry => entry.type === "message" && entry.message.role === "user");
         freshRound = hasFreshReceipt && !superseded;
         const keptId = cut.firstKeptEntryId;
         const chosenBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === keptId);

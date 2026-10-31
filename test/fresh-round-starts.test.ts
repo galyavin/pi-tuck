@@ -46,7 +46,7 @@ for (const [start, go] of Object.entries(throughPi))
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const reply = (content: unknown[], stopReason: string, at: number) => ({ role: 'assistant', content, api: 'openai-completions', provider: 'p', model: 'p', usage, stopReason, timestamp: at }) as never;
 const words = (n: number, seed: number) => Array.from({ length: n }, (_, i) => `w${(i * 7 + seed) % 101}`).join(' ');
-function draft(afterDiscarded: 'nothing' | 'a prompt', newPrompt: boolean) {
+function draft(afterDiscarded: 'nothing' | 'a prompt' | 'hidden', newPrompt: boolean) {
 	let clock = 1_700_000_000_000;
 	const manager = SessionManager.inMemory('/testbed');
 	manager.appendMessage({ role: 'user', content: `Task 1: ${words(60, 1)}`, timestamp: clock += 1000 });
@@ -56,19 +56,23 @@ function draft(afterDiscarded: 'nothing' | 'a prompt', newPrompt: boolean) {
 	}
 	manager.appendMessage(reply([{ type: 'toolCall', id: 'big', name: 'bash', arguments: { command: 'x' } }], 'toolUse', clock += 1000));
 	manager.appendMessage({ role: 'toolResult', toolCallId: 'big', toolName: 'bash', content: [{ type: 'text', text: words(13000, 3) }], isError: false, timestamp: clock += 1000 });
-	manager.appendMessage(reply([], 'aborted', clock += 1000));
+	const discarded = manager.appendMessage(reply([], 'error', clock += 1000));
+	// Pi hides a failed attempt it recovers from (an overflow, or a retry cancelled while it waits) with a context edit that replaces it with nothing.
+	if (afterDiscarded === 'hidden') manager.appendContextEdit(discarded, null);
 	if (afterDiscarded === 'a prompt') manager.appendMessage({ role: 'user', content: 'Task 2', timestamp: clock += 1000 });
 	const ctx = { sessionManager: manager, cwd: '/testbed', model: { contextWindow: WINDOW, maxTokens: RESPONSE, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
 	const measure = (messages: never[]) => measurableConversationTokens(messages, ctx);
 	return tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: measure(manager.buildSessionProjection().messages as never), newPrompt }, ctx, 20000, measure as never, {}, true);
 }
-const inRun: [string, 'nothing' | 'a prompt', boolean, 'fresh' | 'history'][] = [
+const inRun: [string, 'nothing' | 'a prompt' | 'hidden', boolean, 'fresh' | 'history'][] = [
 	['a retry (Pi retries the request; no new prompt)', 'nothing', false, 'fresh'],
 	['a tool-loop cut with no prompt since the discarded reply', 'nothing', false, 'fresh'],
 	['a tool-loop cut with a prompt since the discarded reply', 'a prompt', false, 'history'],
 	['the cut for an incoming prompt (newPrompt, as compaction.ts passes it)', 'nothing', true, 'history'],
+	['the cut for the next run after Pi hid the failed reply (overflow recovery, a cancelled retry)', 'hidden', true, 'history'],
+	['a retry after Pi hid the failed reply', 'hidden', false, 'fresh'],
 ];
-test.each(inRun)('%s: the refused result counts as %s', (_start, after, newPrompt, expected) => {
+test.each(inRun)('%s', (_start, after, newPrompt, expected) => {
 	const result = draft(after, newPrompt);
 	if (expected === 'fresh') expect(result.unavailable).toBe("pi-tuck's mandatory context cannot fit or reduce the request budget");
 	else expect(result.unavailable).toBeUndefined();

@@ -31,15 +31,17 @@ function session(after: After, newPrompt = false) {
 	return { draft: tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before, newPrompt }, ctx, 20000, measure as never, {}, true), manager, receipt, before };
 }
 
-test.each<After>(['nothing', 'aborted', 'a prompt'])('a receipt that is still the round\'s answer stays native and the cut is refused (after: %s)', after => {
+// Within its run (a retry, or a tool-loop cut, with no prompt since), the receipt is still the answer the next request carries.
+test.each<After>(['nothing', 'aborted'])('a receipt that is still the round\'s answer stays native and the cut is refused (after: %s)', after => {
 	const { draft, before } = session(after);
 	expect(before).toBeGreaterThan(32768 - 20000);
 	expect(draft.compaction).toBeUndefined();
 	expect(draft.unavailable).toBe("pi-tuck's mandatory context cannot fit or reduce the request budget");
 });
 
-test('a receipt left behind by an ended run and a new prompt is summarized, and the cut fits', () => {
-	const { draft, manager, receipt } = session('aborted, then a prompt');
+// A prompt since the receipt means its run is over, however that run ended.
+test.each<After>(['aborted, then a prompt', 'a prompt'])('a receipt left behind by a prompt since is summarized, and the cut fits (after: %s)', after => {
+	const { draft, manager, receipt } = session(after);
 	expect(draft.unavailable).toBeUndefined();
 	const branch = manager.getBranch().map(entry => entry.id);
 	expect(branch.indexOf(draft.compaction!.firstKeptEntryId)).toBeGreaterThan(branch.indexOf(receipt));
@@ -73,8 +75,8 @@ test('a prompt too large for the room is refused once; the next prompt cuts it a
 
 // Pi appends a prompt only after the cut planned for it, so that cut sees the ended run and no prompt after it yet. eval live32 t01-C on
 // efb63e0: the prompt right after each refused task was refused too (tasks 3 and 28), and only the one after that recovered.
-test('the cut planned for a new prompt treats an ended run as left behind; a retry, with no new prompt, does not', () => {
+test('the cut planned for a run that has not begun treats every unanswered receipt as left behind; a retry, inside its run, does not', () => {
 	expect(session('aborted', true).draft.unavailable).toBeUndefined();
+	expect(session('nothing', true).draft.unavailable).toBeUndefined();
 	expect(session('aborted', false).draft.unavailable).toBe("pi-tuck's mandatory context cannot fit or reduce the request budget");
-	expect(session('nothing', true).draft.unavailable).toBe("pi-tuck's mandatory context cannot fit or reduce the request budget");
 });
