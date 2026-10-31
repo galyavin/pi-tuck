@@ -2,7 +2,7 @@ import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { orderByOriginalSource } from "./tuck/core/source-order";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
 import { parseRecords, serializeTranscript, splitSummary, type TranscriptRecord } from "./tuck/core/transcript";
-import { DIALOGUE_SUFFIX, RANKED_SUFFIX } from "./tuck/core/format";
+import { DIALOGUE_SUFFIX } from "./tuck/core/format";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_TASK_CONTRACT_CHARACTERS, actionItems, actionRecords, head, ledgerItems, ledgerRecords } from "./ledger.js";
 import type { Message } from "@earendil-works/pi-ai";
@@ -15,8 +15,8 @@ type AgentMessage = Parameters<typeof convertToLlm>[0][number];
 type Cut = import("./tuck/cut").OwnCutResult;
 /** Counts a projection of the conversation exactly as the triggers, the post-cut checks and the guard do (budget.ts). */
 export type Measure = (messages: AgentMessage[]) => number;
-/** The summary view that produced a draft: the whole pre-cut dialogue, or the ranked fallback. Both carry the file ledger. */
-export type DraftMode = "dialogue" | "ranked";
+/** The summary view that produced a draft: the whole pre-cut dialogue, or the same dialogue shrunk to the allowance. Both carry the file ledger. */
+export type DraftMode = "dialogue" | "shrunk";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
     | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean };
 interface SearchHit { index: number; role: string; summary: string }
@@ -29,12 +29,12 @@ export interface Tuck {
 	applyTailBudget(entries: SessionEntry[], cut: Extract<Cut, { ok: true }>, options: { charsPerToken: number; maxTokens?: number; oversizedFactor?: number }): Cut;
 	calibrateCharsPerToken(chars: number, tokens: number): { charsPerToken: number };
 	buildGlobalIndexById(entries: readonly SessionEntry[]): Map<string, number>;
-	compileRanked(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
+	/** The dialogue shrunk to `ranking.maxBriefChars`, oldest assistant text first; "" when not even the least of it fits. */
+	compileShrunkDialogue(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
 		receiptContext?: { messages: AgentMessage[]; sourceIndices: (number | undefined)[] };
-		ranking: { maxBriefChars: number; maxBriefCharsCeiling?: number; briefCharsPerBlock?: number; maxBriefUnits?: number;
-            mandatorySourceIndices?: ReadonlySet<number> } }): string;
-	/** The whole pre-cut dialogue view; "" offers none, and the ranked view is used. */
-	compileDialogue(input: Parameters<Tuck["compileRanked"]>[0]): string;
+		ranking: { maxBriefChars: number; mandatorySourceIndices?: ReadonlySet<number> } }): string;
+	/** The whole pre-cut dialogue view; "" offers none, and the shrunk view is used. */
+	compileDialogue(input: Parameters<Tuck["compileShrunkDialogue"]>[0]): string;
 	prepareKeywordQuery(query: string): PreparedKeywordQuery;
 	searchEntriesDetailed(entries: SearchHit[], messages: Message[], query: string,
 		tuning: { relativeFloor: number; cap: number }): {
@@ -44,20 +44,20 @@ export interface Tuck {
 import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./tuck/cut";
 import { calibrateCharsPerToken, estimateSourceMessageChars } from "./tuck/core/token-estimate";
 import { buildGlobalIndexById } from "./tuck/core/global-indices";
-import { compileRanked, compileDialogue } from "./tuck/core/summarize";
+import { compileShrunkDialogue, compileDialogue } from "./tuck/core/summarize";
 import { prepareKeywordQuery } from "./tuck/core/keyword-query";
 import { searchEntriesDetailed } from "./tuck/core/search-entries";
-export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileRanked, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
+export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileShrunkDialogue, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
 /** The one historical allowance: at most 25% of remaining estimated room, for both views.
  * The whole dialogue is offered only within it (plus actual preview/headroom guards);
- * otherwise the ranked view fills it. The 4-character conversion matches pinned Pi's
+ * otherwise the same dialogue is shrunk to fit it. The 4-character conversion matches pinned Pi's
  * summary estimator, not a provider-token guarantee. Mandatory sources (current input,
  * initiating prompt, file ledger) are already charged in base. */
 export function historicalAllowance(window: number, reserve: number, base: number, before: number): number {
     const free = Math.max(0, window - reserve - base - 1);
     return Math.max(0, Math.min(Math.floor(free / 4), before - base - 1)) * 4;
 }
-/** Uses pi-tuck's own cut, calibrated maximum tail and ranked compiler; Pi owns persistence and continuation. */
+/** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation. */
 export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false) {
  return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual }, ctx, reserveTokens, measure, policy, retainCurrentInput);
 }
@@ -207,8 +207,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const model = ctx.model;
     const floorAt = (keep: number) => {
         const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        // Charged with the longer (ranked) closing, since the view is chosen later against this base.
-        return { ledger, base: measure(preview(serializeTranscript([...mandatory, ...ledger]) + RANKED_SUFFIX)) };
+        return { ledger, base: measure(preview(serializeTranscript([...mandatory, ...ledger]) + DIALOGUE_SUFFIX)) };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
     // When the whole floor cannot fit, the trail and the ledger keep only their headings and counts; only that can refuse the cut.
@@ -221,9 +220,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entryById.get(id)!)), receiptContext,
         ranking: { maxBriefChars, mandatorySourceIndices: new Set(mandatory.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },
     };
-    // All offers use the same parser, mandatory insertion, native preview and guard.
-    // Each view ends with its own closing section, true for what that view holds.
-    const assemble = (compiled: string, closing: string) => {
+    // Both views use the same parser, mandatory insertion, native preview and guard, and end with the same closing section.
+    const assemble = (compiled: string) => {
         if (typeof compiled !== "string") throw new Error("pi-tuck returned an invalid summary");
         const split = compiled ? splitSummary(compiled) : { body: "" };
         if (!split) throw new Error("pi-tuck returned an invalid summary");
@@ -235,29 +233,29 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         orderByOriginalSource(records, sourceIndices, originalCut.selectedIds);
         // The ledger always has its heading, so no summary is empty.
         records.push(...ledger);
-        const summary = serializeTranscript(records) + closing;
+        const summary = serializeTranscript(records) + DIALOGUE_SUFFIX;
         const projection = preview(summary);
         assertNativeToolRounds(projection);
         return { summary, after: measure(projection) };
     };
     const free = Math.max(0, model.contextWindow - reserveTokens - base - 1);
     const headroom = Math.ceil(free / 4);
-    // The whole pre-cut dialogue, when it fits the allowance; otherwise the ranked view fills the same allowance.
+    // The whole pre-cut dialogue, when it fits the allowance; otherwise the same dialogue shrunk to the same allowance.
     // With no allowance only an operator's manual cut can use it.
     const dialogue = maxBriefChars > 0 || input.operatorManual ? tuck.compileDialogue(compileInput) : "";
     const dialogueFits = dialogue.length <= maxBriefChars;
-    const candidate = dialogue && (dialogueFits || input.operatorManual) ? assemble(dialogue, DIALOGUE_SUFFIX) : undefined;
+    const candidate = dialogue && (dialogueFits || input.operatorManual) ? assemble(dialogue) : undefined;
     const offer = candidate && dialogueFits && candidate.after < before && candidate.after + reserveTokens + headroom < model.contextWindow ? candidate : undefined;
     // Manual no-work preserves native originals; final request admission still owns full overhead.
     if (!offer && input.operatorManual && candidate && candidate.after >= before &&
         before + reserveTokens < model.contextWindow)
         return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
-    const { summary, after } = offer ?? assemble(tuck.compileRanked(compileInput), RANKED_SUFFIX);
+    const { summary, after } = offer ?? assemble(tuck.compileShrunkDialogue(compileInput));
     // Draft reduction concerns conversation. Final request admission owns the effective system/tools.
     if (after + reserveTokens >= model.contextWindow || after >= before)
         return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow };
-    const mode: DraftMode = offer ? "dialogue" : "ranked";
-	return { compaction: { summary, firstKeptEntryId: cut.firstKeptEntryId, tokensBefore: input.tokensBefore, details: { ...details, tokensAfter: after, view: offer ? "complete-dialogue" : "ranked", mode } }, after, mode };
+    const mode: DraftMode = offer ? "dialogue" : "shrunk";
+	return { compaction: { summary, firstKeptEntryId: cut.firstKeptEntryId, tokensBefore: input.tokensBefore, details: { ...details, tokensAfter: after, view: offer ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
     };
     const preferred = compileAtCut(cut);
     if (preferred.mode === "dialogue") return preferred;

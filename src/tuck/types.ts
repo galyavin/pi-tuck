@@ -4,12 +4,6 @@ import type { convertToLlm } from "@earendil-works/pi-coding-agent";
 export type CompilerMessage = Parameters<typeof convertToLlm>[0][number];
 
 
-export interface FileOps {
-  readFiles?: string[];
-  modifiedFiles?: string[];
-  createdFiles?: string[];
-}
-
 export interface ReceiptLink {
   status: "missing" | "ambiguous" | "error" | "non-error";
   sourceIndices: number[];

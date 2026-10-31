@@ -1,11 +1,10 @@
 import { normalize } from '../src/tuck/core/normalize';
 import { filterNoise } from '../src/tuck/core/filter-noise';
-import type { BriefRankingOptions } from '../src/tuck/core/rank';
 import type { CompilerMessage } from '../src/tuck/types';
 import type { SourceTime } from '../src/tuck/core/source-time';
 
-// Random sessions with the features that make a block's rendered size depend on its neighbours: identical calls that merge, calls hidden by
-// a selected receipt, source times, notices, unlocated blocks, and a mandatory base. `options` draws the budgets a caller can set.
+// Random sessions with the features a rendered dialogue must keep exact: source times, notices, unlocated blocks, images, blank text,
+// identical calls, and a mandatory base.
 export const generator = (seed: number) => {
 	let state = seed * 2654435761 % 2 ** 32 || 1;
 	const random = () => (state = (state * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32;
@@ -65,20 +64,9 @@ export function session(seed: number) {
 	const sourceIndices = messages.map((_, i) => withSources && random() < 0.93 ? i : withSources ? undefined : i);
 	const withTimes = random() < 0.7;
 	const times: SourceTime[] = messages.map((_, i) => random() < 0.1 ? { basis: 'unknown' } : { basis: random() < 0.5 ? 'message' : 'journal', utc: new Date(1_700_000_000_000 + i * 1000).toISOString().replace('.000Z', 'Z') });
-	const blocks = filterNoise(normalize(messages, sourceIndices, undefined, messages.map((_, i) => `entry-${i}`), withTimes ? times : undefined));
+	const sourceEntryIds = messages.map((_, i) => `entry-${i}`);
+	const blocks = filterNoise(normalize(messages, sourceIndices, undefined, sourceEntryIds, withTimes ? times : undefined));
 	const mandatory = new Set(sourceIndices.filter((index): index is number => index !== undefined && random() < 0.08));
-	const options = (): BriefRankingOptions => {
-		const allowance = pick([200, 800, 2500, 6000, 15000, 40000]);
-		return {
-			...(random() < 0.9 ? { maxBriefChars: allowance } : {}),
-			...(random() < 0.15 ? { maxBriefCharsCeiling: allowance * 3, briefCharsPerBlock: 60 + int(200) } : {}),
-			...(random() < 0.3 ? { maxBriefUnits: pick([10, 30, 120, 400]) } : {}),
-			...(random() < 0.25 ? { maxBlocks: pick([4, 12, 40]) } : {}),
-			...(random() < 0.3 ? { preserveRecentBlocks: pick([0, 3, 8, 30]) } : {}),
-			...(random() < 0.6 ? { mandatorySourceIndices: mandatory } : {}),
-			...(random() < 0.5 ? { fileOps: { modifiedFiles: [`src/${pick(VOCABULARY)}.ts`], readFiles: [`src/${pick(VOCABULARY)}.ts`] } } : {}),
-		};
-	};
-	return { blocks, options, mandatory };
+	return { blocks, mandatory, sourceIndices, sourceEntryIds };
 }
 

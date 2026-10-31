@@ -9,7 +9,7 @@ import { convertToLlm, createAgentSession, DefaultResourceLoader, estimateTokens
 import { installCompaction, type CompactionOptions } from '../src/compaction';
 import { bandOf } from '../src/budget';
 import { serializeTranscript } from '../src/tuck/core/transcript';
-import { RANKED_SUFFIX } from '../src/tuck/core/format';
+import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 
 // Window 272,000 and response reserve max(32,768, model.maxTokens 128,000) leave an input room of 144,000 estimated tokens.
 export const ROOM = 144000, HOST = 6000;
@@ -212,7 +212,7 @@ export async function harness(options: Options) {
   if (options.summary) {
    const records: Parameters<typeof serializeTranscript>[0] = [{ kind: 'omission', reason: 'Earlier work, summarized. ' + text(800) }];
    if (options.omitted) records.unshift({ kind: 'excerpt', role: 'user', sourceIndex: 0, text: 'o'.repeat(options.omitted) });
-   manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + RANKED_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + DIALOGUE_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    if (options.omitted) manager.appendContextEdit(opening, null);
   }
   // History up to the request the case asks for. At the tool boundary the last tool result is sized when the tool runs.
@@ -225,7 +225,7 @@ export async function harness(options: Options) {
   else if (!(options.at === 'prompt' && options.history !== undefined)) while (historyComplete() + slack < target) options.oneTurn ? round(sizeFor) : cycle(sizeFor);
   if (options.at === 'prompt' && options.compactedLast) {
    // The compaction keeps everything after the opening request, so the saved conversation is large and the last saved entry is the compaction.
-   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + RANKED_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + DIALOGUE_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    // The prompt carries the rest, so the last saved entry stays the compaction.
    const rest = options.complete - historyComplete();
    expect(rest).toBeGreaterThanOrEqual(0);

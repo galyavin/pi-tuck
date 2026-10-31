@@ -1,19 +1,19 @@
 {
 	"prose-32k": [
 		[
-			"ranked",
+			"shrunk",
 			15,
-			"c5d364230a52fa2237bad83cafcf2aeb590c65b46c1cca527cdd6815b65a0b30"
+			"d392861eea8ecd2952b72346368c50acff72066fc5952be2e893267a8cd8b679"
 		],
 		[
-			"ranked",
+			"shrunk",
 			24,
-			"b72b7b9862261d128c676e9edb494f865fe313dec5e3a0c1267cc32deed9588e"
+			"c288f206005ad69d264d7352504262f345d7910a2255885e82702992bd8a162b"
 		],
 		[
-			"ranked",
+			"shrunk",
 			33,
-			"72a699b25d2ead027aabdef34c25caedb4a84679b40b27b36d45d39303399021"
+			"c984afe7680a32951680531484541c9816872246e7eb81a5ae6124e7171d2c60"
 		]
 	],
 	"low-prose-32k": [
@@ -53,14 +53,14 @@
 			"59d175a3922dea0978e5ce48d373e78ad8d4b5f0e851ff5515e38b4bd6f2f534"
 		],
 		[
-			"ranked",
+			"shrunk",
 			77,
-			"c18695ba8e57d5029a1b6c0afd29644fd320b16c73e9aa50fcb0933caa0ad17c"
+			"67bea25231f344122320d2907f216adc8a94e8ad92c4bee3b19fb761dcb1c54b"
 		],
 		[
-			"ranked",
+			"shrunk",
 			84,
-			"51f541061c18eea580d3bf14511e3b3ba725d8827a564f5af6d43575f765a1a9"
+			"7d3fe120aaa8f2fa2859814374e74012f91bc6213ca505a25efa07c6d57242df"
 		]
 	],
 	"residual-32k": [
@@ -97,14 +97,14 @@
 	],
 	"prose-128k": [
 		[
-			"ranked",
+			"shrunk",
 			62,
-			"d34ee803b7a018b83dd34dd1c7411e7143ae7186286cd042a8c75a5490f7c212"
+			"814eee9e09251836dd24cca4aa92ea2564ada3250517ea63f0e73129d85fb44b"
 		],
 		[
-			"ranked",
+			"shrunk",
 			106,
-			"19d47035b5176e7e31d9ab214298771262c57f31a48a747c364bdf955b2e593e"
+			"20992691b17a639ba0964d58717048a61073654c72a473cdae3cbf44b2417567"
 		]
 	],
 	"low-prose-128k": [
@@ -129,9 +129,9 @@
 			"8145038ab299f284fba780adea2a250c5f8f6e8942e9e88997a336892be8d4b0"
 		],
 		[
-			"ranked",
+			"shrunk",
 			299,
-			"575010dff2bb87787554b3bb0e99c56b68ac4c1243f9c8097b050a2340c5422b"
+			"588babf3e1d2009256c20e11d7dbd2fc56975361796dc6611b0ffba8f89db1dd"
 		]
 	]
 }

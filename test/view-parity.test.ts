@@ -167,11 +167,11 @@ test('at the prompt a cut follows the same rule', async () => {
 	expect(seen['band cut: same view'] + seen['forced band plan'] + seen['room over a band plan'], stats).toBeGreaterThan(0);
 });
 
-test('the lossy ranked band cut of the fixture is declined inside the band, where the exact room cannot plan, and kept when a cut is due', async () => {
-	// 1,500 tokens of old history under a protected prompt: inside the band the band plan is a 212-token ranked summary, and the exact room
-	// has no plan at all. Before the ruling this was cut to the ranked view; the exact room would have cut nothing.
+test('the lossy shrunk band cut of the fixture is declined inside the band, where the exact room cannot plan, and kept when a cut is due', async () => {
+	// 1,500 tokens of old history under a protected prompt: inside the band the band plan is a 276-token shrunk summary, and the exact room
+	// has no plan at all. Before the ruling this was cut to the shrunk view; the exact room would have cut nothing.
 	const inBand = await prompt({ history: 1500, complete: BAND + 1100 });
-	expect(inBand.found[0]!.band?.mode, inBand.r.probe).toBe('ranked');
+	expect(inBand.found[0]!.band?.mode, inBand.r.probe).toBe('shrunk');
 	expect(inBand.found[0]!.room, inBand.r.probe).toBeNull();
 	expect(inBand.cut, inBand.r.probe).toBe(0);
 	expect(inBand.r.faults, inBand.r.probe).toEqual([]);

@@ -13,7 +13,7 @@ function prng(seed: number) {
 }
 const FACTORS = [1, 1, 1, 1.05, 1.13, 1.25, 1.5];
 
-const LADDER = ['bounded', 'masked', 'full', 'dialogue', 'ranked'] as const;
+const LADDER = ['bounded', 'masked', 'full', 'dialogue', 'shrunk'] as const;
 interface Case {
 	room: number; band0: number; band: number; fits: (t: number, l: number) => boolean; reach: (limit: number) => number;
 	mandatory: number; before: number; floor: number | undefined; costs: number[]; trims: number[]; seed: number; blocked: boolean;
@@ -32,7 +32,7 @@ function makeCase(seed: number): Case {
 	const region = int(6);
 	const wanted = region === 0 ? int(reach(band)) : region === 1 ? edge - 3 + int(7) : region === 2 ? reach(band) + int(Math.max(1, reach(room) - reach(band))) : region === 3 ? reach(room) - 3 + int(7) : int(Math.floor(room * 0.8)) + reach(room);
 	const before = Math.max(1, wanted - mandatory);
-	// The cut floor: the least conversation any cut can leave (the ranked view), or no cut at all.
+	// The cut floor: the least conversation any cut can leave (the shrunk view), or no cut at all.
 	const floor = rng() < 0.12 ? undefined : rng() < 0.4 ? Math.max(0, [reach(band), reach(room)][int(2)]! - mandatory - 2 + int(5)) : int(before);
 	// What each richer view of the history would leave: any size at or above the floor, near the edges as often as not.
 	const costs = LADDER.map((_, k) => {
@@ -41,16 +41,16 @@ function makeCase(seed: number): Case {
 		const target = [reach(band) - mandatory, reach(room) - mandatory][int(2)]!;
 		return rng() < 0.5 ? Math.max(floor, target - 2 + int(5)) : floor + int(Math.max(1, Math.floor(before * 0.8)));
 	});
-	// The real planner is not monotone in the limit: a larger limit keeps a larger native tail and allows a larger ranked summary, either of which
+	// The real planner is not monotone in the limit: a larger limit keeps a larger native tail and allows a larger shrunk summary, either of which
 	// can fail the admission that a smaller limit passes. So the exact room sometimes has no plan where the band has one.
 	const blocked = rng() < 0.12;
-	// Within a mode a smaller limit can leave less: the bounded and ranked allowances are derived from the reserve, and the band's is 2% smaller.
+	// Within a mode a smaller limit can leave less: the bounded and shrunk allowances are derived from the reserve, and the band's is 2% smaller.
 	const trims = costs.map((cost, k) => (k === 0 || k === LADDER.length - 1) && Number.isFinite(cost) && rng() < 0.6 ? 1 + int(Math.max(1, Math.floor(cost * 0.15))) : 0);
 	return { room, band0: room, band, fits, reach, mandatory, before, floor, costs, trims, seed, blocked };
 }
 /**
  * A plan model that is consistent the way the real planner is, and a pure function of the limit: the first view of the ladder that reduces
- * and fits the limit wins (so a richer view needs a larger limit), the ranked view being the last resort. Whatever limit it can reach, it
+ * and fits the limit wins (so a richer view needs a larger limit), the shrunk view being the last resort. Whatever limit it can reach, it
  * can reach with a larger one (except where `blocked`, see above). Within a mode the band plan can leave less than the room plan (`trims`). The sizes of the views are unrelated, so a band plan may leave more or less than the room plan.
  */
 function planner(c: Case, band: number, calls: Target[]) {

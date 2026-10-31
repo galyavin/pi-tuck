@@ -78,7 +78,7 @@ export const planningReserve = (window: number, targetRoom: number, factor: numb
 	window - Math.floor(targetRoom / factor) + mandatory;
 
 export type Target = "band" | "room";
-/** A planned cut: the conversation it leaves, and the summary view that produced it (whole dialogue or ranked). */
+/** A planned cut: the conversation it leaves, and the summary view that produced it (whole dialogue or shrunk). */
 export type Plan<D extends object = {}> = ({ draft: true; after: number; mode: string } & D) | { draft: false; capacityRejected: boolean; reason: string };
 export type Decision<D extends object = {}> =
 	/** The request fits below the band, or an opportunistic cut cannot help: no cut and no fault; the request goes to the guard. */

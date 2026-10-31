@@ -7,7 +7,7 @@ import { harness, scenario } from './budget-fixture';
 import { conversationTokens } from '../src/budget';
 import { measurableMessages, projectedMessages } from '../src/omissions';
 import { TRANSCRIPT_HEADER, serializeTranscript, type TranscriptRecord } from '../src/tuck/core/transcript';
-import { RANKED_SUFFIX } from '../src/tuck/core/format';
+import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 
 // A session whose saved projection holds a summary in another format (a Pi default summary) cannot run a request: the context hook
 // and the triggers filter summaries and refuse one they cannot read. An operator's /compact is the way out: it compiles from the original
@@ -59,7 +59,7 @@ function session(seed: number) {
 		else if (kind === 2 && customIds.length) records.push({ kind: 'excerpt', role: 'custom', sourceEntryId: customIds[int(customIds.length)]!, text: 'n'.repeat(1 + int(300)) });
 		else records.push({ kind: 'omission', reason: 'Omitted ' + 'x'.repeat(int(100)) });
 	}
-	manager.appendCompaction(serializeTranscript(records) + RANKED_SUFFIX, first, 1000, { compactor: 'pi-tuck', version: 2 }, true);
+	manager.appendCompaction(serializeTranscript(records) + DIALOGUE_SUFFIX, first, 1000, { compactor: 'pi-tuck', version: 2 }, true);
 	// Native omissions of some of the quoted sources.
 	for (const id of ids) if (rng() < 0.25) manager.appendContextEdit(id, null);
 	for (const id of customIds) if (rng() < 0.25) manager.appendContextEdit(id, null);

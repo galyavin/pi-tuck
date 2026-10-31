@@ -4,8 +4,8 @@ import { measurableConversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft, type DraftMode } from '../src/tuck';
 
 // Seeded coding sessions that grow past the window, each cut drafted the way the tool-loop trigger drafts it and appended to the
-// session. Message times are fixed so a summary depends on the code alone. The three shapes are the ones measured for the ranked
-// view's cost: one that is prose-heavy, one whose assistant says little, and one that never reaches the ranked view.
+// session. Message times are fixed so a summary depends on the code alone. The three shapes are the ones measured for the shrunk
+// view's cost: one that is prose-heavy, one whose assistant says little, and one that never reaches the shrunk view.
 export type Shape = 'prose' | 'low-prose' | 'residual';
 
 const WORDS = 'parser cache index token budget summary recall branch module schema router worker queue retry timeout config build test lint deploy migrate session window ledger anchor cursor shard vector'.split(' ');
@@ -18,10 +18,10 @@ const reply = (content: unknown[], stopReason: string, timestamp: number) =>
 export interface Cut { turn: number; entries: number; before: number; mode?: DraftMode; summaryChars?: number; sha256?: string; ms: number; unavailable?: string }
 
 /** `cutAt` drafts one cut at that turn only, however large the session has grown. */
-export interface Run { window: number; reserve: number; turns: number; stopAfterCuts?: number; stopAfterRanked?: number; cutAt?: number }
+export interface Run { window: number; reserve: number; turns: number; stopAfterCuts?: number; stopAfterShrunk?: number; cutAt?: number }
 
 /** Grows a session in `shape`, cutting whenever it passes the room. Returns one row per cut; the last may be unavailable. */
-export function run(shape: Shape, { window, reserve, turns, stopAfterCuts = 0, stopAfterRanked = 0, cutAt }: Run): Cut[] {
+export function run(shape: Shape, { window, reserve, turns, stopAfterCuts = 0, stopAfterShrunk = 0, cutAt }: Run): Cut[] {
 	let seed = shape === 'residual' ? 11 : 7;
 	const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
 	const vocabulary = shape === 'residual' ? RESIDUAL_WORDS : WORDS;
@@ -36,7 +36,7 @@ export function run(shape: Shape, { window, reserve, turns, stopAfterCuts = 0, s
 		manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: name, content: [{ type: 'text', text }], isError, timestamp: stamp() });
 	const call = (id: string, name: string, args: object) => ({ type: 'toolCall', id, name, arguments: args });
 	const rows: Cut[] = [];
-	let calls = 0, ranked = 0;
+	let calls = 0, shrunk = 0;
 	for (let turn = 1; turn <= turns; turn++) {
 		const file = `src/${vocabulary[turn % vocabulary.length]}/${vocabulary[(turn * 7) % vocabulary.length]}-${turn % 97}.ts`;
 		if (shape === 'residual') {
@@ -71,9 +71,9 @@ export function run(shape: Shape, { window, reserve, turns, stopAfterCuts = 0, s
 		const kept = manager.getBranch().findIndex(entry => entry.id === draft.compaction!.firstKeptEntryId);
 		rows.push({ turn, entries, before, mode: draft.mode, summaryChars: draft.compaction.summary.length, ms,
 			sha256: createHash('sha256').update(`${kept}\n${draft.compaction.summary}`).digest('hex') });
-		if (draft.mode === 'ranked') ranked++;
+		if (draft.mode === 'shrunk') shrunk++;
 		if (stopAfterCuts && rows.length >= stopAfterCuts) break;
-		if (stopAfterRanked && ranked >= stopAfterRanked) break;
+		if (stopAfterShrunk && shrunk >= stopAfterShrunk) break;
 	}
 	return rows;
 }

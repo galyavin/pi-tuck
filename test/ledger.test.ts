@@ -6,7 +6,7 @@ import { SessionManager, type ExtensionContext, type SessionEntry } from '@earen
 import { measurableConversationTokens } from '../src/budget';
 import { projectedMessages } from '../src/omissions';
 import { tuck, tuckObservedDraft, tuckRecall } from '../src/tuck';
-import { CLOSING_INSTRUCTION, RECALL_NOTE } from '../src/tuck/core/format';
+import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
 import { TRANSCRIPT_HEADER, parseRecords, serializeTranscript, splitSummary } from '../src/tuck/core/transcript';
 import { ACTIONS_HEADING, LEDGER_HEADING, MAX_ACTION_CHARACTERS, MAX_ACTION_LINES, MAX_LEDGER_LINES, MAX_TASK_CONTRACT_CHARACTERS, actionRecords, ledgerItems, ledgerRecords } from '../src/ledger';
 import { buildGlobalIndexById } from '../src/tuck/core/global-indices';
@@ -129,14 +129,15 @@ test('C and D: no view drops tool history; both views end with the closing instr
 	try {
 		const draft = draftOf(s);
 		if (!draft.compaction) throw new Error(draft.unavailable);
-		expect(['dialogue', 'ranked']).toContain(draft.mode);
+		expect(['dialogue', 'shrunk']).toContain(draft.mode);
 		expect(ledgerText(draft.compaction.summary)).toContain('- wrote/edited out/x.csv');
 		expect(draft.compaction.summary.endsWith('\n\nOnly the dialogue and the actions and files listed above carry over. Files created by commands are not listed: before redoing a step, read its output with tuck_recall or list your output folders. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.')).toBe(true);
 	} finally { s.dispose(); }
 });
 
 // Closing sections written by earlier builds, and any future wording: the closing is found by structure and kept byte for byte.
-test.each([['earlier build', '\n\n---\n\n' + RECALL_NOTE], ['future wording', '\n\n---\n\nSome later closing wording.\n\nWith a second paragraph.']])(
+const EARLIER_BUILD_NOTE = 'A tool_receipt record quotes complete original textual output. Its producer arguments are complete when present; argumentsOmitted means read the original call source for them. Use it directly as evidence of that recorded event; it does not verify current state or authorize replay. Use `tuck_recall` to search for prior work, decisions, and context from before this summary. Read call/receipt sources by index before relying on omitted or truncated evidence. Receipt non-error is not proof of effects. Do not redo work already completed.';
+test.each([['earlier build', '\n\n---\n\n' + EARLIER_BUILD_NOTE], ['future wording', '\n\n---\n\nSome later closing wording.\n\nWith a second paragraph.']])(
 	'a saved summary with a closing from an %s stays readable and filterable by native omission', (_name, legacySuffix) => {
 	const manager = SessionManager.inMemory('/legacy');
 	const first = manager.appendMessage({ role: 'user', content: 'old', timestamp: 0 });
@@ -183,7 +184,7 @@ test('A: an initiating prompt removed by a native edit is not quoted, and no lat
 	try {
 		s.manager.appendContextEdit(s.manager.getBranch().find(e => e.type === 'message' && e.message.role === 'user')!.id, null);
 		// With an empty history view, only the mandatory floor (task contract and ledger) is in the summary.
-		const floorOnly = { ...tuck, compileDialogue: () => '', compileRanked: () => '' };
+		const floorOnly = { ...tuck, compileDialogue: () => '', compileShrunkDialogue: () => '' };
 		const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, s.ctx);
 		const draft = tuckObservedDraft(floorOnly, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);

@@ -3,6 +3,13 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- A dialogue that does not fit the summary is now shortened, oldest assistant text first, instead of replaced by a ranked selection of
+  records.
+
 ## [1.0.1] - 2026-10-30
 
 First release on npm. 1.0.0 was tagged but never published; its notes below describe what 1.0.1 ships besides these changes.

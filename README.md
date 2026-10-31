@@ -30,9 +30,9 @@ Start a new Pi session after installing.
 - the agent's other tool calls, such as shell commands, newest first (up to 30), without their output but with pointers to it;
 - your first prompt in the session, word for word (up to 12,000 characters).
 
-Tool output is left out of the summary; it stays in the session file. If the dialogue itself is too long for the room left, the summary
-keeps a ranked selection of records instead. Each summary ends with a short instruction to the agent: re-read a file before editing it,
-and look things up rather than guess.
+Tool output is left out of the summary; it stays in the session file. If the dialogue itself is too long for the room left, it is
+shortened, oldest assistant text first, instead of being replaced by a ranked selection. Each summary ends with a short instruction to
+the agent: re-read a file before editing it, and look things up rather than guess.
 
 **`tuck_recall`** finds earlier text by keyword and reads any original message or tool result exactly, by the index shown in a summary.
 It can also write an original back out to a file.

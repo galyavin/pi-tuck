@@ -146,7 +146,7 @@ test('decideCut rule 3: mandatory input that does not fit the room defers to the
 const M = 100, FITS_BAND = BAND - M - 1, JUST_OVER = BAND - M;
 
 test('decideCut rule 4, whatever the request: a room plan that already lands below the band is taken as it is, and the band is not planned', () => {
-	for (const total of [BAND, BAND + 1, ROOM - 1, ROOM, ROOM + 5000]) for (const bandPlan of [draft(300, 'band', 'ranked'), draft(300, 'band', 'bounded'), none()]) {
+	for (const total of [BAND, BAND + 1, ROOM - 1, ROOM, ROOM + 5000]) for (const bandPlan of [draft(300, 'band', 'shrunk'), draft(300, 'band', 'bounded'), none()]) {
 		const calls: Calls = [];
 		const d = decideCut({ ...base({ total, before: 2000, mandatory: M }), plan: planner({ band: bandPlan, room: draft(FITS_BAND, 'room', 'bounded') }, calls) });
 		expect(d, `${total}`).toEqual({ kind: 'cut', target: 'room', plan: { draft: true, after: FITS_BAND, mode: 'bounded', tag: 'room' } });
@@ -171,7 +171,7 @@ test('decideCut rule 4, inside the band: a band cut is taken only when the room 
 });
 
 test('decideCut rule 4, inside the band: the margin never changes the view: a band cut whose view differs from the room plan\'s is not taken', () => {
-	for (const [bandMode, roomMode] of [['ranked', 'dialogue'], ['dialogue', 'bounded'], ['masked', 'full'], ['bounded', 'ranked']] as const) {
+	for (const [bandMode, roomMode] of [['shrunk', 'dialogue'], ['dialogue', 'bounded'], ['masked', 'full'], ['bounded', 'shrunk']] as const) {
 		const calls: Calls = [];
 		expect(decideCut({ ...base({ total: ROOM - 1, before: 2000, mandatory: M }), plan: planner({ band: draft(FITS_BAND, 'band', bandMode), room: draft(JUST_OVER + 50, 'room', roomMode) }, calls) }), `${bandMode} against ${roomMode}`).toEqual({ kind: 'none' });
 		expect(calls).toEqual(['room', 'band']);
@@ -181,7 +181,7 @@ test('decideCut rule 4, inside the band: the margin never changes the view: a ba
 test('decideCut rule 4, inside the band: a band cut the exact room cannot plan at all is not taken (today cuts nothing there; no fault to prevent)', () => {
 	for (const total of [BAND, ROOM - 1]) {
 		const calls: Calls = [];
-		expect(decideCut({ ...base({ total, before: 2000, mandatory: M }), plan: planner({ band: draft(FITS_BAND, 'band', 'ranked'), room: none(true, 'cannot fit') }, calls) })).toEqual({ kind: 'none' });
+		expect(decideCut({ ...base({ total, before: 2000, mandatory: M }), plan: planner({ band: draft(FITS_BAND, 'band', 'shrunk'), room: none(true, 'cannot fit') }, calls) })).toEqual({ kind: 'none' });
 		expect(calls).toEqual(['room', 'band']);
 	}
 });
@@ -216,7 +216,7 @@ test('decideCut rule 4, at or above the room: the band plan is taken when the ro
 });
 
 test('decideCut rule 4, at or above the room: a band plan of another view gives way to the room plan, today\'s view', () => {
-	for (const [bandMode, roomMode] of [['ranked', 'dialogue'], ['dialogue', 'bounded'], ['masked', 'full']] as const) {
+	for (const [bandMode, roomMode] of [['shrunk', 'dialogue'], ['dialogue', 'bounded'], ['masked', 'full']] as const) {
 		const calls: Calls = [];
 		expect(decideCut({ ...base({ total: ROOM, before: 5000, mandatory: M }), plan: planner({ band: draft(300, 'band', bandMode), room: draft(JUST_OVER + 10, 'room', roomMode) }, calls) }), `${bandMode} against ${roomMode}`)
 			.toEqual({ kind: 'cut', target: 'room', plan: { draft: true, after: JUST_OVER + 10, mode: roomMode, tag: 'room' } });
@@ -227,8 +227,8 @@ test('decideCut rule 4, at or above the room: a band plan of another view gives 
 test('decideCut rule 4, at or above the room: with no band plan the room plan is used, as before the margin', () => {
 	for (const total of [ROOM, ROOM + 1, ROOM + 5000]) {
 		const calls: Calls = [];
-		expect(decideCut({ ...base({ total, before: 5000, mandatory: M }), plan: planner({ band: none(), room: draft(JUST_OVER + 10, 'room', 'ranked') }, calls) }))
-			.toEqual({ kind: 'cut', target: 'room', plan: { draft: true, after: JUST_OVER + 10, mode: 'ranked', tag: 'room' } });
+		expect(decideCut({ ...base({ total, before: 5000, mandatory: M }), plan: planner({ band: none(), room: draft(JUST_OVER + 10, 'room', 'shrunk') }, calls) }))
+			.toEqual({ kind: 'cut', target: 'room', plan: { draft: true, after: JUST_OVER + 10, mode: 'shrunk', tag: 'room' } });
 		expect(calls).toEqual(['room', 'band']);
 	}
 });
@@ -249,7 +249,7 @@ test('decideCut rule 4, at or above the room: a draft that does not reduce or do
 	// The room plan is checked the same way, whether it stands alone or replaces a band plan of another view.
 	expect(decideCut({ ...base({ total: ROOM, before: 2000, mandatory: M }), plan: planner({ band: none(), room: draft(ROOM - M) }, []) })).toEqual({ kind: 'fault', capacity: true, message: 'did not reduce' });
 	expect(decideCut({ ...base({ total: ROOM, before: 2000, mandatory: M }), plan: planner({ band: none(), room: draft(ROOM - M - 1) }, []) }).kind).toBe('cut');
-	expect(decideCut({ ...base({ total: ROOM, before: 2000, mandatory: M }), plan: planner({ band: draft(10, 'b', 'ranked'), room: draft(ROOM - M, 'r', 'bounded') }, []) })).toEqual({ kind: 'fault', capacity: true, message: 'did not reduce' });
+	expect(decideCut({ ...base({ total: ROOM, before: 2000, mandatory: M }), plan: planner({ band: draft(10, 'b', 'shrunk'), room: draft(ROOM - M, 'r', 'bounded') }, []) })).toEqual({ kind: 'fault', capacity: true, message: 'did not reduce' });
 });
 
 test('decideCut uses the calibrated count: the factor applies to the request, the band and the room alike', () => {
@@ -259,8 +259,8 @@ test('decideCut uses the calibrated count: the factor applies to the request, th
 	expect(decideCut({ ...base({ total: 784, before: 700, mandatory: 50 }), fits, plan: planner({ band: draft(300), room: draft(300) }, []) }).kind).toBe('cut');
 	expect(decideCut({ ...base({ total: 800, before: 700, mandatory: 50 }), fits, plan: planner({ band: none(), room: draft(300) }, []) })).toMatchObject({ kind: 'cut', target: 'room' });
 	// A room plan lands below the band by the calibrated count: 784 raw tokens is the edge (ceil(783 * 1.25) = 979 < 980; ceil(784 * 1.25) = 980).
-	expect(decideCut({ ...base({ total: 800, before: 2000, mandatory: 50 }), fits, plan: planner({ band: draft(10, 'b', 'ranked'), room: draft(733, 'r') }, []) })).toMatchObject({ kind: 'cut', target: 'room' });
-	expect(decideCut({ ...base({ total: 800, before: 2000, mandatory: 50 }), fits, plan: planner({ band: draft(10, 'b', 'ranked'), room: draft(734, 'r') }, []) })).toMatchObject({ kind: 'cut', target: 'room' }); // another view: the room plan wins either way
+	expect(decideCut({ ...base({ total: 800, before: 2000, mandatory: 50 }), fits, plan: planner({ band: draft(10, 'b', 'shrunk'), room: draft(733, 'r') }, []) })).toMatchObject({ kind: 'cut', target: 'room' });
+	expect(decideCut({ ...base({ total: 800, before: 2000, mandatory: 50 }), fits, plan: planner({ band: draft(10, 'b', 'shrunk'), room: draft(734, 'r') }, []) })).toMatchObject({ kind: 'cut', target: 'room' }); // another view: the room plan wins either way
 	expect(decideCut({ ...base({ total: 800, before: 2000, mandatory: 50 }), fits, plan: planner({ band: draft(10, 'b', 'bounded'), room: draft(734, 'r', 'bounded') }, []) })).toMatchObject({ kind: 'cut', target: 'band' });
 });
 
