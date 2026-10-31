@@ -120,10 +120,16 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const cutAt = options.cutAt ?? DEFAULT_CUT_AT;
     if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
     const semantic = options.semanticRecall ?? createSemanticRecall();
+    const hostAccess = () => {
+        if (!active()) throw new Error("Compaction host is inactive");
+        options.assertAccess?.();
+    };
     let semanticTransition: Promise<void> = Promise.resolve();
     let semanticRequest = 0;
     const semanticPending = new Set<Promise<unknown>>();
-    const semanticProvider = (ctx: ExtensionContext) => () => memoizedEligibleSources(ctx, options.recallPolicy, access);
+    // Semantic indexing outlives any one attempt, so it checks only that the host still grants access: a compactor failure, which ends with its
+    // attempt, must not read as a revocation (that disables semantic recall and deletes its index for the rest of the session).
+    const semanticProvider = (ctx: ExtensionContext) => () => memoizedEligibleSources(ctx, options.recallPolicy, hostAccess);
     const recorder = new IncidentRecorder(options.diagnostics);
     let proposalId: string | undefined;
     const observe = (ctx: ExtensionContext) => recorder.measureInline(() => {
@@ -296,8 +302,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	const forgetFailure = () => { if (!(failure instanceof CommitFault)) failure = undefined; };
 	const access = () => {
 		if (failure) throw failure;
-		if (!active()) throw new Error("Compaction host is inactive");
-		options.assertAccess?.();
+		hostAccess();
 	};
     // Abort alone is insufficient: Pi starts a fresh abort controller after
     // before_agent_start. Keep this attempt blocked, then recheck on new idle input.

@@ -595,6 +595,22 @@ test('through installCompaction: assertAccess revoked in the middle of a schedul
 	await w.handle.close();
 });
 
+// A compactor failure ends with its attempt; it is not the host revoking access. Before, semantic indexing checked compaction's failure latch,
+// so a refusal during a run disabled semantic recall and deleted its index until the session restarted.
+test('through installCompaction: a compactor failure latched in an attempt leaves semantic recall on and indexing', async () => {
+	const f = fixture();
+	for (let i = 0; i < 4; i++) f.append('source ' + i);
+	const w = await installed(f, () => {});
+	// A request with no context model fails the attempt, as any refusal or fault does.
+	for (const handler of w.handlers.context_with_system ?? []) handler({ type: 'context_with_system', messages: [] }, { ...w.ctx, model: undefined, abort: () => {}, getSystemPrompt: () => '' });
+	for (const handler of w.handlers.session_compact ?? []) handler({ type: 'session_compact' }, w.ctx);
+	const status = await f.c.waitForReady(3000);
+	expect(status.enabled).toBe(true);
+	expect(status.lastError).toBeNull();
+	expect(status.state).toBe('ready');
+	await w.handle.close();
+});
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // A `host.input` appended mid-search invalidates the search, exactly as a direct build does.
 
