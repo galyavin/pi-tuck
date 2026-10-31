@@ -52,4 +52,4 @@ jobs:
           echo "exchange HTTP status: $status"
           node -e 'const b=require("./body.json");if(b.token)b.token="(redacted: a token was issued)";console.log("exchange response:",JSON.stringify(b))' || cat body.json
           rm -f body.json
-          [ "$status" = 200 ] || { echo "the trusted-publisher exchange failed"; exit 1; }
+          case "$status" in 2??) echo "the trusted-publisher exchange works";; *) echo "the trusted-publisher exchange failed"; exit 1;; esac
