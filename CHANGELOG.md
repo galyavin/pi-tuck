@@ -3,10 +3,18 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.4] - 2026-10-31
+
+### Changed
+
+- When pi-tuck refuses a request because it cannot fit, and the provider has counted far more input than pi-tuck estimates (1.5 times or
+  more), the notice now says so and suggests that a different upstream may count less. Behind a router such as OpenRouter, one upstream can
+  spend about twice the context of others on tool schemas, which is what made pi-tuck refuse at a 32k window with a 16k reserve.
 
 ### Fixed
 
+- An omission notice lists each omitted message's locator once: when several text blocks of one message were shortened to nothing, repeats
+  could crowd the list and drop its "Locator list incomplete" flag.
 - A refusal no longer outlives the attempt it was for. When pi-tuck refused a request (a host view or a fresh tool round larger than the
   input room, or a cut it could not make), a later run that no prompt started, such as a custom message that triggers a turn, was aborted
   before its first request until the session restarted, even once there was room, and it reported the old refusal. A refusal that was not for
@@ -113,6 +121,7 @@ Tagged, not published.
 Source preview on GitHub, not published to npm. Deterministic compaction with `pi_tuck_recall` and `pi_tuck_search`; semantic search
 opt-in, with a runtime the user had to supply.
 
+[1.0.4]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.4
 [1.0.3]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.3
 [1.0.2]: https://github.com/galyavin/pi-tuck/tree/v1.0.2
 [1.0.1]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.1
