@@ -3,7 +3,10 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.3] - 2026-10-31
+
+First npm release since 1.0.1: it also carries everything listed under 1.0.2, which was tagged but not published to npm. Releases are
+now published from GitHub Actions by npm trusted publishing, with provenance.
 
 ### Added
 
@@ -17,6 +20,8 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   at a 128k window and 10-14% at 32k, with prompt caching automatic or by explicit breakpoints. `{"cutAt": 1}` restores the earlier point.
 
 ## [1.0.2] - 2026-10-31
+
+Tagged, not published to npm; 1.0.3 ships it.
 
 Measured before release with paired replays against 1.0.1 (same sessions, same model as agent and judge): no loss of answer accuracy at
 a 128k or a 32k window, and time questions answered as before.
@@ -98,7 +103,8 @@ Tagged, not published.
 Source preview on GitHub, not published to npm. Deterministic compaction with `pi_tuck_recall` and `pi_tuck_search`; semantic search
 opt-in, with a runtime the user had to supply.
 
-[1.0.2]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.2
+[1.0.3]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.3
+[1.0.2]: https://github.com/galyavin/pi-tuck/tree/v1.0.2
 [1.0.1]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.1
 [1.0.0]: https://github.com/galyavin/pi-tuck/tree/v1.0.0
 [0.2.1]: https://github.com/galyavin/pi-tuck/tree/e00fa99
