@@ -2,6 +2,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { installCompaction } from "./src/compaction";
+import { validCutAt } from "./src/budget";
 import { createSemanticRecall } from "./src/semantic-recall";
 import { defaultRoot } from "./src/assets";
 import { ensureSemanticRuntime } from "./src/setup";
@@ -14,13 +15,14 @@ export type { SemanticRecallConfig, PriorResult, SemanticState } from "./src/sem
 export { ensureSemanticRuntime } from "./src/setup";
 
 /** pi-tuck as a Pi extension: compaction and history recall always; semantic recall too, unless `pi-tuck.json` in Pi's agent folder
- * says `{"semanticRecall": false}`. Its runtime is set up in the background the first time a session starts. */
+ * says `{"semanticRecall": false}`. Its runtime is set up in the background the first time a session starts. The same file's `"cutAt"`
+ * (a number above 0 and at most 1) is the fraction of the input room a cut is triggered at, 1 by default. */
 export default async function (pi: ExtensionAPI) {
 	const semanticRecall = createSemanticRecall();
 	// `/tuck-semantic off` holds for the rest of the session, including over a setup that finishes later.
 	let off = false;
-	const handle = await installCompaction(pi, { semanticRecall, onSemanticSetting: async enabled => { off = !enabled; } });
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
+	const handle = await installCompaction(pi, { semanticRecall, cutAt: settings.cutAt, onSemanticSetting: async enabled => { off = !enabled; } });
 	if (settings.semanticRecall === false) return;
 	let session = 0, said = "", setup: Promise<unknown> | undefined;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
@@ -55,14 +57,15 @@ export default async function (pi: ExtensionAPI) {
 	});
 }
 
-function readSettings(path: string): { semanticRecall?: boolean; error?: string } {
+function readSettings(path: string): { semanticRecall?: boolean; cutAt?: number; error?: string } {
 	let text: string;
 	try { text = readFileSync(path, "utf8"); } catch { return {}; }
 	try {
 		const value = JSON.parse(text);
-		if (value && typeof value === "object" && (value.semanticRecall === undefined || typeof value.semanticRecall === "boolean")) return value;
+		if (value && typeof value === "object" && (value.semanticRecall === undefined || typeof value.semanticRecall === "boolean") &&
+			(value.cutAt === undefined || validCutAt(value.cutAt))) return value;
 	} catch { /* reported below */ }
-	return { error: `${path} should be a JSON object like {"semanticRecall": false}` };
+	return { error: `${path} should be a JSON object like {"semanticRecall": false, "cutAt": 0.8}, with cutAt a number above 0 and at most 1` };
 }
 
 const reason = (error: unknown) => error instanceof Error ? error.message : String(error);

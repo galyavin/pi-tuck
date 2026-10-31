@@ -3,6 +3,14 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `"cutAt"` in `pi-tuck.json` (and the `cutAt` option of `installCompaction`) sets the fraction of the input room at which a cut is triggered and
+  planned: a number above 0 and at most 1, 1 by default, which changes nothing. The room still decides every refusal. A cut's receipt records
+  `cutAt` when it is not 1.
+
 ## [1.0.2] - 2026-10-31
 
 Measured before release with paired replays against 1.0.1 (same sessions, same model as agent and judge): no loss of answer accuracy at

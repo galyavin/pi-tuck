@@ -6,7 +6,7 @@ import { tuck, tuckObservedDraft } from '../src/tuck';
 // `mandatory` stands for the system prompt and tools. A native tail that may fill the whole room left a 32k session just under the band
 // after each cut, so the next tool round cut again: 174 cuts in 300 rounds, 155 of them freeing under a tenth of the room.
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-function drive(window: number, response: number, mandatory: number, turns: number, shape: 'low-prose' | 'prose', resultWords = 500) {
+function drive(window: number, response: number, mandatory: number, turns: number, shape: 'low-prose' | 'prose', resultWords = 500, cutAt = 1) {
   let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
   const V = 'parser cache index token budget summary recall branch module schema router worker queue retry timeout config build test lint deploy migrate session window ledger anchor cursor shard vector'.split(' ');
   const words = (n: number) => Array.from({ length: n }, () => V[Math.floor(rnd() * V.length)]).join(' ');
@@ -14,7 +14,7 @@ function drive(window: number, response: number, mandatory: number, turns: numbe
   const manager = SessionManager.inMemory('/tmp/p');
   const ctx = { sessionManager: manager, cwd: '/tmp/p', model: { contextWindow: window, maxTokens: response, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
   const measure = (m: never[]) => measurableConversationTokens(m, ctx);
-  const room = window - response, band = bandOf(room), fits = (t: number, l: number) => t < l;
+  const room = window - response, band = bandOf(room, cutAt), fits = (t: number, l: number) => t < l;
   const cuts: { turn: number; before: number; after: number; mode: string; target: Target }[] = []; const faults: string[] = [];
   let c = 0;
   for (let turn = 1; turn <= turns; turn++) {
@@ -26,7 +26,7 @@ function drive(window: number, response: number, mandatory: number, turns: numbe
     const before = measure(saved);
     const decision = decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: 'unreduced',
       plan: (target): Plan<{ compaction: any }> => {
-        const reserve = planningReserve(window, target === 'band' ? bandOf(room) : room, 1, mandatory);
+        const reserve = planningReserve(window, target === 'band' ? band : room, 1, mandatory);
         const d = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before }, ctx, reserve, measure as never, {}, true);
         if (!d.compaction) return { draft: false, capacityRejected: Boolean(d.capacityRejected), reason: d.unavailable! };
         const preview = SessionManager.inMemory('/tmp/p', undefined, [manager.getHeader()!, ...manager.getBranch()]);
@@ -48,4 +48,23 @@ test('a cut on a small window frees at least a tenth of the room, so the next ro
     expect(r.cuts.length).toBeGreaterThan(3);
     for (const cut of r.cuts) expect(cut.before - cut.after, JSON.stringify(cut)).toBeGreaterThanOrEqual(r.room / 10);
   }
+}, 600_000);
+// The same session at a lean cut point (0.6): every cut still lands below the band, or below the room when it was due, and frees at least a tenth
+// of the room, and nothing faults. Only on windows where that holds: on a 32k window the room plan (a native tail of up to half the room, the
+// dialogue summary and the mandatory input) lands just under a band at 0.6 of the room, so it is taken as it is and the next rounds cut
+// again (68 cuts in 150 turns against 10 at the default, some freeing under 1,000 tokens). The yield property is therefore held at F = 1 there.
+test('a lean cut point (0.6) on a large window: cuts land below the band, free at least a tenth of the room, and are more frequent than at the default', () => {
+  for (const [window, response, mandatory, turns] of [[272000, 128000, 18000, 400], [128000, 16384, 12000, 300]] as const)
+    for (const shape of ['low-prose', 'prose'] as const) {
+      const lean = drive(window, response, mandatory, turns, shape, 500, 0.6), standard = drive(window, response, mandatory, turns, shape);
+      const why = JSON.stringify({ window, response, shape });
+      expect(lean.band, why).toBe(bandOf(window - response, 0.6));
+      expect(lean.faults, why).toEqual([]);
+      expect(lean.cuts.length, why).toBeGreaterThan(standard.cuts.length);
+      for (const cut of lean.cuts) {
+        expect(cut.before - cut.after, JSON.stringify(cut)).toBeGreaterThanOrEqual(lean.room / 10);
+        // Cut at the band (an opportunistic cut lands below it), or from the room up (a due cut lands below the room).
+        expect(cut.after + mandatory, JSON.stringify(cut)).toBeLessThan(cut.before + mandatory < lean.room ? lean.band : lean.room);
+      }
+    }
 }, 600_000);
