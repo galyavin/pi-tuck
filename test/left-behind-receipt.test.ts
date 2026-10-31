@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { measurableConversationTokens } from '../src/budget';
-import { tuck, tuckObservedDraft } from '../src/tuck';
+import { tuck, tuckObservedDraft, tuckRecall } from '../src/tuck';
 
 // A tool result too large for the room is refused while it is the round's answer: it must reach the model whole, and cannot. When that run
 // ends (its reply discarded) and a new prompt follows, the result is history, and a cut summarizes it. Kept native as before, it refused every
@@ -44,4 +44,29 @@ test('a receipt left behind by an ended run and a new prompt is summarized, and 
 	const branch = manager.getBranch().map(entry => entry.id);
 	expect(branch.indexOf(draft.compaction!.firstKeptEntryId)).toBeGreaterThan(branch.indexOf(receipt));
 	expect((draft.compaction!.details as { tokensAfter: number }).tokensAfter + 20000).toBeLessThan(32768);
+});
+
+test('the summarized receipt stays readable through tuck_recall', () => {
+	const { draft, manager, receipt } = session('aborted, then a prompt');
+	manager.appendCompaction(draft.compaction!.summary, draft.compaction!.firstKeptEntryId, 0, draft.compaction!.details, true);
+	const read = tuckRecall(tuck, manager.getEntries(), manager.getBranch(), { entryId: receipt, offset: 40000, limit: 16000 }) as { status: string; entries: { text?: string }[] };
+	expect(JSON.stringify(read)).toContain(words(13000, 3).slice(-200, -100));
+});
+
+test('a prompt too large for the room is refused once; the next prompt cuts it away', () => {
+	let clock = 1_700_000_000_000;
+	const manager = SessionManager.inMemory('/testbed');
+	const user = (text: string) => manager.appendMessage({ role: 'user', content: text, timestamp: clock += 1000 });
+	const ctx = { sessionManager: manager, cwd: '/testbed', model: { contextWindow: 32768, maxTokens: 16384, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
+	const measure = (messages: never[]) => measurableConversationTokens(messages, ctx);
+	const draft = () => tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: measure(manager.buildSessionProjection().messages as never) }, ctx, 20000, measure as never, {}, true);
+	user(`Task 1: ${words(60, 1)}`);
+	manager.appendMessage(reply([{ type: 'text', text: words(200, 4) }], 'stop', clock += 1000));
+	user(`Paste: ${words(13000, 5)}`);
+	expect(draft().compaction).toBeUndefined();
+	manager.appendMessage(reply([], 'aborted', clock += 1000));
+	user(`Task 2: ${words(60, 2)}`);
+	const next = draft();
+	expect(next.unavailable).toBeUndefined();
+	expect((next.compaction!.details as { tokensAfter: number }).tokensAfter + 20000).toBeLessThan(32768);
 });
