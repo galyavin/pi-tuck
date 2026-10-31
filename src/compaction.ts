@@ -40,10 +40,12 @@ const RecallInput = Type.Union([
 ]);
 const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({entryId,sourceSha:Type.String({minLength:64,maxLength:64}),start:Type.Integer({minimum:0}),end:Type.Integer({minimum:0})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
-/** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. It is a decision about the
- * state as it was, so it ends with the attempt (`forgetRefusal`) and the next attempt decides afresh. Any other failure is a fault in the compactor
- * or its host, and stays until the session restarts. */
+/** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. Like every failure but
+ * a `CommitFault`, it ends with its attempt (`forgetFailure`), and the next attempt plans afresh from the session as it is. */
 class Refusal extends Error {}
+/** A cut this compactor supplied that Pi then failed to commit. Pi appends a cut to the session in memory before it writes the file, so the
+ * session may hold a cut its file lacks; what is written after would build on it. The one failure that stays until the session restarts. */
+class CommitFault extends Error {}
 /** A refusal for want of room, which the user can remedy: it carries advice. */
 class CapacityError extends Refusal {}
 /** What a capacity refusal tells the operator. When the provider has counted far more input than pi-tuck's estimate, the refusal most
@@ -230,7 +232,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
     pi.on("agent_start", () => { admittedRun = true; pending = undefined; phase = "idle"; });
-    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetRefusal(); });
+    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
@@ -280,7 +282,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	const fail = (error: unknown, ctx: ExtensionContext) => {
 		recorder.stop("native-attempt-failed");
         const notify = !failure && error instanceof CapacityError;
-		failure = error instanceof Error ? error : new Error(String(error));
+		// A CommitFault stays whatever fails after it.
+		if (!(failure instanceof CommitFault)) failure = error instanceof Error ? error : new Error(String(error));
         pendingBoundaryCommit = false;
         pending = undefined;
 		try { options.fail?.(error); } finally {
@@ -288,9 +291,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             finally { ctx.abort(); }
         }
 	};
-	// The one place a refusal is dropped: when its attempt has settled, when a prompt arrives, and when the operator asks for a cut. A run that no
-	// input started (a custom message) has only the first of these.
-	const forgetRefusal = () => { if (failure instanceof Refusal) failure = undefined; };
+	// The one place a failure is dropped: when its attempt has settled, when a prompt arrives, and when the operator asks for a cut. A run that no
+	// input started (a custom message) has only the first of these. No failure but a CommitFault outlives its attempt.
+	const forgetFailure = () => { if (!(failure instanceof CommitFault)) failure = undefined; };
 	const access = () => {
 		if (failure) throw failure;
 		if (!active()) throw new Error("Compaction host is inactive");
@@ -303,7 +306,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     let phase: "idle" | "decided" | "starting" = "idle";
     pi.on("input", async (event, ctx) => {
         if (!ctx.isIdle() || phase === "starting") return; // a steering or follow-up message joins the running request
-        forgetRefusal();
+        forgetFailure();
         phase = "decided";
         try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
         catch (error) { fail(error, ctx); }
@@ -359,7 +362,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // Pi also labels the awaited idle incoming preflight "manual".
             const incoming = pendingCut;
             const operatorManual = event.reason === "manual" && !(incoming && !admittedRun);
-            if (operatorManual && !admittedRun) forgetRefusal();
+            if (operatorManual && !admittedRun) forgetFailure();
 			access();
 			if (event.customInstructions?.trim()) {
 				recorder.stop("no-cut-custom-instructions");
@@ -454,7 +457,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     // this request, which ends with it: as a fault it stayed, and every later prompt of the session failed on it.
                     if (cut.opportunistic && !failure && !cut.proposed) resolve();
                     else if (!cut.proposed && isNoWork(error.message)) reject(new CapacityError(`The request needs a cut and Pi has none to make (${error.message})`));
-                    else reject(error.message === "Compaction cancelled" && failure instanceof Refusal ? failure : error);
+                    else reject(error.message === "Compaction cancelled" && failure instanceof Refusal ? failure : cut.proposed ? new CommitFault(error.message) : error);
                 } }));
         } finally { pendingCut = undefined; }
         access();
@@ -539,11 +542,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		if (exhausted) return;
 		// Pi reports manual no-work as failures; an accepted pi-tuck draft cannot be a no-op.
 		if (event.reason === "manual" && !event.fromExtension && !event.aborted && isNoWork(event.errorMessage)) return;
-		if (active() && !event.aborted) fail(new Error(event.errorMessage ?? "Compaction failed"), ctx);
+		if (active() && !event.aborted) fail(new (event.fromExtension ? CommitFault : Error)(event.errorMessage ?? "Compaction failed"), ctx);
 	});
     pi.on("agent_before_settle", (event, ctx) => {
         if (!pendingBoundaryCommit) return;
-        if (event.outcome === "error") fail(new Error("Native tool-loop boundary draft remained unconfirmed at error settlement"), ctx);
+        if (event.outcome === "error") fail(new CommitFault("Native tool-loop boundary draft remained unconfirmed at error settlement"), ctx);
         else pendingBoundaryCommit = false;
     });
 	pi.on("context_with_system", (event, ctx) => {
