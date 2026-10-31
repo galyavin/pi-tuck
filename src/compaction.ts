@@ -239,7 +239,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
     pi.on("agent_start", () => { admittedRun = true; pending = undefined; phase = "idle"; });
-    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); });
+    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); clips.clear(); });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
@@ -286,7 +286,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     let pendingCut: { mandatory: number; before: number; host: number; opportunistic: boolean; proposed: boolean } | undefined;
     let failure: Error | undefined;
     let pendingBoundaryCommit = false;
-    // Fresh tool results the room cannot hold, by call id: each request carries the clip in their place; the session keeps them whole.
+    // Fresh tool results the room cannot hold, by call id: each request of the run carries the clip in their place; the session keeps them
+    // whole. A clip ends with its run like any failure would: the next run plans from the session as it is, where the result is no longer fresh.
     const clips = new Map<string, Clip>();
 	const fail = (error: unknown, ctx: ExtensionContext) => {
 		recorder.stop("native-attempt-failed");
