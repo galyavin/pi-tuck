@@ -46,6 +46,11 @@ const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JS
 class Refusal extends Error {}
 /** A refusal for want of room, which the user can remedy: it carries advice. */
 class CapacityError extends Refusal {}
+/** What a capacity refusal tells the operator. When the provider has counted far more input than pi-tuck's estimate, the refusal most
+ * likely comes from that counting (an upstream behind a router can spend much more context on tool schemas), so the notice says so. */
+export const refusalNotice = (message: string, factor: number): string =>
+    message + "; shorten the input, use a model with a larger window, or lower Pi's compaction.reserveTokens, then retry." +
+    (factor >= 1.5 ? ` This provider has counted up to ${factor.toFixed(1)}x the input pi-tuck estimates; through a router such as OpenRouter, a different upstream may count less.` : "");
 /** The most a seed or an overflow raise may set the calibration factor to. A paired reply's own ratio is not bounded by it. */
 export const CALIBRATION_CEILING = 1.5;
 /** How many recent paired replies (and overflow bounds, and the seed while it is among them) the calibration factor is the maximum of. */
@@ -279,7 +284,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         pendingBoundaryCommit = false;
         pending = undefined;
 		try { options.fail?.(error); } finally {
-            try { if (notify) ctx.ui.notify(failure.message + "; shorten the input, use a model with a larger window, or lower Pi's compaction.reserveTokens, then retry.", "error"); }
+            try { if (notify) ctx.ui.notify(refusalNotice(failure.message, factor), "error"); }
             finally { ctx.abort(); }
         }
 	};

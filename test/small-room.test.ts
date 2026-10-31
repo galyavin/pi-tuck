@@ -10,9 +10,10 @@ import { harness } from './budget-fixture';
 // recorded (details.diagnosticReceipt.settings): mandatory input 2,489 (the saved system message: 2,789 characters of prompt and 7,158 of schema
 // for Pi's four tools and pi-tuck's two) and no host input, and calibrationFactor 2.425210674157303, which makes the room plan's reserve 28,502
 // (the receipt's draftReservedTokens) and leaves 4,266 estimated tokens for the conversation. That factor is the first paired reply, where the
-// provider counted 6,907 input tokens for a request estimated at 2,846; over the whole run the provider's count was about 3,600 + 1.19 times the
-// estimate, a fixed overhead the estimate cannot see, which the factor then multiplies into the conversation. The 1.0.3 re-run of the same chain
-// (smoke32-r16) had none of it (about 150 + 1.15 times), a factor of 1.19, and no refusal on any code. This test pins the faulting run's regime.
+// provider counted 6,907 input tokens for a request estimated at 2,846. That run was served by one OpenRouter upstream (Wafer) that spends about
+// twice the context other upstreams do on tool schemas, and really does: it rejects a request past its window by its own count. So the factor
+// was true for that upstream, and the refusal it led to was correct there. The 1.0.3 re-run of the same chain (smoke32-r16) was served
+// elsewhere, at a factor of 1.19, and refused on no code. This test pins the high-factor regime at that room.
 // A user turn of about 1,900 characters has called two tools, and the second result is 11,880 characters that no reply has seen. The first
 // request's 1,470-character prompt and the turn are quoted, the fresh round stays native, and the ledger keeps its headings: a floor of 4,207
 // against 4,266 in the room. Replayed from the recorded session, 1.0.1's floor was 4,431 (summary wrapper 245, quotes 409 and 519, headings 119,
