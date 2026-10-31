@@ -3,17 +3,28 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.2] - 2026-10-31
+
+Measured before release with paired replays against 1.0.1 (same sessions, same model as agent and judge): no loss of answer accuracy at
+a 128k or a 32k window, and time questions answered as before.
 
 ### Changed
 
 - A dialogue that does not fit the summary is now shortened, oldest assistant text first, instead of replaced by a ranked selection of
-  records.
+  records. The newest assistant text that fits a third of the allowance is kept until user prompts have given way; a clip that would keep
+  no text is counted in one omission notice instead.
+- Records name the time of user turns only; assistant, tool and notice records no longer carry one. Recall still returns every
+  source's time.
 - Summaries are headed `TUCK-TRANSCRIPT/2` and hold one line of plain text per record (`#12 user @2026-10-30T14:00:00Z: text`) instead
   of one JSON object, which makes them about 30 percent shorter on sessions where the assistant writes little and about 14 percent on
   prose-heavy ones. A passage a clip leaves out names the call that reads it back (`tuck_recall {"index":12,"offset":523}`). Summaries
   saved by 1.0.x (`TUCK-TRANSCRIPT/1`, and `VCC-TRANSCRIPT/1` before them) are read as before and keep their format when a native
   omission filters them.
+
+### Fixed
+
+- In small windows a session that writes little prose cut again almost every tool round (174 cuts in 300 rounds at 32k), because the
+  recent turns kept native could fill the whole input room. They now take at most half of it.
 
 ## [1.0.1] - 2026-10-30
 
@@ -74,6 +85,7 @@ Tagged, not published.
 Source preview on GitHub, not published to npm. Deterministic compaction with `pi_tuck_recall` and `pi_tuck_search`; semantic search
 opt-in, with a runtime the user had to supply.
 
+[1.0.2]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.2
 [1.0.1]: https://github.com/galyavin/pi-tuck/releases/tag/v1.0.1
 [1.0.0]: https://github.com/galyavin/pi-tuck/tree/v1.0.0
 [0.2.1]: https://github.com/galyavin/pi-tuck/tree/e00fa99
