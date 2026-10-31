@@ -1,0 +1,31 @@
+name: Release
+
+# Publishes the tagged version to npm with trusted publishing (OIDC): no token, no interactive 2FA, provenance attached.
+# npmjs.com must list this repository and this file name (release.yml) as the package's trusted publisher.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@^11.5.1
+      - name: Tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME does not match package.json $version"; exit 1; }
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm publish

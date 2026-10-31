@@ -1,6 +1,6 @@
 import { scriptedModelRuntime } from './model-fixture';
 import { expect, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Type } from 'typebox';
@@ -101,8 +101,19 @@ export interface Options {
  compactionEnabled?: boolean;
 }
 
+/** Pi's system prompt carries the session directory, so budgets pinned here assume a macOS-length $TMPDIR (48 characters). A shorter one,
+ * such as Linux's /tmp, is padded to that length so the same pins hold on any runner; a longer one is used as it is. */
+const REFERENCE_TMPDIR = 48;
+function sessionBase() {
+ const base = tmpdir();
+ if (base.length >= REFERENCE_TMPDIR) return base;
+ const padded = join(base, 'p'.repeat(REFERENCE_TMPDIR - base.length - 1));
+ mkdirSync(padded, { recursive: true });
+ return padded;
+}
+
 export async function harness(options: Options) {
- const dir = mkdtempSync(join(tmpdir(), 'pi-host-input-')); let session: AgentSession | undefined;
+ const dir = mkdtempSync(join(sessionBase(), 'pi-host-input-')); let session: AgentSession | undefined;
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
  const cleanup = async () => { if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
