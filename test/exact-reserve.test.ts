@@ -20,7 +20,7 @@ async function offered(requestReserve: CompactionOptions['requestReserve'], sett
   registerCommand: () => {}, registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [] } as unknown as ExtensionAPI;
  const errors: unknown[] = [];
  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: settingsReserve, keepRecentTokens: 0 } });
- const handle = await installCompaction(pi, { settings, ...(requestReserve ? { requestReserve } : {}), fail: error => errors.push(error) });
+ const handle = await installCompaction(pi, { cutAt: 1, settings, ...(requestReserve ? { requestReserve } : {}), fail: error => errors.push(error) });
  const runtime = await scriptedModelRuntime(), model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
  const ctx = { model, cwd: '/x', abort: vi.fn(), getSystemPrompt: () => 'system', ui: { notify: () => {} }, sessionManager: { getBranch: () => [], getEntries: () => [] } } as unknown as ExtensionContext;
  // A user message whose measure, with the system part, is exactly `tokens` (the estimator is four characters per token, rounded up).

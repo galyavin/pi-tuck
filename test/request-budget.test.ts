@@ -24,7 +24,7 @@ test(`complete native request budget admits or rejects before effects: ${kind}`,
   let requests=0,effects=0,permitted=true;const faults:string[]=[];
   const loader=new DefaultResourceLoader({cwd:dir,agentDir:dir,settingsManager:settings,noExtensions:true,noSkills:true,noContextFiles:true,noPromptTemplates:true,noThemes:true,systemPrompt:'Budget contact',extensionFactories:[async pi=>{
    // Exercise actual effective Pi settings, including in-memory model overrides.
-   await installCompaction(pi,{assertAccess:()=>{if(!permitted)throw Error('Revoked');},fail:e=>{faults.push(String(e));permitted=false;}});
+   await installCompaction(pi,{cutAt:1,assertAccess:()=>{if(!permitted)throw Error('Revoked');},fail:e=>{faults.push(String(e));permitted=false;}});
   }]});await loader.reload();expect(loader.getExtensions().errors).toEqual([]);
   ({session}=await createAgentSession({cwd:dir,modelRuntime:runtime,model,thinkingLevel:'low',sessionManager:manager,settingsManager:settings,resourceLoader:loader,tools:['effect'],customTools:[{
    name:'effect',label:'Effect',description:kind==='tools'?'d'.repeat(12000):'Local effect witness',parameters:Type.Object({}),

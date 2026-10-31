@@ -5,7 +5,7 @@ import { exportSource } from "./source-export.js";
 import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
-import { bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
+import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -105,7 +105,7 @@ export interface CompactionOptions {
 }
 
 export async function installCompaction(pi: ExtensionAPI, options: CompactionOptions = {}) {
-    const cutAt = options.cutAt ?? 1;
+    const cutAt = options.cutAt ?? DEFAULT_CUT_AT;
     if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
     const semantic = options.semanticRecall ?? createSemanticRecall();
     let semanticTransition: Promise<void> = Promise.resolve();

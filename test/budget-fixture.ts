@@ -40,6 +40,8 @@ export function referenceSystemPart(saved: Messages, observedPrompt: string, too
 export interface Unseen { growHost: (tokens: number) => void; setTools: (dormant: boolean) => void; steer: (tokens: number) => Promise<void>; }
 
 export interface Options {
+ /** Install with no cutAt, so the compactor's own default cut point applies; otherwise the harness pins cutAt 1 unless `compaction` sets it. */
+ cutAtDefault?: boolean;
  /** Where the request that matters is made. */
  at: 'prompt' | 'tool' | 'impossible' | 'tool-impossible';
  /** The reference measure of that request, queued messages not included (host input, system part and conversation as the guard counts them). */
@@ -170,11 +172,14 @@ export async function harness(options: Options) {
    pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) options.onBoundary?.(event, ctx); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
+   // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
+   // and `cutAtDefault` leaves it to the compactor's default.
    await installCompaction(pi, {
     requestReserve: () => ({ response: 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
     fail: e => faults.push(String(e) + (process.env.BUDGET_TRACE ? ' @ ' + String((e as Error).stack).split('\n').slice(1, 4).join(' | ') : '')), settings,
     ...options.compaction,
+    ...(options.cutAtDefault ? { cutAt: undefined } : { cutAt: options.compaction?.cutAt ?? 1 }),
    });
    // Unseen growth: after the compactor has decided, before the next request is made.
    if (options.afterDecision) {
