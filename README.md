@@ -120,7 +120,7 @@ Each row says what was measured, under which conditions, and where the data is. 
 | 1.0.2 changes (plain-text summary, shrinking dialogue view, time on user turns only) against 1.0.1 | No loss of answer accuracy; for example 128k: 2 wins and 1 loss over 128 questions; 32k: 2 wins and 4 losses over 127 (limit 6) | Paired replay, DeepSeek flash as agent and judge, 5 sessions | [`rnd/IDEAS.md`](rnd/IDEAS.md) "Bundle arm result", [`CHANGELOG.md`](CHANGELOG.md) |
 | Summary size, plain-text format against the 1.0.1 JSON format | About 30% shorter where the agent writes little, about 14% shorter where it writes a lot | Same dialogue | [`CHANGELOG.md`](CHANGELOG.md) 1.0.2 |
 | Small-window fix | A session that writes little prose cut 174 times in 300 tool rounds at 32k with a 16k reserve (1.0.1 code). With the fix: 47 cuts, none freeing under a tenth of the room | Real planner on synthetic sessions | [`rnd/IDEAS.md`](rnd/IDEAS.md) item 7 |
-| Stall fix: a long session's cut | 1.0.0 took tens of seconds per cut on a session with thousands of entries (88 s at 3,900 entries). A cut now takes well under a second | Low-prose synthetic session, 128k window | [`CHANGELOG.md`](CHANGELOG.md) 1.0.1 |
+| Stall fix: a long session's cut | A cut at 3,888 entries took 72 s in 1.0.0 and takes 174 ms since 1.0.1. Cost now grows about in line with the session: four times the entries takes 3.3 to 3.9 times as long | One machine, the same synthetic session for both numbers (little prose, 128k window, reserve 16,384, turn 644) | [`CHANGELOG.md`](CHANGELOG.md) 1.0.1 |
 
 Notes:
 
