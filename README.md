@@ -144,7 +144,7 @@ A bad file is reported at session start, and pi-tuck uses the defaults.
 
 ### Small windows
 
-pi-tuck keeps room for the model's reply: the larger of the model's output limit and Pi's `compaction.reserveTokens` (default 16,384). It refuses a request that cannot fit, rather than let the provider cut it off. It estimates the request's size, and it scales that estimate by the worst gap it has seen between its count and the provider's. In a small room, a provider that counts many more tokens can make it refuse a request that would in fact fit, where Pi's built-in compaction runs. Lower the reserve for that model in Pi's `settings.json`, or use a larger window. The 32k evaluation runs with a reserve of 8,192:
+pi-tuck keeps room for the model's reply: the larger of the model's output limit and Pi's `compaction.reserveTokens` (default 16,384). It refuses a request that cannot fit, rather than let the provider cut it off. It estimates the request's size, and it scales that estimate by the worst gap it has seen between its count and the provider's. In a small room, a provider that counts many more tokens can make it refuse a request that would in fact fit, where Pi's built-in compaction runs. Through a router such as OpenRouter, the upstream that serves each request can change the count. Lower the reserve for that model in Pi's `settings.json`, or use a larger window. The 32k evaluation runs with a reserve of 8,192:
 
 ```json
 { "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 8192 } } } }
