@@ -3,6 +3,15 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A refusal no longer outlives the attempt it was for. When pi-tuck refused a request (a host view or a fresh tool round larger than the
+  input room, or a cut it could not make), a later run that no prompt started, such as a custom message that triggers a turn, was aborted
+  before its first request until the session restarted, even once there was room, and it reported the old refusal. A refusal that was not for
+  want of room was held the same way and also aborted every later prompt. The next run, whatever starts it, now decides afresh.
+
 ## [1.0.3] - 2026-10-31
 
 First npm release since 1.0.1: it also carries everything listed under 1.0.2, which was tagged but not published to npm. Releases are

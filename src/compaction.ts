@@ -40,7 +40,12 @@ const RecallInput = Type.Union([
 ]);
 const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({entryId,sourceSha:Type.String({minLength:64,maxLength:64}),start:Type.Integer({minimum:0}),end:Type.Integer({minimum:0})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
-class CapacityError extends Error {}
+/** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. It is a decision about the
+ * state as it was, so it ends with the attempt (`forgetRefusal`) and the next attempt decides afresh. Any other failure is a fault in the compactor
+ * or its host, and stays until the session restarts. */
+class Refusal extends Error {}
+/** A refusal for want of room, which the user can remedy: it carries advice. */
+class CapacityError extends Refusal {}
 /** The most a seed or an overflow raise may set the calibration factor to. A paired reply's own ratio is not bounded by it. */
 export const CALIBRATION_CEILING = 1.5;
 /** How many recent paired replies (and overflow bounds, and the seed while it is among them) the calibration factor is the maximum of. */
@@ -220,7 +225,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
     pi.on("agent_start", () => { admittedRun = true; pending = undefined; phase = "idle"; });
-    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; });
+    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetRefusal(); });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
@@ -278,6 +283,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             finally { ctx.abort(); }
         }
 	};
+	// The one place a refusal is dropped: when its attempt has settled, when a prompt arrives, and when the operator asks for a cut. A run that no
+	// input started (a custom message) has only the first of these.
+	const forgetRefusal = () => { if (failure instanceof Refusal) failure = undefined; };
 	const access = () => {
 		if (failure) throw failure;
 		if (!active()) throw new Error("Compaction host is inactive");
@@ -290,7 +298,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     let phase: "idle" | "decided" | "starting" = "idle";
     pi.on("input", async (event, ctx) => {
         if (!ctx.isIdle() || phase === "starting") return; // a steering or follow-up message joins the running request
-        if (failure instanceof CapacityError) failure = undefined;
+        forgetRefusal();
         phase = "decided";
         try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
         catch (error) { fail(error, ctx); }
@@ -346,7 +354,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // Pi also labels the awaited idle incoming preflight "manual".
             const incoming = pendingCut;
             const operatorManual = event.reason === "manual" && !(incoming && !admittedRun);
-            if (operatorManual && !admittedRun && failure instanceof CapacityError) failure = undefined;
+            if (operatorManual && !admittedRun) forgetRefusal();
 			access();
 			if (event.customInstructions?.trim()) {
 				recorder.stop("no-cut-custom-instructions");
@@ -391,7 +399,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             if (decision.kind === "none") return { cancel: true };
 			recorder.stop("no-cut");
             ctx.ui.notify(decision.message, "warning");
-			if (!operatorManual) fail(decision.capacity ? new CapacityError(decision.message) : new Error(decision.message), ctx);
+			if (!operatorManual) fail(new (decision.capacity ? CapacityError : Refusal)(decision.message), ctx);
 			return { cancel: true };
 		} catch (error) {
 			try { fail(error, ctx); } finally { return { cancel: true }; }
@@ -438,14 +446,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     // planner declined it, Pi had nothing to compact, an earlier handler cancelled it) it is no fault, unless a failure is latched
                     // or the compactor proposed a cut that then failed to commit (the session may hold what the file lacks).
                     if (cut.opportunistic && !failure && !cut.proposed) resolve();
-                    else reject(error.message === "Compaction cancelled" && failure instanceof CapacityError ? failure : error);
+                    else reject(error.message === "Compaction cancelled" && failure instanceof Refusal ? failure : error);
                 } }));
         } finally { pendingCut = undefined; }
         access();
         // The cut awaited: take the snapshot again. An opportunistic cut never throws; the request is not over the room, and the guard decides.
         const next = snapshot(), after = next.before + next.mandatory, afterFits = fits(after, limits(ctx).room, ctx);
         if (!cut.opportunistic && (after >= total || !afterFits))
-            throw new (afterFits ? Error : CapacityError)("Incoming Pi preflight compaction did not reduce context within the estimated request budget");
+            throw new (afterFits ? Refusal : CapacityError)("Incoming Pi preflight compaction did not reduce context within the estimated request budget");
     };
     pi.on("before_agent_start", async (event, ctx) => {
         const prompted = phase === "decided";
@@ -492,7 +500,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve };
                 },
             });
-            if (decision.kind === "fault") throw new (decision.capacity ? CapacityError : Error)(decision.message);
+            if (decision.kind === "fault") throw new (decision.capacity ? CapacityError : Refusal)(decision.message);
             if (decision.kind !== "cut") return;
             const compaction = captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, "tool-loop", before, true, false, previousSummary,
                 { response, host, mandatory, target: decision.target, margin: room - band });
