@@ -1,10 +1,9 @@
 import { isSourceExport } from "./recall-operation";
-import type { CompilerMessage, NormalizedBlock, ReceiptLink, HistoricalReceipt } from "../types";
-import { isTextOnly, textOf } from "./content";
+import type { CompilerMessage, NormalizedBlock } from "../types";
+import { textOf } from "./content";
 import { sanitize } from "./sanitize";
-import { MAX_RECEIPT_CHARACTERS, smallOriginalArguments } from "./transcript";
 
-const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receipts: Map<string, ReceiptLink>, originals: Map<string, HistoricalReceipt>): NormalizedBlock[] => {
+const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined): NormalizedBlock[] => {
   if (msg.role === "custom") return [{ kind: "notice", text: sanitize(textOf(msg.content)), originalText: textOf(msg.content), sourceIndex: msgIndex, startsSource: true }];
   if (msg.role === "user") {
     const blocks: NormalizedBlock[] = [];
@@ -27,16 +26,7 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receip
     return [{ kind: "bash", command: cmd, output: out, exitCode: exit, cancelled: msg.cancelled, truncated: msg.truncated, sourceIndex: msgIndex }];
   }
 
-  if (msg.role === "toolResult") {
-    const original = originals.get(msg.toolCallId);
-    return [{
-      kind: "tool_result",
-      name: msg.toolName,
-      text: sanitize(textOf(msg.content)),
-      sourceIndex: msgIndex,
-      originalReceipt: (original?.text.length ?? Infinity) <= MAX_RECEIPT_CHARACTERS ? original : undefined,
-    }];
-  }
+  if (msg.role === "toolResult") return [{ kind: "tool_result", name: msg.toolName, text: sanitize(textOf(msg.content)), sourceIndex: msgIndex }];
 
   if (msg.role === "assistant") {
     if (!msg.content) return [];
@@ -58,7 +48,6 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined, receip
           name: part.name,
           args: part.arguments,
           callId: part.id,
-          receipt: receipts.get(part.id),
           sourceIndex: msgIndex,
         });
       }
@@ -107,29 +96,13 @@ export const normalize = (
         order, index: context.sourceIndices[order], isError: msg.isError, content: msg.content });
     }
   });
-  const links = new Map<string, ReceiptLink>();
-  const originals = new Map<string, HistoricalReceipt>();
-  for (const [id, { calls, receipts }] of pairs) {
-    const call = calls[0], receipt = receipts[0];
-    const status = calls.length !== 1 || receipts.length > 1 ? "ambiguous" : !receipt ? "missing" :
-      receipt.name !== call.name || receipt.order <= call.order ? "ambiguous" : receipt.isError ? "error" : "non-error";
-    links.set(id, { status, sourceIndices: receipts.flatMap(r => r.index === undefined ? [] : [r.index]),
-      dependencyIndices: [...calls, ...receipts].flatMap(source => source.index === undefined ? [] : [source.index]) });
-    if ((status === "error" || status === "non-error") && call.index !== undefined && receipt.index !== undefined &&
-      Number.isSafeInteger(call.index) && call.index >= 0 && Number.isSafeInteger(receipt.index) && receipt.index > call.index &&
-      call.name.trim() && call.name.length <= 160 && id.length <= 160 && smallOriginalArguments(call.args, Number.MAX_SAFE_INTEGER) &&
-      isTextOnly(receipt.content)) {
-      const text = textOf(receipt.content);
-      if (text) originals.set(id, {
-        text, isError: receipt.isError,
-        producer: { sourceIndex: call.index, toolName: call.name, toolCallId: id,
-          ...(smallOriginalArguments(call.args) ? { arguments: call.args } : { argumentsOmitted: true as const }) },
-      });
-    }
-  }
-  return messages.flatMap((msg, i) => normalizeOne(msg, sourceIndices ? sourceIndices[i] : i, links, originals).map(block => {
-    if (block.kind === "tool_result" && msg.role === "toolResult" &&
-      ["error", "non-error"].includes(links.get(msg.toolCallId)?.status ?? "") &&
+  // A call paired with exactly one later receipt of the same tool has a recorded outcome. An export through recall keeps its outcome block.
+  const paired = (id: string): boolean => {
+    const pair = pairs.get(id), call = pair?.calls[0], receipt = pair?.receipts[0];
+    return Boolean(pair && call && receipt && pair.calls.length === 1 && pair.receipts.length === 1 && receipt.name === call.name && receipt.order > call.order);
+  };
+  return messages.flatMap((msg, i) => normalizeOne(msg, sourceIndices ? sourceIndices[i] : i).map(block => {
+    if (block.kind === "tool_result" && msg.role === "toolResult" && paired(msg.toolCallId) &&
       isSourceExport(pairs.get(msg.toolCallId)?.calls[0]?.args)) block = { ...block, recallExport: true };
     if (sourceTimes) block = { ...block, sourceTimes: timeByIndex };
     return block.kind === "notice" && sourceEntryIds?.[i] !== undefined ? { ...block, sourceEntryId: sourceEntryIds[i] } : block; }));
