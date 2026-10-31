@@ -98,12 +98,14 @@ const excerptRecords = (text: string, { passages, costs }: Analysis, role: "user
   headLimit: number, tailLimit: number, readFrom: (offset: number) => string): TranscriptRecord[] => {
   const charLimit = 1024;
   const identity = { role, ...(sourceIndex !== undefined ? { sourceIndex } : {}) };
-  if (escapedLength(text) <= charLimit && costs.reduce((sum, cost) => sum + cost, 0) <= headLimit + tailLimit)
+  // A line carries at least as many characters as the text, so a long text is over the limit without counting its escapes.
+  const fits = (from: number, to: number) => to - from <= charLimit && escapedLength(text.slice(from, to)) <= charLimit;
+  if (fits(0, text.length) && costs.reduce((sum, cost) => sum + cost, 0) <= headLimit + tailLimit)
     return [{ kind: "excerpt", ...identity, text }];
   let head = 0, headCost = 0, tail = passages.length, tailCost = 0;
-  while (head < tail && headCost + costs[head]! <= headLimit && escapedLength(text.slice(0, passages[head]!.end)) <= charLimit) { headCost += costs[head++]!; }
+  while (head < tail && headCost + costs[head]! <= headLimit && fits(0, passages[head]!.end)) { headCost += costs[head++]!; }
   if (tailLimit > 0) {
-    while (tail > head && tailCost + costs[tail - 1]! <= tailLimit && escapedLength(text.slice(passages[tail - 1]!.start)) <= charLimit) { tailCost += costs[--tail]!; }
+    while (tail > head && tailCost + costs[tail - 1]! <= tailLimit && fits(passages[tail - 1]!.start, text.length)) { tailCost += costs[--tail]!; }
   }
   const headEnd = head ? passages[head - 1]!.end : 0;
   const tailStart = tail < passages.length ? passages[tail]!.start : text.length;
