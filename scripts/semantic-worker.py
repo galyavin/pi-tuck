@@ -100,7 +100,8 @@ def load():
      if server.poll() is not None:raise Refusal('native_start_failure')
      break
    except (OSError,Refusal):pass
-   if time.monotonic()-started>50:raise Refusal('native_start_timeout')
+   # A busy machine can take minutes to start the server; the host's start deadline (START_DEADLINE_MS, 600 s) stays above this.
+   if time.monotonic()-started>540:raise Refusal('native_start_timeout')
    time.sleep(.02)
  return server
 def run(req):

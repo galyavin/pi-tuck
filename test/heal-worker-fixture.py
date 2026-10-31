@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 root = os.environ["PI_SEMANTIC_RUNTIME_ROOT"]
 broken = False  # like the real worker, whose dead native server is never restarted inside the same process
@@ -24,6 +25,12 @@ def vector():
 def run(request):
     op = request["op"]
     if op == "ready":
+        # A slow start, as on a busy machine: the test sets the delay in the runtime root and removes it when the load is gone.
+        try:
+            with open(os.path.join(root, "ready-delay-ms")) as handle:
+                time.sleep(int(handle.read()) / 1000)
+        except FileNotFoundError:
+            pass
         return {"identity": "heal-process-fixture", "dimensions": 768, "maxTokens": 8192, "offline": True}
     if op == "tokenize":
         return {"ranges": [[{"start": 0, "end": len(text.encode("utf-16-le")) // 2, "tokens": 3}] for text in request["texts"]], "offsetUnit": "utf16"}

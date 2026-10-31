@@ -58,3 +58,37 @@ test('after an idle stop the next search starts a new worker process and finds t
  expect(page.groups.length).toBeGreaterThan(0);
  await controller.close();expect(existsSync(config.indexDirectory)?readdirSync(config.indexDirectory):[]).toEqual([]);
 },60000);
+
+// A busy machine: the worker takes longer to start (Python start, `ready`, the model load) than a loaded call may take. Held to the per-call
+// deadline, it never started and semantic recall went unavailable (R&D's repro on a machine at load 65-87: 0 of 1,606 units after 173 s).
+function slowStart(delayMs:number){
+ const root=mkdtempSync(join(tmpdir(),'pi-semantic-slow-start-'));roots.push(root);
+ const project=join(root,'project'),runtimeRoot=join(root,'runtime');mkdirSync(project);mkdirSync(runtimeRoot);encoder(runtimeRoot);
+ writeFileSync(join(runtimeRoot,'ready-delay-ms'),String(delayMs));
+ const config={pythonPath:testPython,runtimeRoot,indexDirectory:join(root,'cache'),workerPath:fileURLToPath(new URL('./heal-worker-fixture.py',import.meta.url)),queryWaitMs:8000,...testNativeOwner};
+ const sessionManager=SessionManager.inMemory(project);sessionManager.appendMessage({role:'user',content:'Original source about the encoder.',timestamp:1});sessionManager.appendCompaction('summary of what was cut','no-such-entry',100,undefined,true);
+ return {runtimeRoot,config,provider:()=>semanticEligibleSources({cwd:project,sessionManager},{},()=>{})};
+}
+test('a worker that starts slower than a loaded call may take still starts: its start has its own deadline',async()=>{
+ const {config,provider}=slowStart(800);
+ const controller=new SemanticRecallController(config,{callDeadlineMs:300,startDeadlineMs:5000,healDelaysMs:[60],healSteadyMs:60});
+ controller.enable();
+ expect((await controller.search('encoder',provider)).status).toBe('ok');
+ expect(controller.status()).toMatchObject({state:'ready',lastError:null,recovery:null});
+ await controller.close();
+},60000);
+test('a worker that missed its start deadline is retried in the same session and becomes ready once the machine is free',async()=>{
+ const {runtimeRoot,config,provider}=slowStart(1500);
+ const controller=new SemanticRecallController(config,{callDeadlineMs:300,startDeadlineMs:600,healDelaysMs:[60],healSteadyMs:60});
+ const states:string[]=[];controller.onStateChange(state=>states.push(state));
+ controller.enable();
+ expect((await controller.search('encoder',provider)).status).not.toBe('ok');
+ await wait(()=>controller.status().state==='unavailable');
+ expect(controller.status().lastError).toBe('Local runtime deadline');
+ rmSync(join(runtimeRoot,'ready-delay-ms')); // the load is gone
+ await wait(()=>controller.status().state==='ready');
+ expect(controller.status().recovery).toBeNull();
+ expect((await controller.search('encoder',provider)).status).toBe('ok');
+ expect(states).toContain('unavailable');expect(states.at(-1)).toBe('ready');
+ await controller.close();
+},60000);
