@@ -104,7 +104,7 @@ The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.m
 Known limits today:
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up. Each look-up costs a tool call.
-- Small windows have little headroom. At a 32k window with a 16,384 reply reserve, 1.0.1 refused to cut. In one live run at that setting, 1.0.3 ran without refusals. That is one run, not a guarantee. If pi-tuck cannot fit what must stay verbatim, it refuses to cut where Pi's built-in compaction may run. A 1.0.4 fix is planned so that a refusal no longer aborts later prompts. Lower the reserve or use a larger window; see [Small windows](#small-windows).
+- Small windows: pi-tuck 1.0.1 refused to compact at a 32k window with Pi's default 16,384 reserve. 1.0.3 made no refusals in the live test at that setting, but the sample is small (3 tasks), and the cause is still being investigated. Version 1.0.4, in preparation, fixes a related bug, where a refusal could make the next prompt fail. On a small window, lowering the reserve gives headroom; see [Small windows](#small-windows).
 - Semantic search runs only on macOS with Apple silicon.
 
 ## Benchmarks
