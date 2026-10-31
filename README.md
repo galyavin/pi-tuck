@@ -8,7 +8,7 @@ pi install npm:pi-tuck
 
 ## pi-tuck against Pi's built-in compaction
 
-Pi's built-in compaction asks a model to write a summary. pi-tuck builds the summary from the session itself. The two time and context rows compare pi-tuck 1.0.1 with Pi 1.4.0's built-in compaction, where a local model writes the summary. Every number in this README names the pi-tuck build it was measured on; the release you install may be newer.
+Pi's built-in compaction asks a model to write a summary. pi-tuck builds the summary from the session itself. The two time and context rows compare pi-tuck 1.0.1 with Pi 1.4.0's built-in compaction, where a local model writes the summary. Each measured result in this README names the pi-tuck build or version it was measured on; the release you install may be newer.
 
 | | Pi's built-in (local model writes the summary) | pi-tuck |
 |---|---|---|
