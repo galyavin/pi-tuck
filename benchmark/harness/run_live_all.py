@@ -67,7 +67,7 @@ if __name__ == "__main__":
     plan = json.loads((HERE.parent / "data" / "sessions.json").read_text())["sessions"]
     prefix = "s" if args.suite == "main" else "t"
     wanted = args.sessions.split(",") if args.sessions else [s for s in plan if s.startswith(prefix)]
-    tucks = {"B": args.tuck, **({"T": args.tuck_tail} if args.tuck_tail else {})}
+    tucks = {"B": args.tuck, "C": args.tuck, **({"T": args.tuck_tail} if args.tuck_tail else {})}  # C: pi-tuck 1.0.3 on the main chains (PREREG-V103.md)
     with ThreadPoolExecutor(args.pairs) as pool:
         for session, status in pool.map(lambda s: chain(s, plan[s], tucks, args.suite, args.arms), wanted):
             print(session, status, flush=True)

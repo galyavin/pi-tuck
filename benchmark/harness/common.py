@@ -19,17 +19,19 @@ RETRY = {"enabled": True, "maxRetries": 40, "baseDelayMs": 5000, "maxAgentDelayM
 
 
 # The 32k suite (PREREG-32K.md): the same chains, harness and grader at a window small enough that a cut must summarise work in progress.
-# OpenRouter's deepseek flash with its context forced to 32,768 and its replies capped at 8,192, so every arm's reserve is 8,192 and the room
-# 24,576 (Pi takes the larger of reserveTokens and the model's output cap). A 16,384 reserve was tried first and pi-tuck refused ("mandatory
-# context cannot fit": its tool schemas and the task prompt leave too little of a 16k room); see PREREG-32K.md. keepRecentTokens keeps the main
-# run's share of the room: 20,000 of 98,304 -> 5,000 of 24,576. The key comes from OPENROUTER_API_KEY; nothing is written to disk.
-W32 = {"model": "openrouter/~deepseek/deepseek-flash-latest", "thinking": "high", "window": 32768, "max_tokens": 8192,
-       "compaction": {"enabled": True, "reserveTokens": 8192, "keepRecentTokens": 5000}}
-# Diagnostic only, never a result: the same suite with the 16,384 reserve first tried, to see which pi-tuck builds refuse in a 16k room.
-W32R16 = {**W32, "max_tokens": 16384, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 3333}}
+# DeepSeek V4.1 Flash, the dated snapshot (not the moving "-latest" alias), pinned to ONE OpenRouter upstream with no fallback: upstreams count tokens
+# differently (with pi-tuck's tool schemas Wafer reported 5,715 prompt tokens where the others said about 2,160), and pi-tuck calibrates on the reported
+# usage. DigitalOcean counts like the majority and answered about four times faster than the other candidate tested (Morph).
+# The window is forced to 32,768 and replies capped at 16,384, so every arm's reserve is 16,384 and the room 16,384 (Pi takes the larger of reserveTokens
+# and the model's output cap). keepRecentTokens keeps the main run's share of the room: 20,000 of 98,304 -> 3,333 of 16,384. The key comes from
+# OPENROUTER_API_KEY; nothing is written to disk.
+DEEPSEEK_ID = "deepseek/deepseek-v4.1-flash-1017"
+UPSTREAM = "DigitalOcean"
+ROUTING = {"only": [UPSTREAM], "allow_fallbacks": False}
+W32 = {"model": f"openrouter/{DEEPSEEK_ID}", "thinking": "high", "window": 32768, "max_tokens": 16384,
+       "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 3333}}
 SUITES = {"main": {"root": "live", "model": MODEL, "thinking": THINKING, "health": None},
-          "w32": {"root": "live32", "model": W32["model"], "thinking": W32["thinking"], "health": "https://openrouter.ai/api/v1/models"},
-          "w32r16": {"root": "live32-r16", "model": W32["model"], "thinking": W32["thinking"], "health": "https://openrouter.ai/api/v1/models"}}
+          "w32": {"root": "live32", "model": W32["model"], "thinking": W32["thinking"], "health": "https://openrouter.ai/api/v1/models"}}
 
 
 def dataset():
@@ -43,10 +45,15 @@ def sh(args, input=None, check=True, timeout=None):
 def agent_dir(arm: str, suite: str = "main") -> Path:
     """An isolated PI_CODING_AGENT_DIR per arm: the mac-studio model entry and the shared compaction settings, no packages, no
     extensions and no credentials (the model's key comes from STUDIO_API_KEY). The user's global settings never load."""
-    if suite in ("w32", "w32r16"):
-        return agent_dir_w32(arm, W32R16 if suite == "w32r16" else W32, suite)
+    if suite == "w32":
+        return agent_dir_w32(arm)
     path = RUNS / "agent" / arm
     path.mkdir(parents=True, exist_ok=True)
+    if arm == "C" and not (path / "pi-tuck").exists():  # arm C is pi-tuck 1.0.3 with the semantic runtime arm B provisioned, cloned
+        (path / "pi-tuck").mkdir()
+        for part in ("python", "runtime"):
+            subprocess.run(["cp", "-c", "-R", str(RUNS / "agent" / "B" / "pi-tuck" / part), str(path / "pi-tuck" / part)], check=True)
+        (path / "pi-tuck" / "index").mkdir()
     models = json.loads((PI_AGENT / "models.json").read_text())["providers"]
     provider = models["mac-studio"]
     assert provider["apiKey"].startswith("${"), "the mac-studio key must be an environment reference, never a literal"
@@ -64,15 +71,28 @@ def agent_dir_w32(arm: str, cfg: dict = W32, suite: str = "w32") -> Path:
     path = RUNS / "agent" / f"{arm}-{suite}"
     path.mkdir(parents=True, exist_ok=True)
     (path / "models.json").write_text(json.dumps({"providers": {"openrouter": {"modelOverrides": {
-        cfg["model"].split("/", 1)[1]: {"contextWindow": cfg["window"], "maxTokens": cfg["max_tokens"]}}}}}, indent=1))
+        cfg["model"].split("/", 1)[1]: {"contextWindow": cfg["window"], "maxTokens": cfg["max_tokens"], "compat": {"openRouterRouting": ROUTING}}}}}}, indent=1))
     (path / "settings.json").write_text(json.dumps({
         "compaction": cfg["compaction"], "retry": RETRY, "defaultProvider": "openrouter", "defaultModel": cfg["model"].split("/", 1)[1],
         "defaultThinkingLevel": cfg["thinking"], "quietStartup": True, "packages": [], "extensions": [],
     }, indent=1))
     runtime = path / "pi-tuck"
-    if arm in ("B", "T") and not runtime.exists():
+    if arm in ("B", "C", "T") and not runtime.exists():
         runtime.mkdir()
         for part in ("python", "runtime"):  # the encoder and its environment; the per-session index and sockets start empty
             subprocess.run(["cp", "-c", "-R", str(RUNS / "agent" / "B" / "pi-tuck" / part), str(runtime / part)], check=True)
         (runtime / "index").mkdir()
+    return path
+
+
+def agent_dir_recall() -> Path:
+    """Agent dir for the recall and LongMemEval benchmarks (PREREG-RECALL.md, PREREG-LME.md): the same pinned DeepSeek snapshot and upstream, the
+    window left at the model's own, and the semantic runtime cloned from arm B's."""
+    path = RUNS / "agent" / "R"
+    (path / "pi-tuck" / "index").mkdir(parents=True, exist_ok=True)
+    (path / "models.json").write_text(json.dumps({"providers": {"openrouter": {"modelOverrides": {DEEPSEEK_ID: {"compat": {"openRouterRouting": ROUTING}}}}}}, indent=1))
+    (path / "settings.json").write_text((RUNS / "agent" / "B" / "settings.json").read_text())
+    for part in ("python", "runtime"):
+        if not (path / "pi-tuck" / part).exists():
+            subprocess.run(["cp", "-c", "-R", str(RUNS / "agent" / "B" / "pi-tuck" / part), str(path / "pi-tuck" / part)], check=True)
     return path

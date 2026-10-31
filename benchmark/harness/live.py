@@ -156,7 +156,7 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", required=True, choices=["A", "B", "T"])
+    parser.add_argument("--arm", required=True, choices=["A", "B", "C", "T"])
     parser.add_argument("--suite", default="main", choices=sorted(SUITES))
     parser.add_argument("--session", required=True)
     parser.add_argument("--tasks", required=True)
@@ -172,9 +172,9 @@ def main():
     cwd.mkdir(parents=True, exist_ok=True)
     container_file = out / "container"
     extensions = [str(BENCH / "harness" / "container-tools.ts")]
-    if args.arm in ("B", "T"):
+    if args.arm in ("B", "C", "T"):
         if not args.tuck:
-            sys.exit("arms B and T need --tuck")
+            sys.exit("arms B, C and T need --tuck")
         extensions.append(str(Path(args.tuck).resolve() / "index.ts"))
     env = {**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir(args.arm, args.suite)), "TUCK_EVAL_CONTAINER_FILE": str(container_file)}
     command = ["pi", "--mode", "rpc", "--no-extensions", *sum((["-e", e] for e in extensions), []), "--no-skills", "--no-prompt-templates",
