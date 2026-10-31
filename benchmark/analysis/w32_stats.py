@@ -1,0 +1,129 @@
+"""The 32k suite's readouts (PREREG-32K.md).
+
+Usage: w32_stats.py LIVE32_DIR [--boot 10000] [--seed 1]
+LIVE32_DIR holds <session>-<arm>/ folders (arms A, B, T) written by harness/live.py --suite w32."""
+import argparse
+import json
+import random
+import re
+import statistics
+from collections import defaultdict
+from pathlib import Path
+
+from sessionlog import session_cuts
+
+TASK = re.compile(r"Task (\d+) of \d+")
+REFUSAL = "mandatory context cannot fit"
+
+
+def text_of(content) -> str:
+    return content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+
+
+def summarising_tasks(folder: Path) -> set[int]:
+    """Tasks in which a cut summarised part of the task at hand: the entry the cut keeps from comes after the task's prompt entry."""
+    path = folder / "session.jsonl"
+    if not path.exists():
+        return set()
+    entries = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    task, starts = 0, {}
+    index = {e.get("id"): n for n, e in enumerate(entries)}
+    for n, e in enumerate(entries):
+        if e.get("type") == "message" and e["message"]["role"] == "user":
+            m = TASK.search(text_of(e["message"]["content"]))
+            task = int(m.group(1)) if m else task + 1
+            starts[task] = n
+    found = set()
+    for n, e in enumerate(entries):
+        if e.get("type") == "compaction":
+            current = max((t for t, s in starts.items() if s <= n), default=None)
+            if current is not None and index.get(e.get("firstKeptEntryId"), 0) > starts[current]:
+                found.add(current)
+    return found
+
+
+def load(folder: Path):
+    tasks = {}
+    if (folder / "tasks.jsonl").exists():
+        for line in (folder / "tasks.jsonl").read_text().splitlines():
+            if line.strip():
+                t = json.loads(line)
+                tasks[t["index"]] = t
+    stats = json.loads((folder / "stats.json").read_text()) if (folder / "stats.json").exists() else None
+    refusals = (folder / "events.jsonl").read_text().count(REFUSAL) if (folder / "events.jsonl").exists() else 0
+    return {"tasks": tasks, "stats": stats, "summarising": summarising_tasks(folder), "cuts": session_cuts(folder), "refusals": refusals}
+
+
+def bootstrap(values, boot, rng):
+    draws = sorted(statistics.fmean(rng.choices(values, k=len(values))) for _ in range(boot))
+    return draws[int(0.05 * boot)], draws[int(0.95 * boot)]
+
+
+def compare(data, sessions, base, other, boot, rng):
+    rows = []
+    for s in sessions:
+        a, b = data.get((s, base)), data.get((s, other))
+        if not a or not b:
+            continue
+        for k in sorted(set(a["tasks"]) & set(b["tasks"])):
+            x, y = a["tasks"][k], b["tasks"][k]
+            rows.append({"session": s, "k": k, "ra": int(bool(x["grade"].get("resolved"))), "rb": int(bool(y["grade"].get("resolved"))), "ta": x["turns"], "tb": y["turns"],
+                         "in_a": k in a["summarising"], "in_b": k in b["summarising"]})
+    print(f"\n=== {other} vs {base}: {len(rows)} paired tasks ===")
+    subsets = {"all paired tasks": rows, "S: a cut summarised the task in either arm": [r for r in rows if r["in_a"] or r["in_b"]],
+               f"in {base} only": [r for r in rows if r["in_a"] and not r["in_b"]], f"in {other} only": [r for r in rows if r["in_b"] and not r["in_a"]],
+               "in both": [r for r in rows if r["in_a"] and r["in_b"]]}
+    for label, sub in subsets.items():
+        if not sub:
+            print(f"  {label}: none")
+            continue
+        diffs = [100 * (r["rb"] - r["ra"]) for r in sub]
+        lo = bootstrap(diffs, boot, rng)[0] if len(sub) > 1 else float("nan")
+        both = [r for r in sub if r["ra"] and r["rb"]]
+        td = [r["tb"] - r["ta"] for r in sub]
+        thi = bootstrap(td, boot, rng)[1] if len(sub) > 1 else float("nan")
+        print(f"  {label}: n={len(sub)}; resolved {base} {sum(r['ra'] for r in sub)}, {other} {sum(r['rb'] for r in sub)}; {other}-only {sum(1 for r in sub if r['rb'] and not r['ra'])}, "
+              f"{base}-only {sum(1 for r in sub if r['ra'] and not r['rb'])}; difference {statistics.fmean(diffs):+.1f} pts, one-sided 95% lower bound {lo:+.1f}; "
+              f"turns {statistics.fmean(td):+.2f} per task (95% upper bound {thi:+.2f})"
+              + (f"; both resolved n={len(both)}, turns {statistics.fmean(r['tb'] - r['ta'] for r in both):+.2f}" if both else ""))
+    by_chain = defaultdict(list)
+    for r in rows:
+        by_chain[r["session"]].append(100 * (r["rb"] - r["ra"]))
+    print("  per chain difference (pts):", {s: round(statistics.fmean(v), 1) for s, v in sorted(by_chain.items())})
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root")
+    parser.add_argument("--boot", type=int, default=10000)
+    parser.add_argument("--seed", type=int, default=1)
+    args = parser.parse_args()
+    rng = random.Random(args.seed)
+    data = {}
+    for folder in sorted(Path(args.root).iterdir()):
+        if folder.is_dir() and "-" in folder.name and (folder / "tasks.jsonl").exists():
+            session, arm = folder.name.rsplit("-", 1)
+            data[(session, arm)] = load(folder)
+    sessions = sorted({s for s, _ in data})
+    arms = sorted({a for _, a in data})
+    print("=== per arm ===")
+    for arm in arms:
+        mine = [d for (s, a), d in data.items() if a == arm]
+        tasks = [t for d in mine for t in d["tasks"].values()]
+        capped = sum(1 for t in tasks if t.get("aborted_for") or (t.get("ended_in_error") and not t.get("aborted_for")))
+        cuts = [c for d in mine for c in d["cuts"]]
+        cost = sum((d["stats"] or {}).get("cost") or 0 for d in mine if d["stats"] and not isinstance(d["stats"].get("cost"), dict))
+        tokens = [d["stats"]["tokens"]["total"] for d in mine if d["stats"]]
+        print(f"  arm {arm}: {len(mine)} sessions, {len(tasks)} tasks, resolved {sum(1 for t in tasks if t['grade'].get('resolved'))}, stopped by cap or provider error {capped}, "
+              f"turns/task mean {statistics.fmean(t['turns'] for t in tasks) if tasks else 0:.1f}, cuts {len(cuts)} ({len(cuts) / max(1, len(mine)):.1f}/session), "
+              f"tasks with a cut summarising part of them {sum(len(d['summarising']) for d in mine)}, refusals {sum(d['refusals'] for d in mine)}, "
+              f"tokens/session {statistics.fmean(tokens) if tokens else 0:,.0f}, cost ${cost:.2f}")
+    if "A" in arms:
+        for other in [a for a in arms if a != "A"]:
+            compare(data, sessions, "A", other, args.boot, rng)
+        if "B" in arms and "T" in arms:
+            compare(data, sessions, "B", "T", args.boot, rng)
+
+
+if __name__ == "__main__":
+    main()
