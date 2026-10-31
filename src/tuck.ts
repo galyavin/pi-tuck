@@ -102,10 +102,16 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const calls = new Set(response.message.content.flatMap(block => block.type === "toolCall" ? [block.id] : []));
         const hasFreshReceipt = entries.slice(lastResponse + 1).some(entry => entry.type === "message" &&
             entry.message.role === "toolResult" && calls.has(entry.message.toolCallId));
-        freshRound = hasFreshReceipt;
+        // A run that ended without a response to its receipts (aborted or failed, its reply discarded) and was followed by a new prompt has
+        // left them behind: they can no longer reach the model as that round's answer, so they are ordinary history. Kept native, a receipt
+        // that never fits would refuse every later prompt.
+        const later = entries.slice(lastResponse + 1);
+        const ended = later.findIndex(entry => entry.type === "message" && entry.message.role === "assistant" && isDiscardedResponse(entry.message));
+        const superseded = ended >= 0 && later.slice(ended + 1).some(entry => entry.type === "message" && entry.message.role === "user");
+        freshRound = hasFreshReceipt && !superseded;
         const keptId = cut.firstKeptEntryId;
         const chosenBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === keptId);
-        if (hasFreshReceipt && lastResponse < chosenBoundary) {
+        if (freshRound && lastResponse < chosenBoundary) {
             const prefix = tuck.buildOwnCut(entries.slice(0, lastResponse), 0);
             if (!prefix.ok) return { unavailable: "No reducible history before the fresh tool round" };
             cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
