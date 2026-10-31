@@ -104,7 +104,7 @@ The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.m
 Known limits today:
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up. Each look-up costs a tool call.
-- At a 32k window with Pi's default 16,384 reply reserve, pi-tuck can refuse to compact where Pi's built-in compaction runs. The fix is planned for 1.0.4. Until then, lower the reserve; see [Small windows](#small-windows).
+- Small windows have little headroom. pi-tuck works at a 32k window with a 16,384 reply reserve, but 1.0.1 refused to cut there, and 1.0.3 fits by a small margin. If one fresh tool result nearly fills the input room, pi-tuck refuses to cut rather than drop it, where Pi's built-in compaction may run. A 1.0.4 fix is planned so that this refusal no longer aborts the next prompt. Lower the reserve or use a larger window; see [Small windows](#small-windows).
 - Semantic search runs only on macOS with Apple silicon.
 
 ## Benchmarks
@@ -145,7 +145,7 @@ A bad file is reported at session start, and pi-tuck uses the defaults.
 
 ### Small windows
 
-pi-tuck keeps room for the model's reply: the larger of the model's output limit and Pi's `compaction.reserveTokens` (default 16,384). It refuses a request that cannot fit, rather than let the provider cut it off. With a window of 32k tokens or less, the default reserve can leave too little room, and pi-tuck then refuses where Pi's built-in compaction would run. This is a known defect, due for 1.0.4. Meanwhile, lower the reserve for that model in Pi's `settings.json`. The 32k evaluation runs with a reserve of 8,192:
+pi-tuck keeps room for the model's reply: the larger of the model's output limit and Pi's `compaction.reserveTokens` (default 16,384). It refuses a request that cannot fit, rather than let the provider cut it off. At a window of 32k tokens or less, that leaves little input room. One fresh tool result that nearly fills it can make pi-tuck refuse to cut, where Pi's built-in compaction may run. Lower the reserve for that model in Pi's `settings.json`, or use a larger window. The 32k evaluation runs with a reserve of 8,192:
 
 ```json
 { "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 8192 } } } }
