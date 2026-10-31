@@ -19,14 +19,9 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined): Norma
     return blocks.length > 0 ? blocks : [{ kind: "user", text: "", sourceIndex: msgIndex }];
   }
 
-  if (msg.role === "bashExecution") {
-    const cmd = msg.command ?? "";
-    const out = msg.output ?? "";
-    const exit = msg.exitCode;
-    return [{ kind: "bash", command: cmd, output: out, exitCode: exit, cancelled: msg.cancelled, truncated: msg.truncated, sourceIndex: msgIndex }];
-  }
+  if (msg.role === "bashExecution") return [{ kind: "bash", sourceIndex: msgIndex }];
 
-  if (msg.role === "toolResult") return [{ kind: "tool_result", name: msg.toolName, text: sanitize(textOf(msg.content)), sourceIndex: msgIndex }];
+  if (msg.role === "toolResult") return [{ kind: "tool_result", name: msg.toolName, sourceIndex: msgIndex }];
 
   if (msg.role === "assistant") {
     if (!msg.content) return [];
@@ -47,7 +42,6 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined): Norma
           kind: "tool_call",
           name: part.name,
           args: part.arguments,
-          callId: part.id,
           sourceIndex: msgIndex,
         });
       }

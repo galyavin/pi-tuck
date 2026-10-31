@@ -106,7 +106,11 @@ const LEGACY_RECEIPT_RANGE_NOTICE = RECEIPT_RANGE_NOTICE.replace("tuck_recall", 
  */
 const escapeText = (text: string): string => text.replace(/[\\\n\r]/g, c => c === "\\" ? "\\\\" : c === "\n" ? "\\n" : "\\r");
 /** The length of `text` as a record line carries it: one character more for each "\", line feed and carriage return. */
-export const escapedLength = (text: string): number => text.length + (text.match(/[\\\n\r]/g)?.length ?? 0);
+export const escapedLength = (text: string): number => {
+  let length = text.length;
+  for (let i = 0; i < text.length; i++) { const c = text.charCodeAt(i); if (c === 92 || c === 10 || c === 13) length++; }
+  return length;
+};
 const TITLE = /^[A-Z][A-Za-z0-9_-]*$/;
 const refuse = (record: TranscriptRecord): never => { throw new Error(`Cannot write a ${record.kind} record as ${TRANSCRIPT_HEADER}`); };
 

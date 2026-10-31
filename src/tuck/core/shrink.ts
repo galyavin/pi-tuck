@@ -102,12 +102,12 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
       const empty = emptied[tier]!, counts = emptyCounts[tier]!;
       count += counts[end]! - counts[drop]!;
       if (counts[end]! > counts[drop]!) {
-        const extra: number[] = [];
-        for (let i = drop; i < end && extra.length < 9; i++) if (empty[i]) {
+        // Text blocks of one message share a locator: collect distinct ones, enough to tell whether the shown list is complete.
+        const extra = new Set<number>();
+        for (let i = drop; i < end && (extra.size < 9 || !unlocated); i++) if (empty[i]) {
           const source = units[i]!.sourceIndex;
-          if (source === undefined) unlocated = true; else extra.push(source);
+          if (source === undefined) unlocated = true; else if (extra.size < 9) extra.add(source);
         }
-        for (let i = drop; i < end && !unlocated; i++) if (empty[i] && units[i]!.sourceIndex === undefined) unlocated = true;
         sources = [...new Set([...sources, ...extra])].sort((a, b) => a - b).slice(0, 9);
       }
     }
@@ -132,11 +132,10 @@ const createDialogue = (input: DialogueInput) => {
   const dialogue = input.blocks.filter(isDialogue);
   const times = dialogue.find(block => block.sourceTimes)?.sourceTimes;
   const decorate = (record: TranscriptRecord) => decorateRecord(record, times);
-  const roleOf = (block: DialogueBlock): Role => block.kind;
-  const lanes = Object.fromEntries(ROLES.map(role => [role, createLane(role, dialogue.filter(block => roleOf(block) === role), input.mandatorySourceIndices, decorate)])) as
+  const lanes = Object.fromEntries(ROLES.map(role => [role, createLane(role, dialogue.filter(block => block.kind === role), input.mandatorySourceIndices, decorate)])) as
     Record<Role, ReturnType<typeof createLane>>;
   const seen: Record<Role, number> = { user: 0, assistant: 0, notice: 0 };
-  const order = dialogue.map(block => ({ role: roleOf(block), i: seen[roleOf(block)]++ }));
+  const order = dialogue.map(block => ({ role: block.kind, i: seen[block.kind]++ }));
   const tools = input.blocks.length > dialogue.length ? rendered([TOOLS_OMITTED]) : undefined;
   const overhead = TRANSCRIPT_HEADER.length + DIALOGUE_SUFFIX.length;
 
@@ -204,7 +203,7 @@ export const shrinkDialogue = (input: DialogueInput, limit: number): Shrunk => {
     if (cost > 0 && cost <= limit / 3) { recent = { drop: assistant.n - 1, tier: t, end: assistant.n }; break; }
   }
   for (let d = 0; d <= recent.drop; d++)
-    if (hit = found("B", { user: WHOLE, assistant: { ...recent, drop: d, end: Math.max(recent.end, recent.drop) }, notice: clipped })) return hit;
+    if (hit = found("B", { user: WHOLE, assistant: { ...recent, drop: d }, notice: clipped })) return hit;
   // From here users give way, and the assistant keeps only that recent third.
   for (const t of tiers) for (let u = 0; u <= user.n; u++)
     if (hit = found(`C${t}`, { user: { drop: 0, tier: t, end: u }, assistant: recent, notice: clipped })) return hit;
@@ -213,6 +212,6 @@ export const shrinkDialogue = (input: DialogueInput, limit: number): Shrunk => {
   for (let d = 0; d <= notice.n; d++)
     if (hit = found("E1", { user: gone(user), assistant: recent, notice: { drop: d, tier: 1, end: notice.n } })) return hit;
   for (let d = recent.drop; d <= assistant.n; d++)
-    if (hit = found("E2", { user: gone(user), assistant: { drop: d, tier: recent.tier, end: Math.max(recent.end, d) }, notice: gone(notice) })) return hit;
+    if (hit = found("E2", { user: gone(user), assistant: { ...recent, drop: d }, notice: gone(notice) })) return hit;
   return { text: "", step: "none", size: 0 };
 };

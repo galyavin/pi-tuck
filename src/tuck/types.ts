@@ -18,6 +18,7 @@ export type NormalizedBlock = { sourceTimes?: Record<number, import("./core/sour
   | { kind: "user"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
   | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
   | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string; startsSource?: true }
-  | { kind: "tool_call"; name: string; args: Record<string, unknown>; callId?: string; sourceIndex?: number }
-  | { kind: "tool_result"; name: string; text: string; sourceIndex?: number; recallExport?: true }
-  | { kind: "bash"; command: string; output: string; exitCode: number | undefined; cancelled?: boolean; truncated?: boolean; sourceIndex?: number });
+  // Tool history renders only as one omission notice, so its blocks keep what lookup-echo filtering reads.
+  | { kind: "tool_call"; name: string; args: Record<string, unknown>; sourceIndex?: number }
+  | { kind: "tool_result"; name: string; sourceIndex?: number; recallExport?: true }
+  | { kind: "bash"; sourceIndex?: number });

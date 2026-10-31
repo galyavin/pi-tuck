@@ -20,12 +20,19 @@ export interface CompileInput {
   };
 }
 
-const dialogueInput = (input: CompileInput): DialogueInput => ({
-  blocks: filterNoise(normalize(input.messages, input.sourceIndices, input.receiptContext, input.sourceEntryIds, input.sourceTimes)),
-  mandatorySourceIndices: input.ranking?.mandatorySourceIndices,
-  sourceIndices: input.sourceIndices ?? input.messages.map((_, index) => index),
-  sourceEntryIds: input.sourceEntryIds,
-});
+// A cut offers the whole dialogue and then, when it does not fit, the shrunk one, from the same input: normalize it once. The blocks are
+// never mutated, and keeping the same objects also keeps their cached passage analyses.
+const inputs = new WeakMap<CompileInput, DialogueInput>();
+const dialogueInput = (input: CompileInput): DialogueInput => {
+  let prepared = inputs.get(input);
+  if (!prepared) inputs.set(input, prepared = {
+    blocks: filterNoise(normalize(input.messages, input.sourceIndices, input.receiptContext, input.sourceEntryIds, input.sourceTimes)),
+    mandatorySourceIndices: input.ranking?.mandatorySourceIndices,
+    sourceIndices: input.sourceIndices ?? input.messages.map((_, index) => index),
+    sourceEntryIds: input.sourceEntryIds,
+  });
+  return prepared;
+};
 
 /** The whole pre-cut dialogue: user, assistant and notice records; tool actions and observations are omitted.
  * This disposable view grants neither present authority nor native tool execution. */

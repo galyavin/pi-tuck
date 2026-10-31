@@ -282,7 +282,7 @@ test('random sessions: every step renders exactly the length it computed, within
 		const input: DialogueInput = { blocks, mandatorySourceIndices: seed % 3 ? mandatory : undefined, sourceIndices, sourceEntryIds };
 		const whole = wholeDialogue(input);
 		const texts = new Map<string, string[]>();
-		for (const b of blocks) if ('text' in b && b.kind !== 'tool_result') {
+		for (const b of blocks) if ('text' in b) {
 			const key = `${b.kind === 'notice' ? 'custom' : b.kind}:${b.sourceIndex}`;
 			texts.set(key, [...(texts.get(key) ?? []), b.text]);
 		}
@@ -374,4 +374,30 @@ test('the recent assistant third holds text even when every assistant message is
 		expect(assistant, `limit ${limit} ${shrunk.step}`).toBeGreaterThanOrEqual(Math.min(limit / 3 - 2 * longest, total));
 		expect(assistant, `limit ${limit} ${shrunk.step}`).toBeGreaterThan(0);
 	}
+});
+
+test('text blocks of one message that clip to nothing are listed once in the omission notice', () => {
+	// Each assistant message has three text blocks, each one long sentence: every clip empties them, and they share their message's locator.
+	const blocks: NormalizedBlock[] = [];
+	for (let m = 0; m < 30; m++) {
+		const prompt = prose(m, 2);
+		blocks.push({ kind: 'user', text: prompt, originalText: prompt, sourceIndex: 2 * m });
+		for (let part = 0; part < 3; part++) { const text = sentence(900 + m * 3 + part, 300); blocks.push({ kind: 'assistant', text, originalText: text, sourceIndex: 2 * m + 1 }); }
+	}
+	const input: DialogueInput = { blocks, sourceIndices: Array.from({ length: 60 }, (_, i) => i) };
+	const whole = wholeDialogue(input).length;
+	let checked = 0;
+	for (const limit of sweep(whole, 0.2, 10)) {
+		const records = recordsOf(shrinkDialogue(input, limit).text);
+		const notice = omission(records, 'assistant');
+		if (!notice?.sourceIndices) continue;
+		expect(new Set(notice.sourceIndices).size, `limit ${limit}`).toBe(notice.sourceIndices.length);
+		const omittedSources = new Set(blocks.filter(b => b.kind === 'assistant' && !kept(records, 'assistant').has(b.sourceIndex!)).map(b => b.sourceIndex));
+		// A message can keep one block and omit the others, so its locator may be listed though it also has text.
+		expect(notice.sourceIndices.length, `limit ${limit}`).toBeGreaterThanOrEqual(Math.min(8, omittedSources.size));
+		expect(notice.sourceIndices.length, `limit ${limit}`).toBeLessThanOrEqual(8);
+		if (omittedSources.size > 8) expect(notice.reason, `limit ${limit}`).toContain('Locator list incomplete');
+		checked++;
+	}
+	expect(checked).toBeGreaterThan(0);
 });
