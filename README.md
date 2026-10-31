@@ -150,6 +150,8 @@ pi-tuck keeps room for the model's reply: the larger of the model's output limit
 { "compaction": { "modelOverrides": { "my-provider/my-model": { "reserveTokens": 8192 } } } }
 ```
 
+The reserve is the larger of `reserveTokens` and the model's `maxTokens`, so lowering `reserveTokens` alone does nothing when `models.json` sets a larger `maxTokens` for that model. Lower both, and keep `maxTokens` above your largest expected reply.
+
 If you reach the model through OpenRouter, you can also pin one upstream, so that every request is served by the same one. Put this in `models.json` in Pi's agent folder, and name the upstream you want:
 
 ```json
