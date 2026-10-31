@@ -6,18 +6,22 @@ import { harness } from './budget-fixture';
 
 // A 32k window with a 16k reply reserve leaves an input room of 16,384 estimated tokens.
 
-// The boundary where pi-tuck 1.0.1 refused in the eval's 32k smoke run (smoke32-old/reserve16k, task 2): Pi's four tools and pi-tuck's two
-// are 7,158 characters of schema and the prompt 2,789, so the system part is 2,487 estimated tokens; the model's tokenizer counts 2.427 times
-// what the estimate does (the first paired reply), so the room holds 16,384 / 2.427 = 6,751 estimated tokens, 4,263 of them for the conversation.
+// The boundary where pi-tuck 1.0.1 refused in the eval's 32k smoke run (smoke32-old/reserve16k, task 2), with the inputs its own cut receipts
+// recorded (details.diagnosticReceipt.settings): mandatory input 2,489 (the saved system message: 2,789 characters of prompt and 7,158 of schema
+// for Pi's four tools and pi-tuck's two) and no host input, and calibrationFactor 2.425210674157303, which makes the room plan's reserve 28,502
+// (the receipt's draftReservedTokens) and leaves 4,266 estimated tokens for the conversation. That factor is the first paired reply, where the
+// provider counted 6,907 input tokens for a request estimated at 2,846; over the whole run the provider's count was about 3,600 + 1.19 times the
+// estimate, a fixed overhead the estimate cannot see, which the factor then multiplies into the conversation. The 1.0.3 re-run of the same chain
+// (smoke32-r16) had none of it (about 150 + 1.15 times), a factor of 1.19, and no refusal on any code. This test pins the faulting run's regime.
 // A user turn of about 1,900 characters has called two tools, and the second result is 11,880 characters that no reply has seen. The first
 // request's 1,470-character prompt and the turn are quoted, the fresh round stays native, and the ledger keeps its headings: a floor of 4,207
-// against 4,263 in the room. Replayed from the recorded session, 1.0.1's floor was 4,431 (summary wrapper 245, quotes 409 and 519, headings 119,
-// round 3,148) and the cut was refused; the shorter TUCK-TRANSCRIPT/2 lines took 229 tokens off the same boundary, which is all that separates a
-// cut from a refusal here. The margin is thin (a factor above 2.44 refuses), so this pins the floor: a longer record would bring the refusal back.
-// This synthetic session has that boundary's sizes; it is refused by the code of 1.0.1, 1.0.2's tail share and its shrunk dialogue, and cut from
-// the commit that introduced TUCK-TRANSCRIPT/2 on.
+// against 4,266 in the room. Replayed from the recorded session, 1.0.1's floor was 4,431 (summary wrapper 245, quotes 409 and 519, headings 119,
+// round 3,148; with the turn kept native 4,380): the window half of the fit failed, `base < before` held. The shorter TUCK-TRANSCRIPT/2 lines
+// took 229 tokens off the same boundary, which is all that separates a cut from a refusal here. The margin is thin (a factor above 2.446 refuses),
+// so this pins the floor: a longer record would bring the refusal back. This synthetic session has that boundary's sizes; it is refused by the
+// code of 1.0.1, the tail share (d3d53b9) and the shrunk dialogue (16a7d06), and cut from the commit that introduced TUCK-TRANSCRIPT/2 on.
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-const WINDOW = 32768, RESPONSE = 16384, ROOM = WINDOW - RESPONSE, SYSTEM = 2487, FACTOR = 2.427;
+const WINDOW = 32768, RESPONSE = 16384, ROOM = WINDOW - RESPONSE, SYSTEM = 2489, FACTOR = 2.425210674157303, RECEIPT_RESERVE = 28502;
 function recordedBoundary() {
 	let clock = 1_700_000_000_000; const stamp = () => (clock += 1000);
 	const filler = (chars: number, tag: string) => { let text = '', i = 0; while (text.length < chars) text += `${tag}${i++} lorem ipsum data; `; return text.slice(0, chars); };
@@ -48,8 +52,10 @@ test('a 16k room, a live system part and a slow tokenizer: the boundary 1.0.1 re
 	const band = bandOf(ROOM, DEFAULT_CUT_AT), fits = (tokens: number, limit: number) => Math.ceil(tokens * FACTOR) < limit;
 	// The request is over the room: a cut is due, and the conversation may take what the room holds beyond the system part.
 	expect(fits(before + SYSTEM, ROOM)).toBe(false);
-	const allowance = Math.floor(ROOM / FACTOR) - SYSTEM;
-	expect(allowance).toBe(4263);
+	// The inputs are the receipt's: the same reserve for the room plan, and the same allowance after it.
+	expect(planningReserve(WINDOW, ROOM, FACTOR, SYSTEM)).toBe(RECEIPT_RESERVE);
+	const allowance = WINDOW - RECEIPT_RESERVE;
+	expect(allowance).toBe(4266);
 	const decision = decideCut({ total: before + SYSTEM, mandatory: SYSTEM, before, room: ROOM, band, fits, unreduced: 'unreduced',
 		plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>['compaction']> }> => {
 			const draft = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before }, ctx, planningReserve(WINDOW, target === 'band' ? band : ROOM, FACTOR, SYSTEM), measure as never, {}, true);
