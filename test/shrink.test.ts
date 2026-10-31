@@ -307,3 +307,31 @@ test('random sessions: every step renders exactly the length it computed, within
 	expect(checked).toBeGreaterThan(500);
 	expect([...steps]).toEqual(expect.arrayContaining(['whole', 'A1', 'B', 'none']));
 });
+
+test('a clip that keeps no text renders nothing: its unit joins the one omission notice instead of carrying a notice of its own', () => {
+	// Each assistant text is one long sentence: no clip tier can keep any of it whole.
+	const blocks: NormalizedBlock[] = [];
+	const add = (block: NormalizedBlock) => blocks.push({ ...block, sourceIndex: blocks.length });
+	for (let t = 0; t < 40; t++) {
+		const prompt = prose(t, 2), reply = sentence(700 + t, 400);
+		add({ kind: 'user', text: prompt, originalText: prompt });
+		add({ kind: 'assistant', text: reply, originalText: reply });
+	}
+	const input: DialogueInput = { blocks, sourceIndices: blocks.map(b => b.sourceIndex) };
+	const whole = wholeDialogue(input).length;
+	for (const limit of sweep(whole, 0.15, 12)) {
+		const shrunk = shrinkDialogue(input, limit);
+		if (!shrunk.text) continue;
+		expect(shrunk.text.length).toBeLessThanOrEqual(limit);
+		const records = recordsOf(shrunk.text);
+		// No source is represented by a span notice alone.
+		const sources = new Map<number, string[]>();
+		for (const r of records) if (r.sourceIndex !== undefined && (r.kind === 'excerpt' || r.kind === 'omission')) sources.set(r.sourceIndex, [...(sources.get(r.sourceIndex) ?? []), r.kind]);
+		for (const [source, kinds] of sources) expect(kinds, `source ${source} at ${limit}`).toContain('excerpt');
+		// Every assistant text that is not whole is counted in the assistant omission.
+		const whole_ = kept(records, 'assistant').size;
+		expect(whole_ + (omission(records, 'assistant')?.count ?? 0), `limit ${limit}`).toBe(40);
+		// Users are never sacrificed while assistant text could still go.
+		if (whole_ === 0 && rank(shrunk.step) <= rank('B')) expect(kept(records, 'user').size).toBe(40);
+	}
+});

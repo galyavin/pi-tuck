@@ -51,12 +51,25 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
   const prefix = (level: Rendered[]) => { const sums = new Float64Array(n + 1); level.forEach((r, i) => sums[i + 1] = sums[i]! + r.cost); return sums; };
   const levels: Rendered[][] = [units.map(block => records(block))];
   const sums = [prefix(levels[0]!)];
+  // A clip keeps whole passages, so a unit that is one long sentence, code block or JSON region can keep no text at all. Such a clip renders
+  // nothing and its unit is counted in the role's one omission notice, like a dropped unit: a notice per empty clip would cost more than text.
+  const NONE: Rendered = { records: [], cost: 0 };
+  const emptied: Uint8Array[] = [new Uint8Array(n)];
+  const emptyCounts: Int32Array[] = [new Int32Array(n + 1)];
   /** Level t holds each unit's tier-t variant. A clip that would not make the unit smaller is not taken, so sizes never grow with t. */
   const level = (t: number): Rendered[] => {
     while (levels.length <= t) {
-      const previous = levels[levels.length - 1]!, clip = TIERS[role][levels.length - 1]!;
-      const next = units.map((block, i) => { const clipped = records(block, clip); return clipped.cost < previous[i]!.cost ? clipped : previous[i]!; });
-      levels.push(next); sums.push(prefix(next));
+      const previous = levels[levels.length - 1]!, wasEmpty = emptied[emptied.length - 1]!, clip = TIERS[role][levels.length - 1]!;
+      const empty = new Uint8Array(n);
+      const next = units.map((block, i) => {
+        if (wasEmpty[i]) { empty[i] = 1; return previous[i]!; }
+        const clipped = records(block, clip);
+        if (role !== "notice" && isOmittable(block, mandatory) && !clipped.records.some(record => record.kind === "excerpt")) { empty[i] = 1; return NONE; }
+        return clipped.cost < previous[i]!.cost ? clipped : previous[i]!;
+      });
+      const counts = new Int32Array(n + 1);
+      empty.forEach((e, i) => counts[i + 1] = counts[i]! + e);
+      levels.push(next); sums.push(prefix(next)); emptied.push(empty); emptyCounts.push(counts);
     }
     return levels[t]!;
   };
@@ -64,7 +77,8 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
 
   // The notice for a dropped prefix of p units: how many unselected text blocks, the first locators, and whether some have none.
   let tally: { counts: Int32Array; unlocated: Uint8Array; smallest: number[][] } | undefined;
-  const omission = (p: number): TranscriptRecord | undefined => {
+  /** The notice for the units a setting omits: the dropped prefix, and the clips in [drop, end) that kept no text. */
+  const omission = ({ drop, tier, end }: Setting): TranscriptRecord | undefined => {
     if (role === "notice") return undefined;
     if (!tally) {
       tally = { counts: new Int32Array(n + 1), unlocated: new Uint8Array(n + 1), smallest: new Array(n + 1) };
@@ -82,18 +96,34 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
         tally!.counts[i + 1] = count; tally!.unlocated[i + 1] = unlocated; tally!.smallest[i + 1] = smallest;
       });
     }
-    return tally.counts[p] ? decorate(omissionRecord(role, tally.counts[p]!, tally.smallest[p]!, tally.unlocated[p] === 1)) : undefined;
+    let count = tally.counts[drop]!, unlocated = tally.unlocated[drop] === 1, sources = tally.smallest[drop]!;
+    if (end > drop && tier > 0) {
+      level(tier);
+      const empty = emptied[tier]!, counts = emptyCounts[tier]!;
+      count += counts[end]! - counts[drop]!;
+      if (counts[end]! > counts[drop]!) {
+        const extra: number[] = [];
+        for (let i = drop; i < end && extra.length < 9; i++) if (empty[i]) {
+          const source = units[i]!.sourceIndex;
+          if (source === undefined) unlocated = true; else extra.push(source);
+        }
+        for (let i = drop; i < end && !unlocated; i++) if (empty[i] && units[i]!.sourceIndex === undefined) unlocated = true;
+        sources = [...new Set([...sources, ...extra])].sort((a, b) => a - b).slice(0, 9);
+      }
+    }
+    return count ? decorate(omissionRecord(role, count, sources, unlocated)) : undefined;
   };
-  const omissionCosts = new Map<number, number>();
-  const omissionCost = (p: number) => {
-    let cost = omissionCosts.get(p);
-    if (cost === undefined) { const record = omission(p); omissionCosts.set(p, cost = record ? rendered([record]).cost : 0); }
+  const omissionCosts = new Map<string, number>();
+  const omissionCost = (setting: Setting) => {
+    const key = `${setting.drop}:${setting.tier}:${setting.end}`;
+    let cost = omissionCosts.get(key);
+    if (cost === undefined) { const record = omission(setting); omissionCosts.set(key, cost = record ? rendered([record]).cost : 0); }
     return cost;
   };
 
   return {
     n, level, sum, omission,
-    cost: ({ drop, tier, end }: Setting) => sums[0]![n]! - sums[0]![Math.max(drop, end)]! + (end > drop ? sum(tier)[end]! - sum(tier)[drop]! : 0) + omissionCost(drop),
+    cost: ({ drop, tier, end }: Setting) => sums[0]![n]! - sums[0]![Math.max(drop, end)]! + (end > drop ? sum(tier)[end]! - sum(tier)[drop]! : 0) + omissionCost({ drop, tier, end }),
   };
 };
 
@@ -121,7 +151,7 @@ const createDialogue = (input: DialogueInput) => {
       const { drop, tier, end } = config[role];
       if (i >= drop) records.push(...lanes[role].level(i < end ? tier : 0)[i]!.records);
     }
-    for (const role of ROLES) { const record = lanes[role].omission(config[role].drop); if (record) records.push(record); }
+    for (const role of ROLES) { const record = lanes[role].omission(config[role]); if (record) records.push(record); }
     if (tools) records.push(...tools.records);
     orderByOriginalSource(records, input.sourceIndices, input.sourceEntryIds);
     return records.length ? serializeTranscript(records) + DIALOGUE_SUFFIX : "";
