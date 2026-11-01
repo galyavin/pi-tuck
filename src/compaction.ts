@@ -9,8 +9,8 @@ import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, decideCut, gateC
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
 import { isContextOverflow } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { Check } from "typebox/value";
+import { Type, type TSchema } from "typebox";
+import { Check, Errors } from "typebox/value";
 import type { RecallPolicy } from "./recall.js";
 import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY_CHARACTERS } from "./recall.js";
 
@@ -38,6 +38,26 @@ const RecallInput = Type.Union([
 	Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), query: Type.Optional(query), ...paging }, { additionalProperties: false }),
 	Type.Object(paging, { additionalProperties: false }),
 ]);
+// What the model is offered: one object, every field optional. A union of shapes is hard for a small model to follow, and Pi's validator
+// reports only its first branches, so a near miss was told to add outputPath. The exact shapes are checked in the tool, which names the
+// closest one and what to add or remove.
+const RecallParameters = Type.Object(Object.fromEntries(RecallInput.anyOf.flatMap(branch => Object.entries(branch.properties))
+    .map(([key, schema]) => [key, Type.Optional(schema as TSchema)])), { additionalProperties: false });
+function recallInputError(raw: unknown): string {
+    const keys = raw && typeof raw === "object" && !Array.isArray(raw) ? Object.keys(raw) : [];
+    // The shapes that need the fewest keys added and removed, at most two, in the order they are listed.
+    const ranked = RecallInput.anyOf.map(branch => {
+        const fields = Object.keys(branch.properties), required: string[] = (branch as { required?: string[] }).required ?? [];
+        const add = required.filter(key => !keys.includes(key)), remove = keys.filter(key => !fields.includes(key));
+        return { branch, shape: `{${fields.map(key => required.includes(key) ? key : key + "?").join(", ")}}`, add, remove, cost: add.length + remove.length };
+    }).sort((a, b) => a.cost - b.cost);
+    const closest = ranked.filter(r => r.cost === ranked[0]!.cost).slice(0, 2).map(({ branch, shape, add, remove }) => {
+        const change = [add.length ? `add ${add.join(", ")}` : "", remove.length ? `remove ${remove.join(", ")}` : ""].filter(Boolean).join(" and ");
+        const value = change ? "" : [...Errors(branch, raw)].map(error => `${error.instancePath.replace(/^\//, "").replace(/\//g, ".") || "arguments"} ${error.message}`)[0];
+        return `${shape}: ${change || value}`;
+    });
+    return `Invalid tuck_recall arguments {${keys.join(", ")}}. Closest call: ${closest.join("; or ")}.`;
+}
 const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({sourceSha:Type.String({minLength:64,maxLength:64}),read:Type.Object({entryId,offset:Type.Integer({minimum:0}),limit:Type.Integer({minimum:0})},{additionalProperties:false})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
 /** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. Like every failure but
@@ -319,7 +339,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         catch (error) { fail(error, ctx); }
     });
 	pi.registerTool({
-		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
+		name: "tuck_recall", label: "pi-tuck history", parameters: RecallParameters,
         description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. " + (search ? "Use tuck_search for historical information relevant to a question, including different wording and qualifications. " : "") + "Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
@@ -590,4 +610,4 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     return {close:async()=>{semanticRequest++;recorder.stop("caller-close");await semantic.close();await Promise.allSettled([...semanticPending]);}, semanticRecall:semantic, setSemanticEnabled, semanticStatus};
 }
 
-function checkedInput(raw: unknown) { if (!Check(RecallInput, raw)) throw new Error("Invalid recall input"); return structuredClone(raw); }
+function checkedInput(raw: unknown) { if (!Check(RecallInput, raw)) throw new Error(recallInputError(raw)); return structuredClone(raw); }

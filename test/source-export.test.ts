@@ -32,6 +32,6 @@ test("actual registered tool rejects mixed export schemas/access/cancellation be
  await installCompaction(pi,{assertAccess:()=>{if(denied)throw Error("Access denied")}});
  const x=make(), signal=new AbortController(), ctx={sessionManager:x.manager,executeTool:async()=>{writes++;return{isError:false,content:[]}}} as unknown as ExtensionToolContext;
  const run=(input:unknown)=>tool!.execute("call",input,signal.signal,undefined,ctx);
- for(const input of [{entryId:x.id,outputPath:"out",limit:5},{index:0,entryId:x.id,outputPath:"out"},{query:"a",outputPath:"out"},{entryId:x.id,outputPath:""}])await expect(run(input)).rejects.toThrow("Invalid recall input");
+ for(const input of [{entryId:x.id,outputPath:"out",limit:5},{index:0,entryId:x.id,outputPath:"out"},{query:"a",outputPath:"out"},{entryId:x.id,outputPath:""}])await expect(run(input)).rejects.toThrow("Invalid tuck_recall arguments");
  denied=true;await expect(run({entryId:x.id,outputPath:"out"})).rejects.toThrow("Access denied");denied=false;signal.abort();await expect(run({entryId:x.id,outputPath:"out"})).rejects.toThrow("cancelled");expect(writes).toBe(0);
 });
