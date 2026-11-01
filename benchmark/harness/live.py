@@ -66,7 +66,7 @@ class Rpc:
             self.events.put(record)
         self.events.put({"type": "_exit"})
 
-    def call(self, command: dict, timeout=120) -> dict:
+    def call(self, command: dict, timeout=3600) -> dict:  # Pi answers no command while it compacts, and a compaction can take many minutes under load
         with self.cond:
             self.next += 1
             ident = f"r{self.next}"
@@ -81,7 +81,7 @@ class Rpc:
 
     def close(self):
         self.proc.stdin.close()
-        self.proc.wait(timeout=120)
+        self.proc.wait(timeout=3600)
 
 
 def start_container(name: str, instance: str, cwd: Path):
@@ -99,7 +99,7 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
     while not rpc.events.empty():
         rpc.events.get_nowait()
     started = time.time()
-    response = rpc.call({"type": "prompt", "message": prompt}, timeout=3600)  # Pi compacts before it accepts a prompt; a slow compaction (12 min seen) must not end the chain
+    response = rpc.call({"type": "prompt", "message": prompt})
     if not response.get("success"):
         return {"error": response.get("error"), "seconds": 0}
     usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "requests": 0}
