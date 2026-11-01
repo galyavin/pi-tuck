@@ -38,7 +38,7 @@ const RecallInput = Type.Union([
 	Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), query: Type.Optional(query), ...paging }, { additionalProperties: false }),
 	Type.Object(paging, { additionalProperties: false }),
 ]);
-const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({entryId,sourceSha:Type.String({minLength:64,maxLength:64}),start:Type.Integer({minimum:0}),end:Type.Integer({minimum:0})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
+const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({sourceSha:Type.String({minLength:64,maxLength:64}),read:Type.Object({entryId,offset:Type.Integer({minimum:0}),limit:Type.Integer({minimum:0})},{additionalProperties:false})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
 /** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. Like every failure but
  * a `CommitFault`, it ends with its attempt (`forgetFailure`), and the next attempt plans afresh from the session as it is. */
@@ -344,7 +344,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		},
 	});
     if (search) pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
-        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword and local embedding search. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns original evidence up to 20000 characters; not exhaustive. Semantic search may be off or incomplete, which is not the same as no matches. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists source ranges already read.",
+        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword and local embedding search. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns original evidence up to 20000 characters; not exhaustive. Semantic search may be off or incomplete, which is not the same as no matches. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists sources already read: pass each returned source's sourceSha and read unchanged.",
         async execute(_id,raw,signal,_update,ctx){
             access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);
             recorder.capture("recall-action","authorized-native-tool-invocation-no-result-copy",input);
@@ -355,7 +355,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // The key is taken in the same synchronous step as the first lexical pass. After the await the second pass runs only if it moved (see eligibilityKey); a moved key alone invalidates nothing.
             // The snapshot id check covers every in-contract change (any branch change moves the id); the key-gated second pass is defence in depth for out-of-contract callers.
             const provider=semanticProvider(ctx),initialSnapshot=provider(),initialKey=eligibilityKey(ctx),words=wordOffer(),wordText=JSON.stringify(words);
-            const related=await semantic.search(input.query,provider,signal,input.priorResults??[],words);
+            const related=await semantic.search(input.query,provider,signal,(input.priorResults??[]).map(({sourceSha,read})=>({entryId:read.entryId,sourceSha,start:read.offset,end:read.offset+read.limit})),words);
             access();if(signal?.aborted)throw Object.assign(new Error('Semantic recall cancelled'),{name:'AbortError'});const now=provider();
             if(initialSnapshot.id!==now.id||(eligibilityKeyMoved(ctx,initialKey)&&wordText!==JSON.stringify(wordOffer())))return{...reply({status:"snapshot_invalidated",notice:"Search source eligibility or version changed; no earlier evidence delivered. Request a fresh query."}),isError:true};
             const page=budgetSemantic(related,20000-wordText.length-1);
