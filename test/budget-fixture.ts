@@ -311,8 +311,9 @@ export async function harness(options: Options) {
    async run() {
     atRunEnd = undefined;
     await session!.prompt(promptText);
-    const cuts = compactions().length, kept = atRunEnd?.kept ?? nonSystem(saved());
-    state.hostCalls = atRunEnd?.hostCalls ?? state.hostCalls;
+    const end = atRunEnd as { hostCalls: number; kept: number } | undefined; // set by the agent_end handler during the prompt
+    const cuts = compactions().length, kept = end?.kept ?? nonSystem(saved());
+    state.hostCalls = end?.hostCalls ?? state.hostCalls;
     const measured = probes.find(p => p.at === (options.at === 'tool' ? 'tool' : 'prompt'));
     expect(network).not.toHaveBeenCalled();
     return { cuts, requests: state.requests, effects: state.effects, faults, measured, delivered: state.delivered, kept, hostCalls: state.hostCalls, guard, entries: compactions(), runEnd: runEnd(), notices, probes, cutsAtRequest, cutsAtProbe, system: mandatory, aborts: state.aborts, last: session!.messages.findLast(m => m.role === 'assistant') as AssistantMessage | undefined,
