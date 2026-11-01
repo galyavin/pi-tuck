@@ -110,7 +110,7 @@ export const CALL_DEADLINE_MS=60000;
 export const EMBED_TEXT_MS=30000;
 /** The deadline for a worker's start: Python start, `ready` (which verifies every runtime file) and the first call after it, which loads the
  * model and starts its native server. On a busy machine that takes minutes; held to the per-call deadline, the worker never started and
- * semantic recall went unavailable. It stays above the worker's own native start limit (540 s in semantic-worker.py). */
+ * semantic recall went unavailable. It stays above the worker's own native start limits (120 s on Metal, then 400 s on the CPU, in semantic-worker.py). */
 export const START_DEADLINE_MS=600000;
 /** The most units one index window holds. The worker's SQLite store stops at 8,008 rows (`PRAGMA max_page_count=8192` in scripts/semantic-worker.py), so a cap below that keeps a window of short units from filling the store and sticking in `unavailable`. Raise it only together with the store. */
 export const MAX_INDEX_UNITS=8000;

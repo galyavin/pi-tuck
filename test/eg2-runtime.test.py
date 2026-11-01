@@ -90,14 +90,14 @@ class RuntimeTests(unittest.TestCase):
                     ready = ns['run']({'op': 'ready'})
                     self.assertEqual(ready['dtype'], artifact)
                     self.assertEqual(ready['computePrecision'], 'float32')
-                    # Native launch effect: no FP16/GPU, f32 K/V for every weight identity.
+                    # Native launch effect: Metal offload first (the CPU when it cannot start: test_metal_first_and_cpu_when_metal_cannot_start), no FP16, f32 K/V for every weight identity.
                     from unittest.mock import Mock
                     server = Mock(); server.poll.return_value = None
                     with patch('subprocess.Popen', return_value=server) as launch:
                         ns['request'] = lambda *args: {'status': 'ok'}
                         ns['load']()
                         command = launch.call_args.args[0]
-                        for key, value in (('--n-gpu-layers', '0'), ('--cache-type-k', 'f32'), ('--cache-type-v', 'f32'), ('--flash-attn', 'off')):
+                        for key, value in (('--n-gpu-layers', '99'), ('--cache-type-k', 'f32'), ('--cache-type-v', 'f32'), ('--flash-attn', 'off')):
                             self.assertEqual(command[command.index(key) + 1], value)
                         self.assertIn(str(root / 'model.gguf'), command)
                         ns['close_native']()
@@ -221,6 +221,37 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'tokenizers_integrity_failure'): UTILITY['verify_tokenizers'](root)
                 (installed / 'support.dll').write_bytes(b'dll'); (installed / 'extra.so').write_bytes(b'extra')
                 with self.assertRaisesRegex(ValueError, 'tokenizers_membership_failure'): UTILITY['verify_tokenizers'](root)
+
+    def test_metal_first_and_cpu_when_metal_cannot_start(self):
+        """The server starts with Metal offload; where Metal cannot start (it exits or is never healthy) the same server starts on the CPU."""
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory(prefix='pi-eg2-metal-') as directory:
+            root = pathlib.Path(directory).resolve() / 'runtime'
+            pins, manifest, package, wheel = fixture(root)
+            (root / 'assets.sha256.json').write_text(json.dumps(manifest))
+            with patch.dict('os.environ', {'PI_SEMANTIC_RUNTIME_ROOT': str(root)}), patch('signal.signal'):
+                source = (SCRIPTS / 'semantic-worker.py').read_text().split('\ntry:\n while True:')[0]
+                ns = {'__file__': str(SCRIPTS / 'semantic-worker.py')}
+                exec(compile(source, ns['__file__'], 'exec'), ns)
+            ns['WINDOWS'] = False; ns['verify'] = lambda: None; ns['native_executable'] = lambda: root / 'native/llama-server'
+            ns['request'] = lambda path, data=None, texts=0: {'status': 'ok'}
+            for metal_starts, expected in ((True, ['99']), (False, ['99', '0'])):
+                launched = []
+                def launch(command, **kwargs):
+                    layers = command[command.index('--n-gpu-layers') + 1]; launched.append(layers)
+                    child = Mock(); child.poll.return_value = 1 if layers != '0' and not metal_starts else None
+                    child.layers = layers
+                    return child
+                ns['server'] = None
+                with patch('subprocess.Popen', side_effect=launch): server = ns['load']()
+                self.assertEqual(launched, expected)
+                self.assertEqual(server.layers, expected[-1])
+            # Neither starts: the worker refuses as before.
+            ns['server'] = None
+            def never(command, **kwargs):
+                child = Mock(); child.poll.return_value = 1; return child
+            with patch('subprocess.Popen', side_effect=never):
+                with self.assertRaisesRegex(ns['Refusal'], 'native_start_failure'): ns['load']()
 
     def test_windows_authenticated_loopback_native_launch_and_request_failures(self):
         import http.server
