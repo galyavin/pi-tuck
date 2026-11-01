@@ -25,7 +25,7 @@ export const validCutAt = (value: unknown): value is number => typeof value === 
  */
 /** The default cut point: a cut once a request passes 60% of the room. Measured against 1 with paired replays (no answer loss) and billed
  * input under automatic and explicit prompt caching (about 17% less at 128k, 10-14% at 32k). */
-export const DEFAULT_CUT_AT = 0.6;
+export const DEFAULT_CUT_AT = 1;
 export const bandOf = (room: number, cutAt = 1): number => {
 	const positive = Math.max(0, room);
 	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), Math.floor(positive * cutAt));
