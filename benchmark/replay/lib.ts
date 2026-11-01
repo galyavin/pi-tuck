@@ -108,7 +108,7 @@ export function scheduleFor(rec: Recording, option: (name: string, fallback: str
 /** True when a provider reports a plan or rate cap rather than a fault in the request. */
 export const isUsageLimit = (message: string) => /usage limit|rate limit|quota|too many requests|\b429\b/i.test(message);
 const sleep = (ms: number) => new Promise(done => setTimeout(done, ms));
-/** Runs `attempt` until it stops failing on a plan or rate cap, waiting between tries (30 minutes, as a cap that resets in hours is the case to ride out).
+/** Runs `attempt` until it stops failing on a plan or rate cap, waiting between tries (10 minutes; the plan's cap resets about every 5 hours, so the wait after a reset is at most 10 minutes).
  * `attempt` returns an error string or undefined, or throws. Gives up after `maxHours`. */
 export async function untilNotCapped<T>(label: string, attempt: () => Promise<{ error?: string; value: T }>, maxHours = 72): Promise<{ error?: string; value: T; waitedMs: number }> {
 	const started = Date.now();
@@ -116,7 +116,7 @@ export async function untilNotCapped<T>(label: string, attempt: () => Promise<{ 
 		let outcome: { error?: string; value: T };
 		try { outcome = await attempt(); } catch (error) { outcome = { error: (error as Error).message, value: undefined as T }; }
 		if (!outcome.error || !isUsageLimit(outcome.error) || Date.now() - started > maxHours * 3_600_000) return { ...outcome, waitedMs: Date.now() - started };
-		console.error(`${new Date().toISOString()} ${label}: usage cap, retrying in 30 min`);
-		await sleep(30 * 60_000);
+		console.error(`${new Date().toISOString()} ${label}: usage cap, retrying in 10 min`);
+		await sleep(10 * 60_000);
 	}
 }

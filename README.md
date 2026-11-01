@@ -1,6 +1,6 @@
 # pi-tuck
 
-**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** A cut takes about a tenth of a second. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
+**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** In our live run, a cut took a median 0.09 s. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
 
 ```sh
 pi install npm:pi-tuck
@@ -8,22 +8,23 @@ pi install npm:pi-tuck
 
 ## pi-tuck against Pi's built-in compaction
 
-Pi's built-in compaction asks a model to write a summary. pi-tuck builds the summary from the session itself.
+Pi's built-in compaction asks a model to write a summary. pi-tuck builds the summary from the session itself. The two time and context rows compare pi-tuck 1.0.1 with Pi 1.4.0's built-in compaction, where a local model writes the summary. Each measured result in this README names the pi-tuck build or version it was measured on; the release you install may be newer.
 
-| | Pi's built-in | pi-tuck |
+| | Pi's built-in (local model writes the summary) | pi-tuck |
 |---|---|---|
 | Model call per cut | One, to a model you pay for or wait on | None |
 | Time per cut | **269 s** (median) | **0.09 s** (median) |
 | Context carried after a cut | 29,200 tokens | 27,800 tokens (about the same) |
-| Same session, same summary | No | Yes |
-| Can the agent get dropped detail back | No recall tool. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
+| Same session, same summary | Not guaranteed, since a model writes it | Yes |
+| Can the agent get dropped detail back | No recall tool in Pi 1.4.0. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
 | Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally, and no text leaves your machine. Elsewhere it searches by keyword |
-| Can the summary invent history | Yes, a model wrote it | No, it holds only recorded text |
+| Can the summary invent history | It can, since a model writes it | No, it holds only recorded text |
 | What the summary leaves out | Whatever the model dropped | Tool output only; the agent reads it back exactly |
-| Billed input from cutting early (simulated) | | 10–18% less than cutting at the full room |
-| Answer quality against LLM compactors | | **Being measured. Not claimed yet.** |
+| Billed input at the default 60% cut point (simulated) | Not measured | 10–18% less than pi-tuck cutting at the full room. This is not a comparison with the built-in |
+| Answer quality against Pi's own compaction on a local model (`mac-studio/main`) | | **Being measured. Not claimed yet.** |
+| Answer quality against Pi's compaction prompts on a frontier model | | **Untested.** |
 
-The time and context rows are live runs on a local model with a 131k window: 27 cuts per arm over 5 chains, interim, pi-tuck 1.0.1. Every number comes from a file in this repository. Conditions, sample sizes and links are in [Benchmarks](#benchmarks). The last row is the one that matters most, and it is not finished: see [What is proven, and what is not](#what-is-proven-and-what-is-not).
+The time and context rows are live runs with a 131k window: 27 cuts per arm over 5 chains, interim. Every number comes from a file in this repository. Conditions, sample sizes and links are in [Benchmarks](#benchmarks). The last row is the one that matters most, and it is not finished: see [What is proven, and what is not](#what-is-proven-and-what-is-not).
 
 ## Ask your history
 
@@ -89,17 +90,17 @@ Both tools cost about 1,050 tokens of tool description per request.
 
 ## What is proven, and what is not
 
-**Measured so far:** a cut takes a fraction of a second, where a model-written summary takes minutes on a local model. A cut calls no model, so it costs no tokens. pi-tuck carries about as many tokens after a cut as the built-in does, not fewer. Cutting early saves billed input in simulation, and answers held in replay.
+**Measured so far:** in the live run, a pi-tuck cut took a median 0.09 s, where Pi's built-in compaction with a local model writing the summary took a median 269 s. A cut calls no model, so it costs no tokens. After a cut, pi-tuck carried about as many tokens as the built-in did, not fewer. In simulation, cutting at 60% of the room instead of 100% saved billed input for pi-tuck itself, and answers held in replay.
 
-**Not proven yet: that the summary is as good as a model-written one.** The claim is that pi-tuck compacts as well as the best LLM compactors, in far less time and at no cost. That claim has a pre-registered test. The test is running now. It was written down before any result came in, and a failed test will be reported as failed. When the result is final, it goes in [`benchmark/`](benchmark) and in this README. Until then, this README does not claim that pi-tuck is as good as, or better than, an LLM compactor.
+**Not proven yet: that the summary is as good as a model-written one.** The claim is that pi-tuck compacts as well as an LLM compactor, in far less time and at no cost. The comparator is Pi's own summarize prompts, run on a local model (`mac-studio/main`). The frontier comparison is untested: the model first named for it (`openai/gpt-6-astra`) was retired on 2026-10-31, and its recordings are a labelled partial view that feeds no test. A replacement, GPT-6.1 Terra, is pre-registered in [`benchmark/PREREG-TERRA.md`](benchmark/PREREG-TERRA.md). See [`benchmark/PINS.md`](benchmark/PINS.md). That claim has a pre-registered test. The test is running now. It was written down before any result came in, and a failed test will be reported as failed. When the result is final, it goes in [`benchmark/`](benchmark) and in this README. Until then, this README does not claim that pi-tuck is as good as, or better than, any LLM compactor.
 
 The test has three parts:
 
-1. **A live run** at a 128k window on a local model. Ten chains of 30 SWE-bench Verified tasks per arm, with Pi's built-in compaction in one arm and pi-tuck in the other. Official grading.
-2. **A paired replay with probe questions.** The same cuts, made by pi-tuck and by LLM compactors, then questions about facts that fell before the cut. Pre-registered rule: the claim holds only if pi-tuck is no more than 3 points worse than the better LLM compactor, with a 95% bound.
+1. **A live run** at a 128k window on a local model, with pi-tuck 1.0.1. Ten chains of 30 SWE-bench Verified tasks per arm, with Pi's built-in compaction in one arm and pi-tuck in the other. Official grading.
+2. **A paired replay with probe questions.** The same cuts, made by pi-tuck and by Pi's summarize prompts on the local model, then questions about facts that fell before the cut. Pre-registered rule: the claim holds only if pi-tuck is no more than 3 points worse than the better compactor, with a 95% bound. The comparators are named above and in `benchmark/`.
 3. **A 32k suite**, where tasks are bigger than the room, so cuts must summarise work in progress.
 
-The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.md`](benchmark/PREREG-32K.md), and every change after the freeze in [`benchmark/DEVIATIONS.md`](benchmark/DEVIATIONS.md).
+The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.md`](benchmark/PREREG-32K.md), [`benchmark/PREREG-TERRA.md`](benchmark/PREREG-TERRA.md), and every change after the freeze in [`benchmark/DEVIATIONS.md`](benchmark/DEVIATIONS.md).
 
 Known limits today:
 
@@ -114,12 +115,12 @@ Each row says what was measured, under which conditions, and where the data is. 
 | What | Result | Conditions | Source |
 |---|---|---|---|
 | Cut time, live | pi-tuck median 0.087 s (90th percentile 0.205 s); Pi's built-in median 268.8 s (90th percentile 421.6 s). Context carried after a cut, median: 27,751 against 29,241 tokens | **Interim.** pi-tuck 1.0.1, Pi 1.4.0, SWE-bench Verified chains of 30 tasks, 131,072-token window, reply reserve 32,768, local model `mac-studio/main` writing Pi's summaries. 27 cuts per arm, 5 chains. The built-in time depends on that model and on server load. pi-tuck's time is an upper bound read from the session file | [`benchmark/RESULTS-INTERIM.md`](benchmark/RESULTS-INTERIM.md) section 1 |
-| Cut time, paired replay | pi-tuck median 0.062 s (range 0.005 to 0.48 s); local-model summarizer 193.4 s (77.3 to 413.3 s); frontier summarizer 96.1 s (39.1 to 267.8 s). Context carried after a cut, median: 28,006 (pi-tuck), 26,424 (local), 25,555 (frontier) tokens | **Interim.** The same recorded sessions cut at the same positions. pi-tuck: 10 recordings, 52 cuts. Summarizers: 6 recordings, 28 and 29 cuts. Frontier is `openai/gpt-6-astra`. pi-tuck's time leaves out the background search index | [`benchmark/RESULTS-INTERIM.md`](benchmark/RESULTS-INTERIM.md) section 2 |
+| Cut time, paired replay | pi-tuck median 0.062 s (range 0.005 to 0.48 s); local-model summarizer 193.4 s (77.3 to 413.3 s); frontier summarizer 96.1 s (39.1 to 267.8 s; measured on the retired model `openai/gpt-6-astra`; feeds no test). Context carried after a cut, median: 28,006 (pi-tuck), 26,424 (local), 25,555 (frontier) tokens | **Interim.** The same recorded sessions cut at the same positions. pi-tuck: 10 recordings, 52 cuts. Summarizers: 6 recordings, 28 and 29 cuts. pi-tuck's time leaves out the background search index | [`benchmark/RESULTS-INTERIM.md`](benchmark/RESULTS-INTERIM.md) section 2 |
 | Billed input, cutting at 60% of the room instead of 100% | −17.9% at 128k, −14.0% at 32k with automatic prompt caching; −17.0% and −9.6% with explicit cache breakpoints. Cuts go from 6 to 12 (128k) and from 84 to 157 (32k); none frees under a tenth of the room | Simulated billing, not provider bills. Prompt caching priced. Build `1bda64b` (the default shipped in 1.0.3). 5 recorded live sessions. 128k = 131,072 window, reserve 32,768. 32k = 32,768 window, reserve 16,384 | [`rnd/replay32/RESULT-lean.md`](rnd/replay32/RESULT-lean.md) |
 | Answers after cutting at 60% instead of 100% | No more losses than the limit on all 4 sets. Losses / wins over n questions: 128k shared 3 / 7 of 99; 128k asymmetric 3 / 1 of 67; 32k shared 5 / 3 of 77; 32k asymmetric 9 / 5 of 343. In the 32k asymmetric set the losses lean against 60% (test_result 4 / 2, error_hit 3 / 1); it is the set to watch | Paired replay, same 5 sessions, DeepSeek flash as agent and judge. Limit, set in advance: losses minus wins at most max(2, 5% of n). Asymmetric = evidence the base keeps native and the variant has summarised | [`rnd/replay32/RESULT-lean.md`](rnd/replay32/RESULT-lean.md) |
 | 1.0.2 changes (plain-text summary, shrinking dialogue view, time on user turns only) against 1.0.1 | No more losses than the limit on all 4 sets. Losses / wins: 128k 1 / 2 of 128; 128k time questions 0 / 0 of 48; 32k 4 / 2 of 127; 32k asymmetric 0 / 2 of 56 | Paired replay, 5 recorded live sessions, DeepSeek flash as agent and judge. 11 of 146 answer sessions hit a 15-minute wall limit and drop out of the pairing | [`rnd/replay32/RESULT-lean.md`](rnd/replay32/RESULT-lean.md), [`CHANGELOG.md`](CHANGELOG.md) |
 | Summary size, plain-text format against the 1.0.1 JSON format | About 30% shorter where the agent writes little, about 14% shorter where it writes a lot | Same dialogue | [`CHANGELOG.md`](CHANGELOG.md) 1.0.2 |
-| Small-window fix | A session that writes little prose cut 174 times in 300 tool rounds at 32k with a 16k reserve (1.0.1 code). With the fix, a test pins that no cut frees under a tenth of the room | Real planner on synthetic sessions (R&D's planner replay) | [`test/cut-yield.test.ts`](test/cut-yield.test.ts), which pins that every cut frees at least a tenth of the room |
+| Small-window fix | A session that writes little prose cut 174 times in 300 tool rounds at 32k with a 16k reserve (1.0.1 code). With the fix, a test pins that no cut frees under a tenth of the room | Real planner on synthetic sessions | [`test/cut-yield.test.ts`](test/cut-yield.test.ts), which pins that every cut frees at least a tenth of the room |
 | Stall fix: a long session's cut | A cut at 3,888 entries took 72 s in 1.0.0 and takes 174 ms since 1.0.1. Since 1.0.1 the cost grows linearly with the session | One machine, the same synthetic session for both numbers (little prose, 128k window, reserve 16,384, turn 644) | [`CHANGELOG.md`](CHANGELOG.md) 1.0.1 |
 
 Notes:

@@ -20,3 +20,16 @@ Per window and build: accuracy by arm and by question type; paired differences b
 ## Not claimed
 
 Not a leaderboard entry: different judge, a 100-question subset, a small-window harness. Nothing about other windows or models.
+
+## Build notes, 2026-10-31 13:37 CDT (before any LongMemEval answer was scored)
+
+- **Data.** `longmemeval_s_cleaned.json` was downloaded with the project owner's approval from `xiaowu0162/longmemeval-cleaned`, 277,383,467 bytes, SHA-256 `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442` (equal to the file's Git LFS hash on the Hub). It stays in `runs/data/lme/` (gitignored). 500 questions, 47.7 sessions and about 122k tokens of history per question on average.
+- **Subset** (`lme/select.py` → `lme/subset.json`, committed): proportional by type, largest remainder with ties to the larger type, drawn inside each type with seed 20261031: multi-session 27, temporal-reasoning 27, knowledge-update 15, single-session-user 14, single-session-assistant 11, single-session-preference 6; 7 of the 100 are abstention questions.
+- **Sessions** (`lme/build.py`): haystack sessions sorted by their date; each session's first user message starts with `[Conversation on <date>]`; message timestamps are the session date plus 30 s per turn; no system entry (the replay default of 3,500 request-overhead tokens applies). The question is not in the recording.
+- **Cuts** (`lme/cuts.ts`, the machinery of `replay/cuts.ts` with the window as a parameter): at an assistant-then-user boundary; the first where the raw history reaches the cut band less the overhead, then every half room of new raw history, the same positions for every compactor of a window. Summaries by Pi's native compaction come from DeepSeek (thinking `high`) through the pinned route. A cut that is refused ends that question's cut list and the question counts as unanswered for that arm.
+- **Question state.** The question is asked in the state at the end of the history: the last cut and the raw messages after it. Pi's own compaction is off in that session, so the asked state is the replayed one.
+- **Prompt.** "Current date: <question_date>. Answer the question below from what we discussed in our earlier conversations in this session. Use your tools if they help you find it. If the conversations do not contain the information, say that it was not mentioned. Reply with only the answer, in a sentence or two." The same for every arm. The official judge prompts are used unchanged (`lme/lib.ts`), the verdict being "yes" in the lower-cased reply.
+- **Index complete before the question** for the `tuck` arm, as in the amendment to `PREREG-RECALL.md` (a finished index; wait at most 10 minutes; the wait and coverage are logged per ask).
+- **Order and load.** `lme/run.py` runs the cuts first, then two streams at the lowest CPU priority (the machine is shared with the main run): the `tuck` answers (the slow embedding step; about 2 minutes of indexing per question and state) in the order 1.0.3 at 32k, 1.0.3 at 64k, 1.0.1 at 32k, 1.0.1 at 64k, and everything else. Partial results are therefore usable early, and the order is fixed here, not chosen by results.
+- **`full`** (no compaction) is run once, not per window.
+
