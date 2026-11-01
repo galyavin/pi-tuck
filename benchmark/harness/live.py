@@ -99,7 +99,7 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
     while not rpc.events.empty():
         rpc.events.get_nowait()
     started = time.time()
-    response = rpc.call({"type": "prompt", "message": prompt})
+    response = rpc.call({"type": "prompt", "message": prompt}, timeout=3600)  # Pi compacts before it accepts a prompt; a slow compaction (12 min seen) must not end the chain
     if not response.get("success"):
         return {"error": response.get("error"), "seconds": 0}
     usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "requests": 0}
