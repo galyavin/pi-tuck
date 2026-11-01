@@ -3,6 +3,23 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.5] - 2026-10-31
+
+### Fixed
+
+- One oversize tool result no longer leaves a session unusable. A fresh tool round larger than the input room is still refused, since it must
+  reach the model whole; but after that run ended (its reply aborted, or hidden by Pi when it recovered from an overflow), the result was
+  still treated as not yet seen and kept whole, so
+  every later prompt was refused, and a manual `/compact` refused too. Once the session moves on (a new prompt, a manual `/compact`, or a
+  run a custom message starts) it is now ordinary history, and the next cut summarizes it; `tuck_recall` still reads it in full.
+- A cut that is needed when Pi has nothing to compact (no history older than its `keepRecentTokens` since the last cut) now refuses that
+  request only. Before, Pi's "Nothing to compact" or "Already compacted" stayed as a fault, and every later prompt of the session failed on it.
+- No failure outlives its attempt: after any refusal or fault, the next prompt, a manual cut or the end of the run plans afresh from the
+  session as it is. Before, a fault other than a refusal stayed until the session restarted. The one exception is a cut pi-tuck supplied that
+  Pi then failed to write: the session may hold a cut its file lacks, so that fault still stays until the session restarts.
+- A refusal no longer turns semantic recall off. Background indexing read any compaction failure as the host revoking access, so it disabled
+  semantic recall and deleted its index for the rest of the session.
+
 ## [1.0.4] - 2026-10-31
 
 ### Changed

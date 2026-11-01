@@ -66,7 +66,7 @@ class Rpc:
             self.events.put(record)
         self.events.put({"type": "_exit"})
 
-    def call(self, command: dict, timeout=120) -> dict:
+    def call(self, command: dict, timeout=3600) -> dict:  # Pi answers no command while it compacts, and a compaction can take many minutes under load
         with self.cond:
             self.next += 1
             ident = f"r{self.next}"
@@ -81,7 +81,7 @@ class Rpc:
 
     def close(self):
         self.proc.stdin.close()
-        self.proc.wait(timeout=120)
+        self.proc.wait(timeout=3600)
 
 
 def start_container(name: str, instance: str, cwd: Path):
@@ -156,7 +156,7 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", required=True, choices=["A", "B", "C", "T"])
+    parser.add_argument("--arm", required=True, choices=["A", "B", "C", "M", "T"])
     parser.add_argument("--suite", default="main", choices=sorted(SUITES))
     parser.add_argument("--session", required=True)
     parser.add_argument("--tasks", required=True)
@@ -176,7 +176,9 @@ def main():
         if not args.tuck:
             sys.exit("arms B, C and T need --tuck")
         extensions.append(str(Path(args.tuck).resolve() / "index.ts"))
-    env = {**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir(args.arm, args.suite)), "TUCK_EVAL_CONTAINER_FILE": str(container_file)}
+    if args.arm == "M":  # observation masking over Pi's own compaction (PREREG-32K.md, arm M)
+        extensions.append(str(BENCH / "harness" / "mask-extension.ts"))
+    env = {**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir(args.arm, args.suite)), "TUCK_EVAL_CONTAINER_FILE": str(container_file), "TUCK_EVAL_MASK_LOG": str(out / "mask.log")}
     command = ["pi", "--mode", "rpc", "--no-extensions", *sum((["-e", e] for e in extensions), []), "--no-skills", "--no-prompt-templates",
                "--no-context-files", "--no-mcp", "--no-themes", "--session-dir", str(out / "pi-sessions"), "--model", f"{suite['model']}:{suite['thinking']}"]
     (out / "run.json").write_text(json.dumps({"arm": args.arm, "suite": args.suite, "session": args.session, "tasks": tasks, "command": command, "tuck": args.tuck,

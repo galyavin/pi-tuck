@@ -7,8 +7,9 @@ fails=$(grep -c ' FAIL ' runs/replay.out 2>/dev/null)
 while :; do
   sleep 60; n=$((n+1))
   pgrep -f run_live_all.py >/dev/null || { echo DONE; break; }
-  for d in runs/live/s[0-9]*-[AB] runs/live32/t[0-9]*-[AB]; do
+  for d in runs/live/s[0-9]*-[ABC] runs/live32/t[0-9]*-[ABCM]; do
     [ -f "$d/run.json" ] && [ ! -f "$d/stats.json" ] || continue
+    [ -f "$d/DIED" ] && continue  # set aside to be redone (DEVIATIONS)
     name=$(basename "$d"); session=${name%-*}; arm=${name#*-}
     pgrep -f "live.py --arm $arm --session $session " >/dev/null || { echo "DEAD $name"; break 2; }
   done

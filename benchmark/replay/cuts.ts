@@ -1,8 +1,8 @@
 // Simulate the cut sequence of each compactor on one recording, at the same raw positions, and write what each cut produced.
-//   jiti benchmark/replay/cuts.ts RECORDING.jsonl OUT_DIR [--variants tuck,native-frontier,native-local] [--tuck-dir DIR]
+//   jiti benchmark/replay/cuts.ts RECORDING.jsonl OUT_DIR [--variants tuck,native-terra,native-local] [--tuck-dir DIR]
 // Variants:
 //   tuck, tuck-<label>  pi-tuck's draft (a labelled variant is another pi-tuck source folder, set with --tuck-dir for that run): tuckObservedDraft through the cut decision of the tool-loop path (budget.ts chooseCut)
-//   native-frontier  Pi's prepareCompaction + compact() (the summarize and update-the-previous-summary prompts), run on the frontier model
+//   native-terra     Pi's prepareCompaction + compact() (the summarize and update-the-previous-summary prompts), run on openai/gpt-6.1-terra xhigh (ChatGPT plan)
 //   native-local     the same, on mac-studio/main: what the live arm A does
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -14,9 +14,11 @@ import { KEEP_RECENT, RESERVE, WINDOW, carried, loadRecording, scheduleFor, sess
 
 const [recordingPath, outDir, ...rest] = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : fallback; };
-const variants = option("--variants", "tuck,native-frontier,native-local").split(",");
+const variants = option("--variants", "tuck,native-terra,native-local").split(",");
+if (variants.includes("native-frontier")) throw new Error("native-frontier (gpt-6-astra) was withdrawn by the project owner; use native-terra");
 const tuckDir = resolve(option("--tuck-dir", join(import.meta.dirname, "..", "..")));
-const frontier = option("--frontier", "openai/gpt-6-astra"), frontierThinking = option("--frontier-thinking", "high");
+// The astra model was withdrawn by the project owner on 2026-10-31 (PREREG-TERRA.md): native-frontier is refused. native-terra is Pi's compaction prompts on GPT-6.1 Terra.
+const terra = option("--terra", "openai/gpt-6.1-terra"), terraThinking = option("--terra-thinking", "xhigh");
 const localModel = option("--local", "mac-studio/main"), localThinking = option("--local-thinking", "xhigh");
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
@@ -85,7 +87,7 @@ for (const variant of variants) {
 			if (variant.startsWith("tuck")) result = tuckCut(entries);
 			else {
 				const attempt = await untilNotCapped<any>(`${variant} cut ${k + 1}`, async () => ({
-					value: variant === "native-frontier" ? await nativeCut(entries, frontier, frontierThinking, cuts) : await nativeCut(entries, localModel, localThinking, cuts) }));
+					value: variant === "native-terra" ? await nativeCut(entries, terra, terraThinking, cuts) : await nativeCut(entries, localModel, localThinking, cuts) }));
 				result = attempt.value ?? { refused: `error: ${attempt.error}` };
 			}
 		} catch (error) { result = { refused: `error: ${(error as Error).message}` }; }
