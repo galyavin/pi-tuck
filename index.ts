@@ -22,7 +22,9 @@ export default async function (pi: ExtensionAPI) {
 	// `/tuck-semantic off` holds for the rest of the session, including over a setup that finishes later.
 	let off = false;
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
-	const handle = await installCompaction(pi, { semanticRecall, cutAt: settings.cutAt, onSemanticSetting: async enabled => { off = !enabled; } });
+	// Semantic recall runs on Metal, so only on Apple silicon; elsewhere the model is not offered tuck_search at all.
+	const appleSilicon = process.platform === "darwin" && process.arch === "arm64";
+	const handle = await installCompaction(pi, { semanticRecall, search: appleSilicon, cutAt: settings.cutAt, onSemanticSetting: async enabled => { off = !enabled; } });
 	if (settings.semanticRecall === false) return;
 	let session = 0, said = "", setup: Promise<unknown> | undefined;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
@@ -33,8 +35,8 @@ export default async function (pi: ExtensionAPI) {
 		const current = ++session;
 		off = false;
 		if (settings.error) once(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");
-		if (process.platform !== "darwin" || process.arch !== "arm64")
-			return once(ctx, "pi-tuck: semantic recall needs macOS on Apple silicon for now; compaction and word recall work.", "info");
+		if (!appleSilicon)
+			return once(ctx, "pi-tuck: semantic recall needs macOS on Apple silicon; compaction and word recall work.", "info");
 		// Semantic recall keeps its runtime and indexes outside the project it serves, so not when Pi runs in a folder that holds its
 		// agent folder, such as the home folder.
 		if (within(real(getAgentDir()), real(ctx.cwd)))

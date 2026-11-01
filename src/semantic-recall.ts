@@ -104,13 +104,15 @@ export const HEAL_STEADY_MS=600000;
 export const IDLE_STOP_MS=600000;
 /** A worker call's deadline once the worker has answered a call after `ready`: index, embed and tokenize on a loaded model. */
 export const CALL_DEADLINE_MS=60000;
+/** Why semantic recall is off where the embedding server cannot start on Metal (a VM, a Mac without a GPU): it runs on Metal only. */
+export const METAL_UNAVAILABLE='Semantic recall needs Metal; word recall still works';
 /** What an `embed` call adds to its deadline for each text it carries. A batch of 8 passages on a starved CPU took longer than the per-call
  * deadline, and the worker failed when it should have slowed down; a query (one text) still fails fast when the server hangs. The worker
  * scales its native request timeout by the same amount (semantic-worker.py), so that limit is not reached first. */
 export const EMBED_TEXT_MS=30000;
 /** The deadline for a worker's start: Python start, `ready` (which verifies every runtime file) and the first call after it, which loads the
  * model and starts its native server. On a busy machine that takes minutes; held to the per-call deadline, the worker never started and
- * semantic recall went unavailable. It stays above the worker's own native start limits (120 s on Metal, then 400 s on the CPU, in semantic-worker.py). */
+ * semantic recall went unavailable. It stays above the worker's own native start limit (540 s, in semantic-worker.py). */
 export const START_DEADLINE_MS=600000;
 /** The most units one index window holds. The worker's SQLite store stops at 8,008 rows (`PRAGMA max_page_count=8192` in scripts/semantic-worker.py), so a cap below that keeps a window of short units from filling the store and sticking in `unavailable`. Raise it only together with the store. */
 export const MAX_INDEX_UNITS=8000;
@@ -149,7 +151,7 @@ class LocalWorker {
    const launchLine=JSON.stringify(launch)+'\n';if(this.nativeHelper&&Buffer.byteLength(launchLine)>2*1048576)throw new Error('Native owner launch bound');
    const child=spawn(this.nativeHelper?this.config.nativeOwnerHelperPath!:this.config.pythonPath,this.nativeHelper?['--run']:args,{cwd:this.scratch,env:this.nativeHelper?osEnvironment:env,stdio:'pipe',detached:!this.nativeHelper});
    this.child=child;this.exited=new Promise<void>(done=>child.once('close',(code,signal)=>{this.nativeExit={code,signal};this.rejectAll(new WorkerFailure('Local worker stopped'));done();this.lose('Local worker stopped');}));
-   child.stdout.on('data',data=>{this.buffer+=data.toString();if(this.buffer.length>16*1024*1024){this.lose('Local worker output bound');return;}let end;while((end=this.buffer.indexOf('\n'))>=0){const line=this.buffer.slice(0,end);this.buffer=this.buffer.slice(end+1);try{const reply=JSON.parse(line),pending=this.pending.get(reply.id);if(pending){clearTimeout(pending.timer);this.pending.delete(reply.id);reply.ok?pending.resolve(reply.result):pending.reject(new WorkerFailure('Local semantic runtime: '+reply.error?.code,reply.error?.code??null));if(this.nativeHelper&&this.nativeInputId===reply.id){this.nativeInputId=undefined;this.pumpNativeInput();}}}catch{this.lose('Local worker framing');}}});
+   child.stdout.on('data',data=>{this.buffer+=data.toString();if(this.buffer.length>16*1024*1024){this.lose('Local worker output bound');return;}let end;while((end=this.buffer.indexOf('\n'))>=0){const line=this.buffer.slice(0,end);this.buffer=this.buffer.slice(end+1);try{const reply=JSON.parse(line),pending=this.pending.get(reply.id);if(pending){clearTimeout(pending.timer);this.pending.delete(reply.id);reply.ok?pending.resolve(reply.result):pending.reject(new WorkerFailure(reply.error?.code==='metal_unavailable'?METAL_UNAVAILABLE:'Local semantic runtime: '+reply.error?.code,reply.error?.code??null));if(this.nativeHelper&&this.nativeInputId===reply.id){this.nativeInputId=undefined;this.pumpNativeInput();}}}catch{this.lose('Local worker framing');}}});
    child.stdout.on('error',()=>this.lose('Local worker output'));
    if(this.nativeHelper)this.helperReceipt=observeNativeFrames(child.stderr,()=>{},()=>this.closeInBackground());
    else child.stderr.resume();

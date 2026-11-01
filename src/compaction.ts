@@ -89,6 +89,8 @@ export function seedWindow(branch: readonly SessionEntry[], key: string): number
 }
 export interface CompactionOptions {
  semanticRecall?: SemanticRecallController;
+ /** Whether `tuck_search` exists: false where semantic recall cannot run (off Apple silicon), so the model is offered word recall only. */
+ search?: boolean;
  /** Optional host-owned transient operator preference; handle operations never call back. */
  onSemanticSetting?: (enabled: boolean) => Promise<unknown>;
  semanticStatus?: () => unknown;
@@ -120,7 +122,7 @@ export interface CompactionOptions {
 export async function installCompaction(pi: ExtensionAPI, options: CompactionOptions = {}) {
     const cutAt = options.cutAt ?? DEFAULT_CUT_AT;
     if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
-    const semantic = options.semanticRecall ?? createSemanticRecall();
+    const semantic = options.semanticRecall ?? createSemanticRecall(), search = options.search ?? true;
     const hostAccess = () => {
         if (!active()) throw new Error("Compaction host is inactive");
         options.assertAccess?.();
@@ -322,7 +324,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     });
 	pi.registerTool({
 		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
-        description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. Use tuck_search for historical information relevant to a question, including different wording and qualifications. Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
+        description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. " + (search ? "Use tuck_search for historical information relevant to a question, including different wording and qualifications. " : "") + "Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
             const input = checkedInput(raw);
@@ -345,7 +347,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             return reply(tuckRecall(tuck, ctx.sessionManager.getEntries(), branch, input, options.recallPolicy));
 		},
 	});
-    pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
+    if (search) pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
         description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword and local embedding search. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns original evidence up to 20000 characters; not exhaustive. Semantic search may be off or incomplete, which is not the same as no matches. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists source ranges already read.",
         async execute(_id,raw,signal,_update,ctx){
             access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);

@@ -18,6 +18,10 @@ def encoder_alive():
         return False
 
 
+class Refusal(Exception):
+    pass
+
+
 def vector():
     return [1.0] + [0.0] * 767
 
@@ -34,6 +38,9 @@ def run(request):
         return {"identity": "heal-process-fixture", "dimensions": 768, "maxTokens": 8192, "offline": True}
     if op == "tokenize":
         return {"ranges": [[{"start": 0, "end": len(text.encode("utf-16-le")) // 2, "tokens": 3}] for text in request["texts"]], "offsetUnit": "utf16"}
+    if op == "embed" and os.path.exists(os.path.join(root, "no-metal")):
+        # A Mac whose GPU cannot start the server: the real worker refuses with this code.
+        raise Refusal("metal_unavailable")
     if op == "embed":
         # A starved CPU: each embed call takes this long (set by the test in the runtime root).
         try:
@@ -77,6 +84,8 @@ for line in sys.stdin:
     request = json.loads(line)
     try:
         reply = {"id": request["id"], "ok": True, "result": run(request)}
+    except Refusal as refusal:
+        reply = {"id": request["id"], "ok": False, "error": {"code": str(refusal)}}
     except Exception:
         reply = {"id": request["id"], "ok": False, "error": {"code": "local_runtime_failure"}}
     print(json.dumps(reply), flush=True)

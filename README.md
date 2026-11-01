@@ -1,6 +1,6 @@
 # pi-tuck
 
-**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** In our live run, a cut took a median 0.09 s. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
+**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword, and on Apple silicon by meaning, all on your machine.** In our live run, a cut took a median 0.09 s. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
 
 ```sh
 pi install npm:pi-tuck
@@ -17,14 +17,13 @@ Pi's built-in compaction asks a model to write a summary. pi-tuck builds the sum
 | Context carried after a cut | 29,200 tokens | 27,800 tokens (about the same) |
 | Same session, same summary | Not guaranteed, since a model writes it | Yes |
 | Can the agent get dropped detail back | No recall tool in Pi 1.4.0. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
-| Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally, and no text leaves your machine. Elsewhere it searches by keyword |
+| Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally on your Mac's GPU, and no text leaves your machine. Elsewhere there is no `tuck_search`, and `tuck_recall` searches by keyword |
 | Can the summary invent history | It can, since a model writes it | No, it holds only recorded text |
 | What the summary leaves out | Whatever the model dropped | Tool output only; the agent reads it back exactly |
 | Billed input at the default 60% cut point (simulated) | Not measured | 10–18% less than pi-tuck cutting at the full room. This is not a comparison with the built-in |
-| Answer quality against Pi's own compaction on a local model (`mac-studio/main`) | | **Being measured. Not claimed yet.** |
-| Answer quality against Pi's compaction prompts on a frontier model | | **Untested.** |
+| Tasks resolved at a 32k window (150 SWE-bench Verified tasks, one model, pi-tuck 1.0.5) | 94 of 150 | 120 of 150 (+17.3 points, 95% lower bound +10.7). Limits below the table |
 
-The time and context rows are live runs with a 131k window: 27 cuts per arm over 5 chains, interim. Every number comes from a file in this repository. Conditions, sample sizes and links are in [Benchmarks](#benchmarks). The last row is the one that matters most, and it is not finished: see [What is proven, and what is not](#what-is-proven-and-what-is-not).
+The time and context rows are live runs with a 131k window: 27 cuts per arm over 5 chains, interim. The 32k row is one model, one window and five chains. Observation masking, a third approach, resolved 117 of the same 150 tasks (pi-tuck +2.0 points, lower bound −2.7: no difference shown). In the 32k run only pi-tuck was held to the 16,384-token room: Pi's built-in compaction sent a request over it in 97 of 150 tasks. Every number comes from a file in this repository. Conditions, sample sizes and the full limits are in [Benchmarks](#benchmarks).
 
 ## Ask your history
 
@@ -46,7 +45,7 @@ It gets back the original passage, with a pointer such as `#212`. It reads the w
 
 That is `tuck_recall`. The agent answers from the original text, not from a model's memory of it.
 
-*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** A test of it is pre-registered in [`benchmark/PREREG-RECALL.md`](benchmark/PREREG-RECALL.md); it has no result yet. The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. It runs only on macOS with Apple silicon. Elsewhere, `tuck_search` uses keywords, and the example above would not find its match.
+*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** A test of it is pre-registered in [`benchmark/PREREG-RECALL.md`](benchmark/PREREG-RECALL.md); it has no result yet. The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. `tuck_search` exists only on macOS with Apple silicon. Elsewhere the agent has `tuck_recall` and its keyword search, and the example above would not find its match.
 
 ## Install
 
@@ -56,10 +55,10 @@ pi install npm:pi-tuck
 
 Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, both automatic and `/compact`. You change no setting.
 
-- Needs Pi 1.1 or later (tested on 1.1.0 and 1.4.0), on macOS or Linux.
+- Needs Pi 1.1 or later (tested on 1.1.0 and 1.4.0), on macOS or Linux. Full features on macOS with Apple silicon; elsewhere, compaction and word recall.
 - On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once). Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
-- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.6`.
-- To pin a version, add it: `pi install npm:pi-tuck@1.0.6`.
+- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.7`.
+- To pin a version, add it: `pi install npm:pi-tuck@1.0.7`.
 
 ## How it works
 
@@ -77,9 +76,9 @@ The summary is plain text, one line per record, such as `#12 user @2026-10-30T14
 The agent gets two tools to get anything back:
 
 - **`tuck_recall`** finds earlier text by keyword. It reads any original message or tool result exactly, by the index shown in a summary. It can also write an original out to a file.
-- **`tuck_search`** finds earlier history related to a question, even when the wording differs. It combines keyword hits with local semantic search and returns the original text with pointers for `tuck_recall`.
+- **`tuck_search`** (macOS with Apple silicon only) finds earlier history related to a question, even when the wording differs. It combines keyword hits with local semantic search and returns the original text with pointers for `tuck_recall`.
 
-Both tools cost about 1,050 tokens of tool description per request.
+On Apple silicon, both tools cost about 1,050 tokens of tool description per request. Elsewhere only `tuck_recall` is offered.
 
 | Command | Does |
 |---|---|
@@ -90,15 +89,15 @@ Both tools cost about 1,050 tokens of tool description per request.
 
 ## What is proven, and what is not
 
-**Measured so far:** in the live run, a pi-tuck cut took a median 0.09 s, where Pi's built-in compaction with a local model writing the summary took a median 269 s. A cut calls no model, so it costs no tokens. After a cut, pi-tuck carried about as many tokens as the built-in did, not fewer. In simulation, cutting at 60% of the room instead of 100% saved billed input for pi-tuck itself, and answers held in replay.
+**Measured so far.** In the live run at a 131k window, a pi-tuck cut took a median 0.09 s, where Pi's built-in compaction with a local model writing the summary took a median 269 s. A cut calls no model, so it costs no tokens. After a cut, pi-tuck carried about as many tokens as the built-in did, not fewer. In simulation, cutting at 60% of the room instead of 100% saved billed input for pi-tuck itself, and answers held in replay. At a 32k window, in one suite of 150 SWE-bench Verified tasks with one model, pi-tuck 1.0.5 resolved 120 tasks and Pi's built-in compaction 94 (+17.3 points, 95% lower bound +10.7). Observation masking resolved 117 (pi-tuck +2.0 points, lower bound −2.7: no difference shown). The limits of that result are in [Benchmarks](#benchmarks).
 
-**Not proven yet: that the summary is as good as a model-written one.** The claim is that pi-tuck compacts as well as an LLM compactor, in far less time and at no cost. The comparator is Pi's own summarize prompts, run on a local model (`mac-studio/main`). The frontier comparison is untested: the model first named for it (`openai/gpt-6-astra`) was retired on 2026-10-31, and its recordings are a labelled partial view that feeds no test. A replacement, GPT-6.1 Terra, is pre-registered in [`benchmark/PREREG-TERRA.md`](benchmark/PREREG-TERRA.md). See [`benchmark/PINS.md`](benchmark/PINS.md). That claim has a pre-registered test. The test is running now. It was written down before any result came in, and a failed test will be reported as failed. When the result is final, it goes in [`benchmark/`](benchmark) and in this README. Until then, this README does not claim that pi-tuck is as good as, or better than, any LLM compactor.
+**Not claimed.** This README does not say that pi-tuck is as good as, or better than, Pi's built-in compaction at a 128k window or in any other setting than the one above. The tests were pre-registered before any result came in. The plans, and every result, including those that did not favour pi-tuck, are in [`benchmark/`](benchmark).
 
-The test has three parts:
+The pre-registered plan has three parts:
 
 1. **A live run** at a 128k window on a local model, with pi-tuck 1.0.1. Ten chains of 30 SWE-bench Verified tasks per arm, with Pi's built-in compaction in one arm and pi-tuck in the other. Official grading.
-2. **A paired replay with probe questions.** The same cuts, made by pi-tuck and by Pi's summarize prompts on the local model, then questions about facts that fell before the cut. Pre-registered rule: the claim holds only if pi-tuck is no more than 3 points worse than the better compactor, with a 95% bound. The comparators are named above and in `benchmark/`.
-3. **A 32k suite**, where tasks are bigger than the room, so cuts must summarise work in progress.
+2. **A paired replay with probe questions.** The same cuts, made by pi-tuck and by Pi's summarize prompts, then questions about facts that fell before the cut. Pre-registered rule: the claim holds only if pi-tuck is no more than 3 points worse than the better compactor, with a 95% bound. The comparators are named in [`benchmark/PINS.md`](benchmark/PINS.md).
+3. **A 32k suite**, where tasks are bigger than the room, so cuts must summarise work in progress. Its result is the 32k row above.
 
 The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.md`](benchmark/PREREG-32K.md), [`benchmark/PREREG-TERRA.md`](benchmark/PREREG-TERRA.md), and every change after the freeze in [`benchmark/DEVIATIONS.md`](benchmark/DEVIATIONS.md).
 
@@ -106,7 +105,7 @@ Known limits today:
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up. Each look-up costs a tool call.
 - Small windows: an upstream that spends far more context on tool schemas than others (some OpenRouter upstreams do) can leave a small input room too little space, and pi-tuck then refuses to cut rather than overflow. This is what made 1.0.1 refuse at a 32k window with Pi's default 16,384 reserve. Since 1.0.4 the notice says when the provider is counting far above pi-tuck's estimate. In 1.0.4, after an oversize tool result or a "Nothing to compact" error from Pi, a session could keep refusing later prompts. 1.0.5 fixes both. Pin a different upstream, lower the reserve, or use a larger window; see [Small windows](#small-windows).
-- Semantic search runs only on macOS with Apple silicon.
+- Semantic search (`tuck_search`) needs a Mac with Metal (Apple silicon). Elsewhere, compaction and `tuck_recall`'s word search work, there is no `tuck_search`, and nothing is downloaded.
 
 ## Benchmarks
 
@@ -114,6 +113,7 @@ Each row says what was measured, under which conditions, and where the data is. 
 
 | What | Result | Conditions | Source |
 |---|---|---|---|
+| Tasks resolved, 32k window | Pi's built-in compaction 94 of 150; pi-tuck 120 of 150 (+17.3 points, 95% lower bound +10.7); observation masking 117 of 150 (pi-tuck +2.0, lower bound −2.7: no difference shown). Turns per task: 9.4 (built-in), 24.0 (pi-tuck), 11.9 (masking). Tokens per session: 6.10 M, 6.39 M, 7.02 M. Spend per arm for the five sessions: $0.87, $0.55, $0.94 | pi-tuck 1.0.5 (commit `aa30824`, the 1.0.5 code; 1.0.6 and 1.0.7 are not measured). DeepSeek V4.1 Flash pinned to one upstream, window 32,768, reserve 16,384, 5 chains of 30 SWE-bench Verified tasks, paired by task, one-sided bootstrap over tasks. **Limits:** only pi-tuck is held to the 16,384-token room (the built-in sent a request over it in 97 of 150 tasks, masking in 73, so the window is nominal for them). The difference by chain is +10.0, −3.3, +50.0, +16.7 and +13.3 points; leaving out chain t03 it is +9.2. The bootstrap resamples tasks, not chains. The pi-tuck arm ran at a different time from the others. One model, one window. pi-tuck refused to cut mid-run in 5 tasks, where one fresh tool result was larger than the room; they count as unresolved. In the same setup pi-tuck 1.0.3 resolved 72 of 150, with 52 tasks lost because an earlier refusal carried forward; 1.0.5 fixes that | [`benchmark/RESULTS-32K-ACCEPT.md`](benchmark/RESULTS-32K-ACCEPT.md) |
 | Cut time, live | pi-tuck median 0.087 s (90th percentile 0.205 s); Pi's built-in median 268.8 s (90th percentile 421.6 s). Context carried after a cut, median: 27,751 against 29,241 tokens | **Interim.** pi-tuck 1.0.1, Pi 1.4.0, SWE-bench Verified chains of 30 tasks, 131,072-token window, reply reserve 32,768, local model `mac-studio/main` writing Pi's summaries. 27 cuts per arm, 5 chains. The built-in time depends on that model and on server load. pi-tuck's time is an upper bound read from the session file | [`benchmark/RESULTS-INTERIM.md`](benchmark/RESULTS-INTERIM.md) section 1 |
 | Cut time, paired replay | pi-tuck median 0.062 s (range 0.005 to 0.48 s); local-model summarizer 193.4 s (77.3 to 413.3 s); frontier summarizer 96.1 s (39.1 to 267.8 s; measured on the retired model `openai/gpt-6-astra`; feeds no test). Context carried after a cut, median: 28,006 (pi-tuck), 26,424 (local), 25,555 (frontier) tokens | **Interim.** The same recorded sessions cut at the same positions. pi-tuck: 10 recordings, 52 cuts. Summarizers: 6 recordings, 28 and 29 cuts. pi-tuck's time leaves out the background search index | [`benchmark/RESULTS-INTERIM.md`](benchmark/RESULTS-INTERIM.md) section 2 |
 | Billed input, cutting at 60% of the room instead of 100% | −17.9% at 128k, −14.0% at 32k with automatic prompt caching; −17.0% and −9.6% with explicit cache breakpoints. Cuts go from 6 to 12 (128k) and from 84 to 157 (32k); none frees under a tenth of the room | Simulated billing, not provider bills. Prompt caching priced. Build `1bda64b` (the default shipped in 1.0.3). 5 recorded live sessions. 128k = 131,072 window, reserve 32,768. 32k = 32,768 window, reserve 16,384 | [`rnd/replay32/RESULT-lean.md`](rnd/replay32/RESULT-lean.md) |
@@ -139,7 +139,7 @@ pi-tuck needs none. Two are optional. Put them in `pi-tuck.json` in Pi's agent f
 ```
 
 - **`cutAt`** (above 0, at most 1; default 0.6) is the part of the input room a request may fill before pi-tuck cuts. At 0.6, each cut leaves room to grow, so fewer tokens are carried and billed per request. `{ "cutAt": 1 }` cuts at the full room. A lower value cuts earlier and smaller. The whole room still decides which request pi-tuck refuses.
-- **`semanticRecall`** (`false` turns semantic search off). Nothing is then downloaded, and `tuck_search` uses keywords only.
+- **`semanticRecall`** (`false` turns semantic search off, on Apple silicon). Nothing is then downloaded, and `tuck_search` uses keywords only.
 
 A bad file is reported at session start, and pi-tuck uses the defaults.
 
@@ -161,7 +161,7 @@ If you reach the model through OpenRouter, you can also pin one upstream, so tha
 
 ## Semantic search
 
-Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on the CPU. No text leaves your machine. Elsewhere, `tuck_search` uses keywords, and everything else works.
+Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on your Mac's GPU (Metal). No text leaves your machine. Elsewhere (Linux, Intel Macs) there is no `tuck_search`, and nothing is downloaded; compaction and `tuck_recall` work. On a Mac where Metal fails to start, semantic recall goes off with the reason "Semantic recall needs Metal; word recall still works".
 
 The first time a session starts, pi-tuck downloads what it needs, once, about 390 MB, in the background. Keyword search works meanwhile:
 

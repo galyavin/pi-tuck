@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {SessionManager} from '@earendil-works/pi-coding-agent';
-import {SemanticRecallController,semanticEligibleSources} from '../src/semantic-recall';
+import {METAL_UNAVAILABLE,SemanticRecallController,semanticEligibleSources} from '../src/semantic-recall';
 import {testNativeOwner,testPython} from './python-fixture';
 // Real processes: the controller starts a real worker process; the test owns the "encoder" the worker depends on and kills only that child, by its handle.
 const roots:string[]=[],encoders:ChildProcess[]=[];
@@ -101,5 +101,18 @@ test('a loaded worker whose embed batch outlasts the per-call deadline slows dow
  controller.enable();
  expect((await controller.search('encoder',provider)).status).toBe('ok');
  expect(controller.status()).toMatchObject({state:'ready',lastError:null,recovery:null});
+ await controller.close();
+},60000);
+// Semantic recall runs on Metal only. Where the server cannot start on Metal (a VM, a Mac without a GPU), it goes off with that reason, and
+// a search still answers with word recall.
+test('where Metal cannot start, semantic recall is off with that reason and tuck_search answers with words only',async()=>{
+ const {runtimeRoot,config,provider}=slowStart(0);
+ writeFileSync(join(runtimeRoot,'no-metal'),'');
+ const controller=new SemanticRecallController(config,{healDelaysMs:[60],healSteadyMs:60000});
+ controller.enable();
+ const page=await controller.search('encoder',provider);
+ expect(page.status).toBe('unavailable');
+ await wait(()=>controller.status().state==='unavailable');
+ expect(controller.status().lastError).toBe(METAL_UNAVAILABLE);
  await controller.close();
 },60000);
