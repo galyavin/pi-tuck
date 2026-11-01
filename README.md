@@ -58,8 +58,8 @@ Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, bo
 
 - Needs Pi 1.1 or later (tested on 1.1.0 and 1.4.0), on macOS or Linux.
 - On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once). Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
-- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.5`.
-- To pin a version, add it: `pi install npm:pi-tuck@1.0.5`.
+- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.6`.
+- To pin a version, add it: `pi install npm:pi-tuck@1.0.6`.
 
 ## How it works
 

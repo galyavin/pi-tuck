@@ -3,6 +3,23 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.6] - 2026-11-01
+
+### Changed
+
+- Semantic recall embeds on the GPU (Metal) on Apple silicon. The pinned llama.cpp build already includes Metal, but pi-tuck started it on the
+  CPU only. On an Apple M5 under heavy load (load average 44-76), a batch of 8 passages took a median 38.6 s on the CPU and 0.69 s on Metal,
+  56 times faster, with nearly the same vectors (97.9% top-10 overlap with the CPU's). Indexing therefore finishes, and `tuck_search` ranks
+  by meaning instead of falling back to keywords. Where Metal cannot start (a VM, CI, no GPU), the same server starts on the CPU. The
+  installed runtime is kept; each session's index is rebuilt once.
+
+### Fixed
+
+- Semantic recall no longer switches itself off on a busy machine. The worker's start (Python, the runtime check, the model load) now has
+  its own deadline instead of the 60 s per-call limit, and an embed call's deadline grows with the number of texts it carries, so a slow
+  machine slows indexing down instead of making it fail. A worker that still fails is retried in the same session and recovers once the
+  machine is free.
+
 ## [1.0.5] - 2026-10-31
 
 ### Fixed
