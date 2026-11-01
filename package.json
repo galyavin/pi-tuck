@@ -1,7 +1,7 @@
 {
   "name": "pi-tuck",
-  "version": "1.0.8",
-  "description": "Deterministic compaction for Pi: compact summaries that keep the dialogue and the files touched, plus history recall by keyword and by meaning, all local.",
+  "version": "1.0.9",
+  "description": "Deterministic compaction for Pi with no model call, plus exact recall of earlier history. Search by meaning on Apple silicon.",
   "keywords": [
     "pi-package",
     "pi",
@@ -9,7 +9,11 @@
     "compaction",
     "context",
     "recall",
-    "semantic-search"
+    "semantic-search",
+    "pi-coding-agent",
+    "coding-agent",
+    "context-window",
+    "deterministic"
   ],
   "license": "MIT",
   "author": "Rustem Galyavin",

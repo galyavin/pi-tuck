@@ -3,7 +3,21 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.8] - 2026-11-01
+## [1.0.9] - 2026-11-01
+
+### Changed
+
+- pi-tuck needs Pi 1.2.0 or later, the oldest Pi that has every hook it uses and that its tests pass on. On an older Pi, pi-tuck stays off,
+  Pi's own compaction runs, and pi-tuck says so once.
+
+### Fixed
+
+- Semantic recall is Metal only, and now checks it. pi-tuck's own embedding server serves on the CPU, with only a log line, when it finds no
+  Metal device; before starting it, pi-tuck asks it for its devices and turns semantic recall off with "Semantic recall needs Metal; word
+  recall still works" when none is Metal. An embedding server a host configures is its owner's choice and is not checked.
+- `tuck_search` takes a result back as returned: each entry of `priorResults` is a source's `sourceSha` and `read`, unchanged. It asked for
+  `start` and `end`, which no result carried.
+
 
 ### Fixed
 
