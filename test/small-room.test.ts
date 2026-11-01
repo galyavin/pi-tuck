@@ -82,8 +82,9 @@ const small = { limits: { contextWindow: WINDOW, maxTokens: RESPONSE }, reserveT
 const routes = {
 	// System part and host input alone exceed the room: no cut can help, and the guard refuses.
 	'system part and host input exceed the room': { options: { ...small, system: 2000, host: 17000, at: 'impossible' as const, complete: 8000 }, free: (h: Awaited<ReturnType<typeof harness>>) => h.setHost(100), refused: 'Complete Pi context and response reserve exceed', again: 'refused' as const },
-	// The tool round fresh from the last call is larger than the room: a cut keeps it native, so no cut can help, and the trigger refuses.
-	'a fresh tool round larger than the room': { options: { ...small, system: 1500, host: 100, at: 'tool' as const, complete: 24000, fresh: 15000 }, free: (h: Awaited<ReturnType<typeof harness>>) => { (h.session.model as { contextWindow: number }).contextWindow = 272000; }, refused: 'cannot fit or reduce the request budget', again: 'answered' as const },
+	// The tool round fresh from the last call is larger than the room: a cut keeps it native, and the prompt it answers is too large to leave
+	// room even for the result clipped (clip-fresh-result.test.ts has the case the clip resolves), so no cut can help, and the trigger refuses.
+	'a fresh tool round larger than the room': { options: { ...small, system: 1500, host: 100, at: 'tool' as const, history: 1000, complete: 30000, fresh: 15000 }, free: (h: Awaited<ReturnType<typeof harness>>) => { (h.session.model as { contextWindow: number }).contextWindow = 272000; }, refused: 'cannot fit or reduce the request budget', again: 'answered' as const },
 };
 const marks = (h: Awaited<ReturnType<typeof harness>>) => ({ requests: h.state.requests, aborts: h.state.aborts, faults: h.faults.length, notices: h.notices.length });
 const since = (h: Awaited<ReturnType<typeof harness>>, m: ReturnType<typeof marks>) => ({ requests: h.state.requests - m.requests, aborts: h.state.aborts - m.aborts, faults: h.faults.slice(m.faults), notices: h.notices.slice(m.notices) });

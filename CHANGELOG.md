@@ -3,6 +3,17 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.8] - 2026-11-01
+
+### Fixed
+
+- A fresh tool result too large for the room no longer refuses the run. The request carries the result's head and tail instead, with a
+  `tuck_recall` locator to the rest; a round of parallel results shares one clip budget. The clip ends with its run.
+- A prompt right after a cut is no longer refused when Pi has nothing to compact for it. When a run ends at or above the cut band, pi-tuck
+  cuts there itself, so the next prompt starts below the band. A run-end cut that cannot be planned is no fault.
+- Gates: on 29 replayed recordings, no task lost and no request refused, where 1.0.6 refused 8; live at a 32k window (60 tasks), no dead task
+  and no mid-run refusal, and 46 resolved, as 1.0.7 ([`benchmark/RESULTS-V108.md`](benchmark/RESULTS-V108.md)).
+
 ## [1.0.7] - 2026-11-01
 
 ### Changed
