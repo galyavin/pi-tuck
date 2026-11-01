@@ -161,7 +161,7 @@ If you reach the model through OpenRouter, you can also pin one upstream, so tha
 
 ## Semantic search
 
-Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on the CPU. No text leaves your machine. Elsewhere, `tuck_search` uses keywords, and everything else works.
+Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on your Mac's GPU (Metal), or on the CPU where Metal cannot start. No text leaves your machine. Elsewhere, `tuck_search` uses keywords, and everything else works.
 
 The first time a session starts, pi-tuck downloads what it needs, once, about 390 MB, in the background. Keyword search works meanwhile:
 
