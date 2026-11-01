@@ -56,8 +56,10 @@ test(`an opportunistic cut that cannot be made leaves the incident recorder reco
 		expect(r.cuts, r.probe).toBe(0);
 		expect(r.faults, r.probe).toEqual([]);
 		expect(r.requests, r.probe).toBe(why === 'the planner declines it' ? 2 : 1);
+		// A run-end cut that is made after the declined one is captured like any cut, and may fill the recording.
 		await h.session.prompt('/tuck-incident status');
-		expect(JSON.parse(h.notices.at(-1)!).state, h.notices.join('\n')).toBe('recording');
+		const state = JSON.parse(h.notices.at(-1)!).state;
+		if (r.runEnd.length) expect(state, h.notices.join('\n')).not.toMatch(/^cut-/); else expect(state, h.notices.join('\n')).toBe('recording');
 	} finally { await h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
 });
 
