@@ -92,9 +92,9 @@ def load():
    # Pinned common/arg.cpp supports LLAMA_API_KEY; server-http.cpp requires Bearer
    # on /props and embeddings, but /health is public. No token in process argv.
    env['LLAMA_API_KEY']=encoder_token
-  def launch(gpu_layers,limit):
+  def launch(limit):
    """The server, or None when it exits or is not healthy within `limit` seconds (it is then stopped)."""
-   child=subprocess.Popen([str(executable),'-m',str(ROOT/'model.gguf'),'--embedding','--pooling','mean','--embd-normalize','2','--ctx-size','8192','--batch-size','8192','--ubatch-size','8192','--parallel','1','--n-gpu-layers',str(gpu_layers),'--cache-type-k','f32','--cache-type-v','f32','--flash-attn','off','--threads','4',*transport,'--no-webui','--log-disable'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
+   child=subprocess.Popen([str(executable),'-m',str(ROOT/'model.gguf'),'--embedding','--pooling','mean','--embd-normalize','2','--ctx-size','8192','--batch-size','8192','--ubatch-size','8192','--parallel','1','--n-gpu-layers','99','--cache-type-k','f32','--cache-type-v','f32','--flash-attn','off','--threads','4',*transport,'--no-webui','--log-disable'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=env)
    started=time.monotonic()
    while child.poll() is None and time.monotonic()-started<=limit:
     try:
@@ -106,13 +106,12 @@ def load():
    if child.poll() is None:
     child.kill();child.wait()
    return None
-  # Metal first: on Apple silicon it embeds a batch about 56 times faster than the CPU (0.7 s against 39 s for 8 passages at load 44-76),
-  # with vectors of cosine 0.9998 or more to the CPU's. Where Metal cannot start (a VM, CI, no GPU) the server exits or never becomes
-  # healthy, and the same server starts on the CPU. A busy machine can take minutes to start it; both limits stay under the host's start
-  # deadline (START_DEADLINE_MS, 600 s). Windows has no Metal.
-  server=None if WINDOWS else launch(99,120)
-  if server is None:server=launch(0,400)
-  if server is None:raise Refusal('native_start_failure')
+  # Semantic recall runs on Metal only (the project's platform choice): on Apple silicon it embeds a batch about 56 times faster than the
+  # CPU did (0.7 s against 39 s for 8 passages at load 44-76). Where Metal cannot start (a VM, no GPU) the server exits or never becomes
+  # healthy, and semantic recall goes off with that reason; word recall keeps working. A busy machine can take minutes to start it; the
+  # limit stays under the host's start deadline (START_DEADLINE_MS, 600 s).
+  server=launch(540)
+  if server is None:raise Refusal('metal_unavailable')
  return server
 def run(req):
  op=req['op']

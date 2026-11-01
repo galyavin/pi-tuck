@@ -90,7 +90,7 @@ class RuntimeTests(unittest.TestCase):
                     ready = ns['run']({'op': 'ready'})
                     self.assertEqual(ready['dtype'], artifact)
                     self.assertEqual(ready['computePrecision'], 'float32')
-                    # Native launch effect: Metal offload first (the CPU when it cannot start: test_metal_first_and_cpu_when_metal_cannot_start), no FP16, f32 K/V for every weight identity.
+                    # Native launch effect: Metal offload only (test_metal_only_and_a_clear_refusal_when_metal_cannot_start), no FP16, f32 K/V for every weight identity.
                     from unittest.mock import Mock
                     server = Mock(); server.poll.return_value = None
                     with patch('subprocess.Popen', return_value=server) as launch:
@@ -222,8 +222,8 @@ class RuntimeTests(unittest.TestCase):
                 (installed / 'support.dll').write_bytes(b'dll'); (installed / 'extra.so').write_bytes(b'extra')
                 with self.assertRaisesRegex(ValueError, 'tokenizers_membership_failure'): UTILITY['verify_tokenizers'](root)
 
-    def test_metal_first_and_cpu_when_metal_cannot_start(self):
-        """The server starts with Metal offload; where Metal cannot start (it exits or is never healthy) the same server starts on the CPU."""
+    def test_metal_only_and_a_clear_refusal_when_metal_cannot_start(self):
+        """The server starts with Metal offload; where it cannot (it exits or is never healthy), the worker refuses with metal_unavailable."""
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory(prefix='pi-eg2-metal-') as directory:
             root = pathlib.Path(directory).resolve() / 'runtime'
@@ -235,23 +235,18 @@ class RuntimeTests(unittest.TestCase):
                 exec(compile(source, ns['__file__'], 'exec'), ns)
             ns['WINDOWS'] = False; ns['verify'] = lambda: None; ns['native_executable'] = lambda: root / 'native/llama-server'
             ns['request'] = lambda path, data=None, texts=0: {'status': 'ok'}
-            for metal_starts, expected in ((True, ['99']), (False, ['99', '0'])):
+            for metal_starts in (True, False):
                 launched = []
                 def launch(command, **kwargs):
-                    layers = command[command.index('--n-gpu-layers') + 1]; launched.append(layers)
-                    child = Mock(); child.poll.return_value = 1 if layers != '0' and not metal_starts else None
-                    child.layers = layers
+                    launched.append(command[command.index('--n-gpu-layers') + 1])
+                    child = Mock(); child.poll.return_value = None if metal_starts else 1
                     return child
                 ns['server'] = None
-                with patch('subprocess.Popen', side_effect=launch): server = ns['load']()
-                self.assertEqual(launched, expected)
-                self.assertEqual(server.layers, expected[-1])
-            # Neither starts: the worker refuses as before.
-            ns['server'] = None
-            def never(command, **kwargs):
-                child = Mock(); child.poll.return_value = 1; return child
-            with patch('subprocess.Popen', side_effect=never):
-                with self.assertRaisesRegex(ns['Refusal'], 'native_start_failure'): ns['load']()
+                with patch('subprocess.Popen', side_effect=launch):
+                    if metal_starts: ns['load']()
+                    else:
+                        with self.assertRaisesRegex(ns['Refusal'], 'metal_unavailable'): ns['load']()
+                self.assertEqual(launched, ['99'])  # never a CPU start
 
     def test_windows_authenticated_loopback_native_launch_and_request_failures(self):
         import http.server
