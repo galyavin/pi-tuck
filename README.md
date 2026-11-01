@@ -1,6 +1,6 @@
 # pi-tuck
 
-**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword or by meaning, all on your machine.** In our live run, a cut took a median 0.09 s. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
+**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword, and on Apple silicon by meaning, all on your machine.** In our live run, a cut took a median 0.09 s. It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
 
 ```sh
 pi install npm:pi-tuck
@@ -17,7 +17,7 @@ Pi's built-in compaction asks a model to write a summary. pi-tuck builds the sum
 | Context carried after a cut | 29,200 tokens | 27,800 tokens (about the same) |
 | Same session, same summary | Not guaranteed, since a model writes it | Yes |
 | Can the agent get dropped detail back | No recall tool in Pi 1.4.0. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
-| Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally, and no text leaves your machine. Elsewhere it searches by keyword |
+| Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally on your Mac's GPU, and no text leaves your machine. Elsewhere there is no `tuck_search`, and `tuck_recall` searches by keyword |
 | Can the summary invent history | It can, since a model writes it | No, it holds only recorded text |
 | What the summary leaves out | Whatever the model dropped | Tool output only; the agent reads it back exactly |
 | Billed input at the default 60% cut point (simulated) | Not measured | 10–18% less than pi-tuck cutting at the full room. This is not a comparison with the built-in |
@@ -46,7 +46,7 @@ It gets back the original passage, with a pointer such as `#212`. It reads the w
 
 That is `tuck_recall`. The agent answers from the original text, not from a model's memory of it.
 
-*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** A test of it is pre-registered in [`benchmark/PREREG-RECALL.md`](benchmark/PREREG-RECALL.md); it has no result yet. The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. It runs only on macOS with Apple silicon. Elsewhere, `tuck_search` uses keywords, and the example above would not find its match.
+*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** A test of it is pre-registered in [`benchmark/PREREG-RECALL.md`](benchmark/PREREG-RECALL.md); it has no result yet. The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. `tuck_search` exists only on macOS with Apple silicon. Elsewhere the agent has `tuck_recall` and its keyword search, and the example above would not find its match.
 
 ## Install
 
@@ -56,7 +56,7 @@ pi install npm:pi-tuck
 
 Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, both automatic and `/compact`. You change no setting.
 
-- Needs Pi 1.1 or later (tested on 1.1.0 and 1.4.0), on macOS or Linux.
+- Needs Pi 1.1 or later (tested on 1.1.0 and 1.4.0), on macOS or Linux. Full features on macOS with Apple silicon; elsewhere, compaction and word recall.
 - On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once). Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
 - Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.7`.
 - To pin a version, add it: `pi install npm:pi-tuck@1.0.7`.
@@ -77,9 +77,9 @@ The summary is plain text, one line per record, such as `#12 user @2026-10-30T14
 The agent gets two tools to get anything back:
 
 - **`tuck_recall`** finds earlier text by keyword. It reads any original message or tool result exactly, by the index shown in a summary. It can also write an original out to a file.
-- **`tuck_search`** finds earlier history related to a question, even when the wording differs. It combines keyword hits with local semantic search and returns the original text with pointers for `tuck_recall`.
+- **`tuck_search`** (macOS with Apple silicon only) finds earlier history related to a question, even when the wording differs. It combines keyword hits with local semantic search and returns the original text with pointers for `tuck_recall`.
 
-Both tools cost about 1,050 tokens of tool description per request.
+On Apple silicon, both tools cost about 1,050 tokens of tool description per request. Elsewhere only `tuck_recall` is offered.
 
 | Command | Does |
 |---|---|
@@ -106,7 +106,7 @@ Known limits today:
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up. Each look-up costs a tool call.
 - Small windows: an upstream that spends far more context on tool schemas than others (some OpenRouter upstreams do) can leave a small input room too little space, and pi-tuck then refuses to cut rather than overflow. This is what made 1.0.1 refuse at a 32k window with Pi's default 16,384 reserve. Since 1.0.4 the notice says when the provider is counting far above pi-tuck's estimate. In 1.0.4, after an oversize tool result or a "Nothing to compact" error from Pi, a session could keep refusing later prompts. 1.0.5 fixes both. Pin a different upstream, lower the reserve, or use a larger window; see [Small windows](#small-windows).
-- Semantic search runs only on macOS with Apple silicon.
+- Semantic search (`tuck_search`) needs a Mac with Metal (Apple silicon). Elsewhere, compaction and `tuck_recall`'s word search work, there is no `tuck_search`, and nothing is downloaded.
 
 ## Benchmarks
 
@@ -139,7 +139,7 @@ pi-tuck needs none. Two are optional. Put them in `pi-tuck.json` in Pi's agent f
 ```
 
 - **`cutAt`** (above 0, at most 1; default 0.6) is the part of the input room a request may fill before pi-tuck cuts. At 0.6, each cut leaves room to grow, so fewer tokens are carried and billed per request. `{ "cutAt": 1 }` cuts at the full room. A lower value cuts earlier and smaller. The whole room still decides which request pi-tuck refuses.
-- **`semanticRecall`** (`false` turns semantic search off). Nothing is then downloaded, and `tuck_search` uses keywords only.
+- **`semanticRecall`** (`false` turns semantic search off, on Apple silicon). Nothing is then downloaded, and `tuck_search` uses keywords only.
 
 A bad file is reported at session start, and pi-tuck uses the defaults.
 
@@ -161,7 +161,7 @@ If you reach the model through OpenRouter, you can also pin one upstream, so tha
 
 ## Semantic search
 
-Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on your Mac's GPU (Metal), or on the CPU where Metal cannot start. No text leaves your machine. Elsewhere, `tuck_search` uses keywords, and everything else works.
+Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on your Mac's GPU (Metal). No text leaves your machine. Elsewhere (Linux, Intel Macs) there is no `tuck_search`, and nothing is downloaded; compaction and `tuck_recall` work. On a Mac where Metal fails to start, semantic recall goes off with the reason "Semantic recall needs Metal; word recall still works".
 
 The first time a session starts, pi-tuck downloads what it needs, once, about 390 MB, in the background. Keyword search works meanwhile:
 
