@@ -54,8 +54,8 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": ">=1.2.0",
+    "@earendil-works/pi-coding-agent": ">=1.2.0",
     "typebox": "*"
   },
   "devDependencies": {
