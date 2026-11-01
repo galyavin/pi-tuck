@@ -161,6 +161,7 @@ export async function harness(options: Options) {
   const exact = (n: number) => { const t = text(n); return t.length >= n * 4 ? t.slice(0, n * 4) : t + 'z'.repeat(n * 4 - t.length); };
   const hostInput = () => ({ role: 'custom' as const, customType: 'host.view', content: exact(host), display: false, timestamp: 0 });
   const probes: { at: string; complete: number; queued: number }[] = [];
+  let atRunEnd: { hostCalls: number; kept: number } | undefined;
   let extension: ExtensionAPI | undefined;
   const activeToolsJson = () => JSON.stringify(extension!.getAllTools().filter(t => extension!.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
   const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, systemPrompt, extensionFactories: [async pi => {
@@ -177,6 +178,8 @@ export async function harness(options: Options) {
    pi.on('before_agent_start', () => { starting = true; }); pi.on('agent_start', () => { starting = false; }); pi.on('agent_settled', () => { starting = false; });
    pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) options.onBoundary?.(event, ctx); });
+   // The run's own measures, taken before the compactor's run-end cut (agent_before_settle), which `runEnd` reports apart.
+   pi.on('agent_end', () => { atRunEnd = { hostCalls: state.hostCalls, kept: nonSystem(saved()) }; });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
    // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
    // and `cutAtDefault` leaves it to the compactor's default.
@@ -299,15 +302,20 @@ export async function harness(options: Options) {
    if (options.outputTokens !== undefined) { message.usage.output = options.outputTokens; message.usage.totalTokens += options.outputTokens; }
    stream.push({ type: 'done', reason: toolRound ? 'toolUse' : 'stop', message }); stream.end(message); return stream;
   };
-  const compactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);
+  const allCompactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);
+  const isRunEnd = (e: { details?: unknown }) => (e.details as { diagnosticReceipt?: { reason?: string } } | undefined)?.diagnosticReceipt?.reason === 'run-end';
+  const runEnd = () => allCompactions().filter(isRunEnd);
+  const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
    dir, manager, session, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
    async run() {
+    atRunEnd = undefined;
     await session!.prompt(promptText);
-    const cuts = compactions().length, kept = nonSystem(saved());
+    const cuts = compactions().length, kept = atRunEnd?.kept ?? nonSystem(saved());
+    state.hostCalls = atRunEnd?.hostCalls ?? state.hostCalls;
     const measured = probes.find(p => p.at === (options.at === 'tool' ? 'tool' : 'prompt'));
     expect(network).not.toHaveBeenCalled();
-    return { cuts, requests: state.requests, effects: state.effects, faults, measured, delivered: state.delivered, kept, hostCalls: state.hostCalls, guard, entries: compactions(), notices, probes, cutsAtRequest, cutsAtProbe, system: mandatory, aborts: state.aborts, last: session!.messages.findLast(m => m.role === 'assistant') as AssistantMessage | undefined,
+    return { cuts, requests: state.requests, effects: state.effects, faults, measured, delivered: state.delivered, kept, hostCalls: state.hostCalls, guard, entries: compactions(), runEnd: runEnd(), notices, probes, cutsAtRequest, cutsAtProbe, system: mandatory, aborts: state.aborts, last: session!.messages.findLast(m => m.role === 'assistant') as AssistantMessage | undefined,
      probe: JSON.stringify({ ...options, onRequest: undefined, compaction: undefined, mandatory, saved: nonSystem(saved()), bigResult, probes, guard, cuts, requests: state.requests, effects: state.effects, faults, aborts: state.aborts, delivered: state.delivered, hostCalls: state.hostCalls }) };
    },
   };
