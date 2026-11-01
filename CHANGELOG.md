@@ -3,6 +3,16 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.7] - 2026-11-01
+
+### Changed
+
+- Semantic recall runs on Metal only, so only on Apple silicon. The CPU fallback is gone. Where the embedding server cannot start on Metal (a
+  VM, a Mac without a GPU), semantic recall goes off with "Semantic recall needs Metal; word recall still works", and word recall keeps
+  answering.
+- Off Apple silicon (Linux, Intel Macs), pi-tuck compacts and offers word recall only: `tuck_search` is no longer registered, `tuck_recall`'s
+  description no longer points to it, and nothing is downloaded. On Apple silicon both tools are as before.
+
 ## [1.0.6] - 2026-11-01
 
 ### Changed
