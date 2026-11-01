@@ -4,7 +4,7 @@ Registered in `PREREG-V108.md` before any result (commit `9dac3d5`; the cuts-and
 
 ## Setup
 
-- Arm F: pi-tuck 1.0.7 (`387c575`). Arm G: pi-tuck `a2e7d1a`, 1.0.7 plus a clip of a fresh tool result the room cannot hold and a cut at the end of a run that ends at or above the band.
+- Arm F: pi-tuck 1.0.7 (`387c575`). Arm G: pi-tuck `a2e7d1a`, which branches from 1.0.6 (`e15de72`) and adds five commits: a clip of a fresh tool result the room cannot hold (`f03ae4b`, `9a188a4`, `b7d41ba`) and a cut at the end of a run that ends at or above the band (`b313d1a`, `a2e7d1a`). It lacks 1.0.7's change (`13747e8` and the rest of `e15de72..387c575`: the conditional registration of `tuck_search` and the `tuck_recall` description in `src/compaction.ts`, and the semantic worker's start limit in `src/semantic-recall.ts`). The released 1.0.8 (`86935e9`) is `a2e7d1a` merged with 1.0.7; the CTO reports replay requests byte-identical on 29 recordings and the same recall behaviour on a Metal Mac. Corrected on 2026-11-01 after the run, which used the builds as exported; an earlier version of this line called G "1.0.7 plus" the clip, which was wrong.
 - 32k suite settings: window 32,768, reserve 16,384, `deepseek/deepseek-v4.1-flash-1017` pinned to DigitalOcean, 30 minutes and 120 turns per task, chains t01 and t02 (30 tasks each, 60 paired tasks), both arms of a chain run together.
 - A first attempt (08:55) was stopped by a full host disk at about 09:33 and set aside unread (`DEVIATIONS.md`, entry of 09:40). This is the second attempt, fresh from task 1. Its logs show no disk-full message, no crash and no wait for space; every task has a grade.
 
@@ -47,5 +47,6 @@ Registered in `PREREG-V108.md` before any result (commit `9dac3d5`; the cuts-and
 ## Limits
 
 - The gate's second condition is a point comparison of counts on 60 tasks. It is met with equality, and run-to-run variation between two runs of one build is larger than any difference seen here.
+- F is not G's parent: G lacks 1.0.7's change, so the two arms differ by that change as well as by the clip and the end-of-run cut. The gate compares the builds as exported.
 - One model, one window, one run per arm; two chains.
 - The label "secondary, added after t01 and t02 were read" printed by `analysis/w32_stats.py` belongs to the 32k suite's earlier analysis, not to this run.

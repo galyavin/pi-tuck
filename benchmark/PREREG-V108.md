@@ -5,7 +5,7 @@ Written 2026-11-01, before any result of this measurement. `PREREG.md` and `PRER
 ## Arms
 
 - **F**: pi-tuck 1.0.7, commit `387c575` (tag `v1.0.7`).
-- **G**: pi-tuck `a2e7d1a` (1.0.8 candidate): `387c575` plus three commits. `f03ae4b` and `9a188a4` clip a fresh tool result the room cannot hold instead of refusing the run; `b313d1a` cuts at the end of a run that ends at or above the band.
+- **G**: pi-tuck `a2e7d1a` (1.0.8 candidate): branches from 1.0.6 (`e15de72`) plus five commits, not from 1.0.7 (corrected on 2026-11-01 after the run, which used the builds as exported; this line first said `387c575` plus three commits, which was wrong; see `RESULTS-V108.md`). `f03ae4b` and `9a188a4` clip a fresh tool result the room cannot hold instead of refusing the run; `b313d1a` cuts at the end of a run that ends at or above the band.
 - `src/assets.ts` is identical to arm C's build, so the semantic runtime id is the same and both arms use the cloned runtime.
 
 ## Setup
