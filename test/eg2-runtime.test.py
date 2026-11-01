@@ -248,6 +248,34 @@ class RuntimeTests(unittest.TestCase):
                         with self.assertRaisesRegex(ns['Refusal'], 'metal_unavailable'): ns['load']()
                 self.assertEqual(launched, ['99'])  # never a CPU start
 
+    def test_own_server_must_list_a_metal_device_and_a_host_server_is_not_checked(self):
+        """pi-tuck's own pinned server serves on the CPU when it finds no Metal device, so it must list one; a host's own server is not checked."""
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory(prefix='pi-eg2-devices-') as directory:
+            root = pathlib.Path(directory).resolve() / 'runtime'
+            pins, manifest, package, wheel = fixture(root)
+            (root / 'assets.sha256.json').write_text(json.dumps(manifest))
+            own = manifest['native/llama-server']
+            for pinned, devices, starts in ((own, 'Available devices:\n  MTL0: Apple M5\n  BLAS: Accelerate\n', True),
+                                            (own, 'Available devices:\n  BLAS: Accelerate\n', False),
+                                            ('0' * 64, 'Available devices:\n  BLAS: Accelerate\n', True)):
+                with patch.dict('os.environ', {'PI_SEMANTIC_RUNTIME_ROOT': str(root), 'PI_SEMANTIC_OWN_SERVER_SHA256': pinned}), patch('signal.signal'):
+                    source = (SCRIPTS / 'semantic-worker.py').read_text().split('\ntry:\n while True:')[0]
+                    ns = {'__file__': str(SCRIPTS / 'semantic-worker.py')}
+                    exec(compile(source, ns['__file__'], 'exec'), ns)
+                    ns['WINDOWS'] = False; ns['verify'] = lambda: None; ns['native_executable'] = lambda: root / 'native/llama-server'
+                    ns['request'] = lambda path, data=None, texts=0: {'status': 'ok'}
+                    listed = []
+                    def run(command, **kwargs):
+                        listed.append(command[1:]); return Mock(stdout='', stderr=devices)
+                    child = Mock(); child.poll.return_value = None
+                    with patch('subprocess.run', side_effect=run), patch('subprocess.Popen', return_value=child) as popen:
+                        if starts: ns['load']()
+                        else:
+                            with self.assertRaisesRegex(ns['Refusal'], 'metal_unavailable'): ns['load']()
+                    self.assertEqual(listed, [['--list-devices']] if pinned == own else [])
+                    self.assertEqual(popen.called, starts)
+
     def test_windows_authenticated_loopback_native_launch_and_request_failures(self):
         import http.server
         import threading

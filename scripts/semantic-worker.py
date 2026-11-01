@@ -110,6 +110,13 @@ def load():
   # CPU did (0.7 s against 39 s for 8 passages at load 44-76). Where Metal cannot start (a VM, no GPU) the server exits or never becomes
   # healthy, and semantic recall goes off with that reason; word recall keeps working. A busy machine can take minutes to start it; the
   # limit stays under the host's start deadline (START_DEADLINE_MS, 600 s).
+  # pi-tuck's own pinned server serves on the CPU, with only a log line, when it finds no Metal device: it must list one. A server a host
+  # configures is its owner's choice and is not checked.
+  own=os.environ.get('PI_SEMANTIC_OWN_SERVER_SHA256')
+  if own and RUNTIME['read_json'](ROOT/'assets.sha256.json').get(executable.relative_to(ROOT).as_posix())==own:
+   try:listed=subprocess.run([str(executable),'--list-devices'],stdin=subprocess.DEVNULL,capture_output=True,text=True,env=env,timeout=120)
+   except (OSError,subprocess.TimeoutExpired):raise Refusal('metal_unavailable')
+   if not any(line.strip().startswith('MTL') for line in (listed.stdout+'\n'+listed.stderr).splitlines()):raise Refusal('metal_unavailable')
   server=launch(540)
   if server is None:raise Refusal('metal_unavailable')
  return server

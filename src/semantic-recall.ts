@@ -5,7 +5,7 @@ import {lstatSync,realpathSync} from 'node:fs';
 import {resolve,relative,join,dirname,basename,isAbsolute,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {ExtensionContext,SessionEntry} from '@earendil-works/pi-coding-agent';
-import {defaultRoot,runtimeConfigPath} from './assets';
+import {LLAMA,defaultRoot,runtimeConfigPath} from './assets';
 import {createRecall,type RecallPolicy,type ReadableEntry} from './recall';
 import {buildGlobalIndexById} from './tuck/core/global-indices';
 // Session-owned mutable scratch is outside verified software and caller projects.
@@ -146,7 +146,7 @@ class LocalWorker {
    const worker=this.config.workerPath??fileURLToPath(new URL(import.meta.url.endsWith('.ts')?'../scripts/semantic-worker.py':'../../scripts/semantic-worker.py',import.meta.url));
    const osNames=this.nativeHelper?['SYSTEMROOT','WINDIR','LANG','LC_ALL']:['SystemRoot','SYSTEMROOT','WINDIR','LANG','LC_ALL'];
    const osEnvironment=Object.fromEntries(osNames.flatMap(name=>typeof process.env[name]==='string'?[[name,process.env[name]!]]:[]));
-   const args=['-I','-B','-u',worker],env={...osEnvironment,TMPDIR:this.scratch,TMP:this.scratch,TEMP:this.scratch,PI_SEMANTIC_RUNTIME_ROOT:this.config.runtimeRoot};
+   const args=['-I','-B','-u',worker],env={...osEnvironment,TMPDIR:this.scratch,TMP:this.scratch,TEMP:this.scratch,PI_SEMANTIC_RUNTIME_ROOT:this.config.runtimeRoot,PI_SEMANTIC_OWN_SERVER_SHA256:LLAMA.files['llama-server']!};
    this.jobId=randomUUID();const launch:NativeOwnerLaunch={executable:this.config.pythonPath,args,cwd:this.scratch,env,jobId:this.jobId,stdinMode:'stream'};
    const launchLine=JSON.stringify(launch)+'\n';if(this.nativeHelper&&Buffer.byteLength(launchLine)>2*1048576)throw new Error('Native owner launch bound');
    const child=spawn(this.nativeHelper?this.config.nativeOwnerHelperPath!:this.config.pythonPath,this.nativeHelper?['--run']:args,{cwd:this.scratch,env:this.nativeHelper?osEnvironment:env,stdio:'pipe',detached:!this.nativeHelper});
