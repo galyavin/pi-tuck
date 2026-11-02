@@ -567,6 +567,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const more = decide && !event.entries.length
             ? boundaryCut({ ...event, context: { ...event.context, contextMessages: preview.buildSessionProjection().messages } }, view, reason) : undefined;
         const { tokensBefore: _, ...saved } = entry;
+        // As for a cut Pi makes (session_compact): the history the cut leaves behind is indexed, once Pi has committed the entries.
+        setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
         return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
     };
     pi.on("turn_end", (event, ctx) => {
