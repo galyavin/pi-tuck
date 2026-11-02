@@ -3,13 +3,12 @@ import { BAND, HOST, ROOM, harness } from './budget-fixture';
 
 // No failure carries over to the next prompt: each one ends with its attempt, and the next prompt plans afresh from the session as it is.
 // Twice a single failure left a session unusable for good (an aborted reply that made an old result look unseen; Pi's "nothing to compact"
-// passed on as a latched fault). Each case forces a failure at one refusal or throw site, then sends a prompt that fits: it must be planned
+// passed on as a latched fault; a prompt's cut no longer goes through Pi, see keep-recent-room.test.ts). Each case forces a failure at one refusal or throw site, then sends a prompt that fits: it must be planned
 // and answered. small-room.test.ts does the same for the tool-loop refusal and the complete-context guard.
 const sites: Record<string, { options: Parameters<typeof harness>[0]; invalidReserve?: true; prompt?: string; fault: string }> = {
 	'the incoming prompt alone exceeds the room': { options: { at: 'prompt', complete: 20000, host: HOST }, prompt: 'q'.repeat((ROOM + 1000) * 4), fault: 'Incoming Pi prompt and response reserve cannot fit' },
-	'a needed cut that Pi has nothing to make': { options: { at: 'prompt', complete: ROOM + 500, host: HOST, compactedLast: true }, fault: 'Already compacted' },
-	// The planner's first read of the native session header after the first cut is asked for finds none, and the draft throws.
-	'the planner throws': { options: { at: 'prompt', complete: BAND + 100, host: HOST, onBeforeCompact: (() => { let armed = true; return (_event, ctx) => {
+	// The planner's first read of the native session header after the first prompt arrives finds none, and the draft throws.
+	'the planner throws': { options: { at: 'prompt', complete: BAND + 100, host: HOST, onPrompt: (() => { let armed = true; return ctx => {
 		if (!armed) return; armed = false;
 		const manager = ctx.sessionManager as unknown as { getHeader: () => unknown }, real = manager.getHeader.bind(manager);
 		let missing = true; manager.getHeader = () => (missing ? (missing = false, null) : real()); }; })() }, fault: 'Missing native session header' },
@@ -40,10 +39,10 @@ test('a cut Pi failed to commit stays a fault for the next prompt', async () => 
 		const persist = manager._persist.bind(manager);
 		manager._persist = entry => { if (entry.type === 'compaction') throw new Error('ENOSPC: no space left on device'); persist(entry); };
 		await h.run();
-		expect(h.faults.join(' | ')).toContain('Compaction failed: ENOSPC');
+		expect(h.faults.join(' | ')).toContain('boundary draft remained unconfirmed');
 		const requests = h.state.requests;
 		await h.session.prompt('A short prompt');
 		expect(h.state.requests - requests, JSON.stringify(h.faults)).toBe(0);
-		expect(h.faults.at(-1)).toContain('Compaction failed: ENOSPC');
+		expect(h.faults.at(-1)).toContain('boundary draft remained unconfirmed');
 	} finally { await h.cleanup(); }
 }, 120000);

@@ -25,7 +25,9 @@ const throughPi: Record<string, (h: Awaited<ReturnType<typeof harness>>) => Prom
 for (const [start, go] of Object.entries(throughPi))
 	test(`after a refused fresh round, ${start} cuts it away and goes on`, async () => {
 		const tails: string[][] = [];
-		const h = await harness({ ...refused, onBeforeCompact: event => { tails.push(event.branchEntries.slice(-3).map(e => isDiscarded(e) ? 'discarded' : isPrompt(e) ? 'prompt' : e.type === 'message' ? e.message.role : e.type)); } });
+		// Where the cut is planned: an operator's /compact goes through Pi; a prompt's cut is pi-tuck's own, planned on `input`.
+		const tail = (entries: SessionEntry[]) => { tails.push(entries.slice(-3).map(e => isDiscarded(e) ? 'discarded' : isPrompt(e) ? 'prompt' : e.type === 'message' ? e.message.role : e.type)); };
+		const h = await harness({ ...refused, onBeforeCompact: event => tail(event.branchEntries), onPrompt: ctx => tail(ctx.sessionManager.getBranch()) });
 		try {
 			const first = await h.run();
 			expect(first.faults.join(' '), first.probe).toContain('cannot fit or reduce the request budget');

@@ -66,9 +66,9 @@ test('an operator cut takes the room plan when it lands below the band, else the
 });
 
 // At a tool boundary the compactor plans the cut itself; the same two plans, from the same state, are computed in a hook that runs first.
-async function boundary(options: { history: number; oneTurn: boolean; complete: number }) {
+async function boundary(options: { history: number; oneTurn: boolean; complete: number; fresh?: number }) {
 	const found: { band: Plan; room: Plan; before: number; mandatory: number; total: number }[] = [];
-	const h = await harness({ at: 'tool', host: HOST, fresh: 100, ...options, onBoundary: (event: { context: { contextMessages: Parameters<typeof measurableConversationTokens>[0] } }, ctx) => {
+	const h = await harness({ at: 'tool', host: HOST, ...options, fresh: options.fresh ?? 100, onBoundary: (event: { context: { contextMessages: Parameters<typeof measurableConversationTokens>[0] } }, ctx) => {
 		const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
 		const saved = event.context.contextMessages, pi = h.extension();
 		const toolsJson = JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
@@ -78,16 +78,21 @@ async function boundary(options: { history: number; oneTurn: boolean; complete: 
 	} });
 	try {
 		const r = await h.run();
-		return { r, found, tool: { cut: r.cutsAtRequest[1]! - r.cutsAtProbe[1]!, entry: r.entries.at(-1) } };
+		// The tool boundary's own cut; the same boundary also saves a cut the prompt needed, which the reference above cannot see.
+		const own = r.entries.filter(entry => receiptOf(entry).reason === 'tool-loop');
+		return { r, found, promptCut: r.entries.some(entry => receiptOf(entry).reason === 'prompt'), tool: { cut: own.length, entry: own.at(-1) } };
 	} finally { await h.cleanup(); }
 }
 
 test('at a tool boundary a cut follows the rule', async () => {
 	const seen = { 'declined: another view': 0, 'band cut: same view': 0, 'declined: out of reach': 0, 'declined: no room plan': 0, 'room below the band': 0, 'room over a band plan': 0, 'forced band plan': 0, 'forced room plan only': 0 };
-	for (const oneTurn of [false, true]) for (const history of [1500, 3000, 6000]) for (const d of [100, 600, 1200, 1800, 2400, 2800, 3200, 4000]) {
-		const { r, found, tool } = await boundary({ history, oneTurn, complete: BAND + d });
+	// A fresh result of 6,000 tokens brings the request over the band only at the tool boundary, so the prompt makes no cut of its own.
+	for (const fresh of [100, 6000]) for (const oneTurn of [false, true]) for (const history of [1500, 3000, 6000]) for (const d of [100, 600, 1200, 1800, 2400, 2800, 3200, 4000]) {
+		const { r, found, tool, promptCut } = await boundary({ history, oneTurn, complete: BAND + d, fresh });
 		// A request over the room at the prompt that nothing can cut fails closed there, before any tool boundary.
 		if (!found.length) { expect(r.requests, r.probe).toBe(0); continue; }
+		// The prompt's own cut is held to the rule at the prompt (below); here every request it carried fits.
+		if (promptCut) { expect(r.faults, r.probe).toEqual([]); for (const guarded of r.guard) expect(guarded, r.probe).toBeLessThan(ROOM); continue; }
 		const f = found[0]!, why = JSON.stringify({ oneTurn, history, d, room: f.room && [f.room.mode, f.room.after], band: f.band && [f.band.mode, f.band.after], total: f.total, cut: tool.cut });
 		expect(found, why).toHaveLength(1);
 		const receipt = tool.entry && tool.cut ? receiptOf(tool.entry) : undefined;
@@ -128,16 +133,18 @@ test('the request that the margin would have cut to a poorer view is sent as it 
 	expect(r.guard.at(-1)!, r.probe).toBeLessThan(ROOM);
 });
 
-// At the prompt the cut goes through Pi (session_before_compact); the incoming prompt is mandatory input. Same two plans, from the same state.
+// At the prompt the compactor plans the cut itself, as at a tool boundary; the incoming prompt is mandatory input. Same two plans, from the
+// same state, computed in a hook that runs first. The run's first request carries the cut, and its first boundary saves it.
 async function prompt(options: { history: number; complete: number }) {
 	const found: { band: Plan; room: Plan; before: number; mandatory: number; total: number }[] = [];
-	const h = await harness({ at: 'prompt', host: HOST, ...options, onBeforeCompact: (event, ctx) => {
+	const h = await harness({ at: 'prompt', host: HOST, ...options, onPrompt: ctx => {
 		const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
 		const mandatory = h.promptTokens() + h.mandatory + HOST, before = measure(ctx.sessionManager.buildSessionProjection().messages);
-		const plan = (limit: number): Plan => planned(tuckDraft(tuck, event, ctx, planningReserve(WINDOW, limit, 1, mandatory), measure, {}, false, false));
+		if (before + mandatory < BAND) return;
+		const plan = (limit: number): Plan => planned(tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, newPrompt: true }, ctx, planningReserve(WINDOW, limit, 1, mandatory), measure, {}, false));
 		found.push({ room: plan(ROOM), band: plan(BAND), before, mandatory, total: before + mandatory });
 	} });
-	try { const r = await h.run(); return { r, found, cut: r.cutsAtRequest[0]! - r.cutsAtProbe[0]!, entry: r.entries[0] }; } finally { await h.cleanup(); }
+	try { const r = await h.run(); const entries = r.entries.filter(entry => receiptOf(entry).reason === 'prompt'); return { r, found, cut: entries.length, entry: entries[0] }; } finally { await h.cleanup(); }
 }
 
 test('at the prompt a cut follows the same rule', async () => {

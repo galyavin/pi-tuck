@@ -11,12 +11,13 @@ test('a run that ends below the band is not cut', async () => {
  expect(r.runEnd, r.probe).toEqual([]);
 });
 
-test('a run that ends inside the band where Pi had nothing to compact is cut at its end, below the band', async () => {
- const h = await harness({ at: 'prompt', complete: BAND + 500, host: HOST, compactedLast: true });
+test('a run that ends inside the band is cut at its end, below the band', async () => {
+ // Below the band at the prompt; the host's view then grows past the band after the run's last request (effects recorded in it).
+ const h = await harness({ at: 'prompt', complete: BAND - 3000, host: HOST, onRequest: (request, { setHost }) => { if (request === 1) setHost(HOST + 4000); } });
  try {
   const r = await h.run();
   expect(r.faults, r.probe).toEqual([]);
-  expect(r.cuts, r.probe).toBe(0); // Pi had nothing to compact for the prompt
+  expect(r.cuts, r.probe).toBe(0); // the prompt was below the band
   expect(r.runEnd.length, r.probe).toBe(1);
   const receipt = receiptOf(r.runEnd[0]!);
   expect(receipt.reason).toBe('run-end');

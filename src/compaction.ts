@@ -241,7 +241,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
     pi.on("agent_start", () => { admittedRun = true; pending = undefined; phase = "idle"; });
-    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); clips.clear(); });
+    pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); clips.clear(); promptCut = undefined; });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
@@ -284,8 +284,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const isNoWork = (message: string | undefined) => ["Already compacted", "Nothing to compact (session too small)"].includes(message?.replace(/^Compaction failed: /, "") ?? "");
     // A missing model is configuration, not capacity.
     const missingModel = () => new Error("No context model for the request budget");
-    // Scoped to one awaited initial-prompt cut; never a persisted controller. It carries that decision's snapshot.
-    let pendingCut: { mandatory: number; before: number; host: number; opportunistic: boolean; proposed: boolean } | undefined;
+    // A prompt's cut, until its run saves it at its first boundary: every request of that run carries it (the context hook). A run that ends
+    // before a boundary drops it, and the next prompt decides afresh.
+    type CutEntry = { type: "compaction"; summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown };
+    let promptCut: CutEntry | undefined;
     let failure: Error | undefined;
     let pendingBoundaryCommit = false;
     // Fresh tool results the room cannot hold, by call id: each request of the run carries the clip in their place; the session keeps them
@@ -298,6 +300,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		if (!(failure instanceof CommitFault)) failure = error instanceof Error ? error : new Error(String(error));
         pendingBoundaryCommit = false;
         pending = undefined;
+        promptCut = undefined;
 		try { options.fail?.(error); } finally {
             try { if (notify) ctx.ui.notify(refusalNotice(failure.message, factor), "error"); }
             finally { ctx.abort(); }
@@ -370,9 +373,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		try {
 			if (!active()) return { cancel: true };
 			if (event.signal.aborted || ctx.signal?.aborted) { recorder.stop("cut-cancelled"); return { cancel: true }; }
-            // Pi also labels the awaited idle incoming preflight "manual".
-            const incoming = pendingCut;
-            const operatorManual = event.reason === "manual" && !(incoming && !admittedRun);
+            // Pi checks its own threshold after a prompt's input and before the run starts: the prompt's cut, planned with the prompt counted,
+            // is the answer, and it is saved before the first request.
+            if (promptCut && !admittedRun && event.reason === "threshold") {
+                access();
+                const { type: _, ...compaction } = promptCut;
+                promptCut = undefined;
+                return { compaction };
+            }
+            const operatorManual = event.reason === "manual";
             if (operatorManual && !admittedRun) forgetFailure();
 			access();
 			if (event.customInstructions?.trim()) {
@@ -382,19 +391,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 			}
             const { response, room, band } = limits(ctx);
             const retain = operatorManual || admittedRun;
-            // The incoming-prompt preflight brings its own snapshot. Any other cut (operator manual, Pi's threshold or overflow
-            // recovery) charges what the request must carry whatever is cut: the system part and the host input.
+            // A cut Pi asks for (an operator's /compact, Pi's threshold or overflow recovery) charges what the request must carry whatever is
+            // cut: the system part and the host input. A prompt's cut is pi-tuck's own and never comes here.
             const saved = ctx.sessionManager.buildSessionProjection().messages;
-            const host = incoming ? incoming.host : hostTokens(ctx);
-            const mandatory = incoming ? incoming.mandatory
-                : systemPart(ctx.getSystemPrompt(), toolShapes(pi.getActiveTools()), saved, ctx.getSystemPrompt()) + host;
-            const before = incoming ? incoming.before : plannerMeasureFor(ctx)(saved);
+            const host = hostTokens(ctx);
+            const mandatory = systemPart(ctx.getSystemPrompt(), toolShapes(pi.getActiveTools()), saved, ctx.getSystemPrompt()) + host;
+            const before = plannerMeasureFor(ctx)(saved);
             // Pi's own usage threshold (reason "threshold") counts the last reply's output tokens, reasoning included, plus the messages after
             // it: a basis this compactor does not plan on. It may ask for a cut on a request that fits. This compactor cuts only where its own
             // trigger would: nothing below the band, an opportunistic cut inside it, a due cut at or above the room. A refusal is a plain
             // cancel (Pi reports it as aborted), never a failure.
             let thresholdOpportunistic = false;
-            if (!incoming && event.reason === "threshold") {
+            if (event.reason === "threshold") {
                 const gate = gateCut({ total: before + mandatory, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
                 if (gate.kind !== "plan") return { cancel: true };
                 thresholdOpportunistic = gate.opportunistic;
@@ -402,19 +410,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // Pi checks old history before appending a new idle prompt. During an active run/manual cut the latest admitted input stays protected.
             const decision = chooseCut({
                 before, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx),
-                opportunistic: incoming?.opportunistic ?? thresholdOpportunistic,
-                unreduced: incoming ? "Incoming Pi preflight compaction did not reduce context within the estimated request budget"
-                    : "Compaction did not reduce context within the estimated request budget",
+                opportunistic: thresholdOpportunistic,
+                unreduced: "Compaction did not reduce context within the estimated request budget",
                 plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>; reserve: number }> => {
                     const reserve = planReserve(target, room, mandatory, ctx);
-                    // Every cut asked while no run is admitted (a prompt's preflight, an operator's cut, Pi's own cut before a run a custom message
-                    // starts) is planned for a run that has not begun: the session has moved on from any run that ended. A retry is inside its run.
-                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, Boolean(incoming) || operatorManual || !admittedRun);
+                    // Every cut asked while no run is admitted (an operator's cut) is planned for a run that has not begun: the session has moved on
+                    // from any run that ended. A retry is inside its run.
+                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || !admittedRun);
                     return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction, reserve }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 },
             });
-            if (decision.kind === "cut") { if (incoming) incoming.proposed = true; return { compaction: captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, event.reason, event.preparation.tokensBefore,
+            if (decision.kind === "cut") { return { compaction: captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, event.reason, event.preparation.tokensBefore,
                 retain, operatorManual, event.preparation.previousSummary, { response, host, mandatory, target: decision.target, margin: room - band }) }; }
             // An opportunistic cut inside the band that cannot reach it is no fault: the request goes to the guard.
             if (decision.kind === "none") return { cancel: true };
@@ -427,57 +434,57 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		}
 	});
 	pi.on("session_before_tree", (event) => event.preparation.userWantsSummary ? { cancel: true } : undefined);
-    pi.on("session_start", () => { clips.clear(); recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; phase = "idle"; });
-    // The cut before a run. Pi 1.4 counts a run as started before before_agent_start, and ctx.compact() first aborts and waits for an
-    // idle session, so a cut asked for there would wait on its own run. A prompt's cut is therefore made on `input`, while the session
-    // is idle. before_agent_start decides only for a run no input started (one a custom message starts) and cuts only if the session is
-    // still idle (Pi 1.1); otherwise it declines an opportunistic cut and fails a needed one closed.
+    pi.on("session_start", () => { clips.clear(); promptCut = undefined; recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; phase = "idle"; });
+    // The session as it will be once a cut that is not saved yet is saved, and its conversation as the next request carries it.
+    const cutSession = (ctx: ExtensionContext, cut: CutEntry) => {
+        const header = ctx.sessionManager.getHeader();
+        if (!header) throw new Error("Missing native session header for the prompt's cut");
+        const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...ctx.sessionManager.getBranch()]);
+        preview.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);
+        return preview;
+    };
+    const withCut = (ctx: ExtensionContext, cut: CutEntry) => cutSession(ctx, cut).buildSessionProjection().messages;
+    // The cut before a run, decided on `input` while the session is idle; before_agent_start decides only for a run no input started (one a
+    // custom message starts). The cut is pi-tuck's own, planned as at a tool boundary. It is not Pi's: Pi's cut finder keeps the last
+    // keepRecentTokens, and where those are the whole conversation it has nothing to cut, so every later prompt was refused for good (t06 at
+    // Pi's defaults on a 32k window). Each request of the run carries the cut, and the run's first boundary saves it.
     const preflight = async (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[]) => {
+        promptCut = undefined;
         if (!active()) return;
         access();
         if (!settingsFor().getCompactionSettings(ctx.model).enabled) return;
         if (!ctx.model) throw missingModel();
-        const { room, band } = limits(ctx);
-        // Public early view only: later handlers, image normalization and tool-loop growth remain the complete-context
-        // guard's responsibility. One snapshot per decision, taken again after the awaited cut.
-        const snapshot = () => {
-            const saved = ctx.sessionManager.buildSessionProjection().messages;
-            const system = systemPart(observedPrompt, toolShapes(tools), saved, ctx.getSystemPrompt());
-            const host = hostTokens(ctx);
-            const before = measureFor(ctx)(saved);
-            return { incoming: incomingPart + system, host, before, mandatory: incomingPart + system + host };
-        };
-        const first = snapshot(), total = first.before + first.mandatory;
-        if (!fits(first.incoming, room, ctx))
+        const { response, room, band } = limits(ctx);
+        // Public early view only: later handlers, image normalization and tool-loop growth remain the complete-context guard's responsibility.
+        const saved = ctx.sessionManager.buildSessionProjection().messages;
+        const system = systemPart(observedPrompt, toolShapes(tools), saved, ctx.getSystemPrompt());
+        const host = hostTokens(ctx), measure = measureFor(ctx), before = measure(saved);
+        const incoming = incomingPart + system, mandatory = incoming + host;
+        if (!fits(incoming, room, ctx))
             throw new CapacityError("Incoming Pi prompt and response reserve cannot fit the estimated request budget");
         // A cut removes only conversation. If the mandatory request, host input included, does not fit by itself, no cut can
         // help: leave it to the complete-context guard, which fails closed.
-        const gate = gateCut({ total, mandatory: first.mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+        const gate = gateCut({ total: before + mandatory, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
         if (gate.kind !== "plan") return;
-        if (!ctx.isIdle()) {
-            if (gate.opportunistic) return;
-            throw new CapacityError("The request needs a cut that Pi cannot make once the run has started");
-        }
-        const cut = pendingCut = { mandatory: first.mandatory, before: first.before, host: first.host, opportunistic: gate.opportunistic, proposed: false };
-        try {
-            // CompactOptions callbacks are Pi's supported terminal completion surface.
-            await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(),
-                onError: error => {
-                    // An opportunistic cut is not needed to send the request, which is below the room: the guard decides. However it ends (the
-                    // planner declined it, Pi had nothing to compact, an earlier handler cancelled it) it is no fault, unless a failure is latched
-                    // or the compactor proposed a cut that then failed to commit (the session may hold what the file lacks).
-                    // A needed cut that Pi has nothing to make (no history older than its keepRecentTokens since the last cut) is a refusal of
-                    // this request, which ends with it: as a fault it stayed, and every later prompt of the session failed on it.
-                    if (cut.opportunistic && !failure && !cut.proposed) resolve();
-                    else if (!cut.proposed && isNoWork(error.message)) reject(new CapacityError(`The request needs a cut and Pi has none to make (${error.message})`));
-                    else reject(error.message === "Compaction cancelled" && failure instanceof Refusal ? failure : cut.proposed ? new CommitFault(error.message) : error);
-                } }));
-        } finally { pendingCut = undefined; }
-        access();
-        // The cut awaited: take the snapshot again. An opportunistic cut never throws; the request is not over the room, and the guard decides.
-        const next = snapshot(), after = next.before + next.mandatory, afterFits = fits(after, limits(ctx).room, ctx);
-        if (!cut.opportunistic && (after >= total || !afterFits))
-            throw new (afterFits ? Refusal : CapacityError)("Incoming Pi preflight compaction did not reduce context within the estimated request budget");
+        const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
+        const decision = chooseCut({
+            before, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), opportunistic: gate.opportunistic,
+            unreduced: "Incoming prompt compaction did not reduce context within the estimated request budget",
+            plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
+                const reserve = planReserve(target, room, mandatory, ctx);
+                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary, newPrompt: true }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, false);
+                if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
+                const messages = withCut(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before });
+                assertNativeToolRounds(messages);
+                return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve };
+            },
+        });
+        // An opportunistic cut inside the band that cannot reach it is no fault: the request goes to the guard.
+        if (decision.kind === "none") return;
+        if (decision.kind === "fault") throw new (decision.capacity ? CapacityError : Refusal)(decision.message);
+        const compaction = captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, "prompt", before, false, false, previousSummary,
+            { response, host, mandatory, target: decision.target, margin: room - band });
+        promptCut = { type: "compaction", summary: compaction.summary, firstKeptEntryId: compaction.firstKeptEntryId, tokensBefore: before, details: compaction.details };
     };
     pi.on("before_agent_start", async (event, ctx) => {
         const prompted = phase === "decided";
@@ -549,26 +556,49 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         return { entries: [{ type: "compaction" as const, summary: compaction.summary,
             firstKeptEntryId: compaction.firstKeptEntryId, details: compaction.details }] };
     };
+    // A boundary's cut. The run's first boundary also saves the prompt's cut, after any entries an earlier handler proposed, and decides on
+    // the session as it is with that cut: a fresh result can still need a cut of its own there.
+    type Boundary = Parameters<typeof boundaryCut>[0];
+    const atBoundary = (event: Boundary, ctx: ExtensionContext, reason: "tool-loop" | "run-end", decide: boolean) => {
+        if (!promptCut) return decide ? boundaryCut(event, ctx, reason) : undefined;
+        const entry = promptCut;
+        promptCut = undefined;
+        const preview = cutSession(ctx, entry), view: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
+        const more = decide && !event.entries.length
+            ? boundaryCut({ ...event, context: { ...event.context, contextMessages: preview.buildSessionProjection().messages } }, view, reason) : undefined;
+        const { tokensBefore: _, ...saved } = entry;
+        return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
+    };
     pi.on("turn_end", (event, ctx) => {
         try {
-            if (!active() || !admittedRun || event.outcome !== "completed" || ctx.signal?.aborted ||
-                !event.context.canContinue || !event.toolResults.length || !settingsFor().getCompactionSettings(ctx.model).enabled) return;
-            const result = boundaryCut(event, ctx, "tool-loop");
+            if (!active() || !admittedRun) return;
+            const decide = event.outcome === "completed" && !ctx.signal?.aborted && event.context.canContinue && event.toolResults.length > 0 &&
+                settingsFor().getCompactionSettings(ctx.model).enabled;
+            if (!promptCut && !decide) return;
+            const result = atBoundary(event, ctx, "tool-loop", decide);
             if (result) pendingBoundaryCommit = true;
             return result;
         } catch (error) { fail(error, ctx); }
     });
+    // A request of a run whose prompt's cut is not saved yet: the saved conversation in it, which other handlers may surround, is replaced by
+    // the conversation with the cut applied. Pi sends the saved system message apart from the request's messages, so neither side carries it
+    // here. A request that does not carry the saved conversation as it stands cannot take the cut.
+    const cutRequest = <M,>(messages: M[], ctx: ExtensionContext, cut: CutEntry): M[] => {
+        const conversation = (all: Messages) => all.filter(message => message.role !== "system") as unknown[];
+        const saved = conversation(ctx.sessionManager.buildSessionProjection().messages);
+        for (let at = 0; at + saved.length <= messages.length; at++)
+            if (saved.every((message, i) => isDeepStrictEqual(messages[at + i], message)))
+                return [...messages.slice(0, at), ...conversation(withCut(ctx, cut)) as M[], ...messages.slice(at + saved.length)];
+        throw new Error("The prompt's cut cannot be applied: the request does not carry the saved conversation");
+    };
     pi.on("context", (event, ctx) => {
         try {
             if (!active()) return;
             access();
-            return { messages: applyClips(projectedMessages(event.messages, ctx, options.recallPolicy), clips) };
+            return { messages: applyClips(projectedMessages(promptCut ? cutRequest(event.messages, ctx, promptCut) : event.messages, ctx, options.recallPolicy), clips) };
         } catch (error) { try { fail(error, ctx); } finally { return { messages: [] }; } }
     });
 	pi.on("session_compact_failed", (event, ctx) => {
-        // The end of an opportunistic cut that proposed nothing, however it came about, is no event for the recorder or for failure handling;
-        // a latched failure still is, and so is the failure of a cut the compactor proposed.
-        if (pendingCut?.opportunistic && !failure && !pendingCut.proposed) return;
         // This compactor's own refusal of a Pi threshold ask (the gate, or an opportunistic cut that cannot reach the band) reaches here as a
         // threshold compaction cancelled and not from an extension: no event for the recorder.
         if (event.reason === "threshold" && event.aborted && !event.fromExtension) return;
@@ -589,9 +619,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         }
         // Pi commits these entries before the run settles.
         try {
-            if (!active() || !admittedRun || event.outcome !== "completed" || ctx.signal?.aborted || failure ||
-                !settingsFor().getCompactionSettings(ctx.model).enabled) return;
-            return boundaryCut(event, ctx, "run-end");
+            if (!active() || !admittedRun || failure || !settingsFor().getCompactionSettings(ctx.model).enabled) return;
+            const decide = event.outcome === "completed" && !ctx.signal?.aborted;
+            if (promptCut ? event.outcome === "error" : !decide) return;
+            return atBoundary(event, ctx, "run-end", decide);
         } catch (error) { fail(error, ctx); }
     });
 	pi.on("context_with_system", (event, ctx) => {

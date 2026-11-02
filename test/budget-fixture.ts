@@ -70,6 +70,8 @@ export interface Options {
  onBoundary?: (event: Parameters<Parameters<ExtensionAPI['on']>[1]> extends never ? never : any, ctx: ExtensionContext) => void;
  /** Called with every cut Pi asks for, before the compactor answers (the event and context are the compactor's own). */
  onBeforeCompact?: (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => void;
+ /** Called at every idle prompt before the compactor decides its cut (the context is the compactor's own). */
+ onPrompt?: (ctx: ExtensionContext) => void;
  /** The last saved entry is a compaction (Pi has nothing to compact at the prompt boundary: it reports "Already compacted"). The prompt takes the rest of `complete`. */
  compactedLast?: boolean;
  /** Tokens of each old history cycle (default 6000); small cycles make many tool calls. */
@@ -176,7 +178,7 @@ export async function harness(options: Options) {
    // A prompt's decision is made on `input`, while the session is idle (Pi 1.4 counts the run as started at before_agent_start).
    let starting = false; // as the compactor does: a message sent while a run starts joins it (Pi 1.1 still reports idle then)
    pi.on('before_agent_start', () => { starting = true; }); pi.on('agent_start', () => { starting = false; }); pi.on('agent_settled', () => { starting = false; });
-   pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
+   pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; options.onPrompt?.(ctx); cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) options.onBoundary?.(event, ctx); });
    // The run's own measures, taken before the compactor's run-end cut (agent_before_settle), which `runEnd` reports apart.
    pi.on('agent_end', () => { atRunEnd = { hostCalls: state.hostCalls, kept: nonSystem(saved()) }; });
@@ -351,8 +353,8 @@ export function expectParity(result: { entries: Extract<SessionEntry, { type: 'c
   expect(r.draftReservedTokens, probe).toBe(WINDOW - Math.floor((r.target === 'band' ? limits.band : limits.room) / factor) + expected);
  }
  if (entries.length === 1) {
-  // The first request made after the cut.
-  const first = cutsAtRequest.findIndex(n => n >= 1);
+  // The first request made after the cut. A prompt's cut is carried by its run's first request and saved at that run's first boundary.
+  const first = receiptOf(entries[0]!).reason === 'prompt' ? 0 : cutsAtRequest.findIndex(n => n >= 1);
   expect(first, probe).toBeGreaterThanOrEqual(0);
   // The trigger's system part is the larger of two formulas that round differently, so it may exceed the guard's by a token or two, never fall short.
   const planned = receiptOf(entries[0]!).tokensAfter + expected;

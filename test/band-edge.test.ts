@@ -99,34 +99,27 @@ test('above the room, with the band plan failing and the room plan succeeding, t
  expectParity(r, { host: HOST });
 });
 
-test('a prompt for which Pi has nothing to compact ("Already compacted") inside the band is no fault', async () => {
- // The saved conversation ends with a compaction, and the incoming prompt puts the request inside the band. The trigger asks for an
- // opportunistic cut, Pi reports that there is nothing to compact, and the request goes to the guard, which admits it.
+// Right after a cut, Pi has nothing to compact ("Already compacted"). A prompt's cut is pi-tuck's own, so a prompt there is cut like any other.
+test('a prompt right after a cut inside the band: no fault, and the request is sent within the room', async () => {
  const r = await scenario({ at: 'prompt', complete: BAND + 500, host: HOST, compactedLast: true });
  expect(r.measured!.complete, r.probe).toBe(BAND + 500);
  expect(r.faults, r.probe).toEqual([]);
- expect(r.cuts, r.probe).toBe(0);
  expect(r.requests, r.probe).toBe(1);
  expect(r.guard[0], r.probe).toBeLessThan(ROOM);
- // Above the room the same state is not opportunistic: Pi's refusal is reported, as it always was.
- const over = await scenario({ at: 'prompt', complete: ROOM + 500, host: HOST, compactedLast: true });
- expect(over.cuts, over.probe).toBe(0);
- expect(over.requests, over.probe).toBe(0);
- expect(over.faults.join(' '), over.probe).toContain('Already compacted');
 });
 
-// Pi's "nothing to compact" on a needed cut refuses that request only. It was a fault, which stays: every later prompt of the session failed
-// on it, however small (R&D's clip replay of eval live32 t03-B: a 6k-token prompt after short exchanges, then tasks 24 to 30 lost).
-test('a needed cut that Pi has nothing to make refuses its request, and the next prompt that fits is answered', async () => {
+// Before 1.0.10 Pi's "nothing to compact" refused a request that needed a cut right after one (R&D's clip replay of eval live32 t03-B: a
+// 6k-token prompt after short exchanges). pi-tuck now makes that cut: the request and the next prompt are answered.
+test('a cut needed right after a cut is made: the request is answered, and so is the next prompt', async () => {
 	const h = await harness({ at: 'prompt', complete: ROOM + 500, host: HOST, compactedLast: true });
 	try {
 		const over = await h.run();
-		expect(over.requests, over.probe).toBe(0);
-		expect(over.faults.join(' '), over.probe).toContain('Already compacted');
-		expect(over.notices.join(' '), over.probe).toContain('shorten the input');
-		const faults = h.faults.length, requests = h.state.requests;
+		expect(over.faults, over.probe).toEqual([]);
+		expect(over.requests, over.probe).toBe(1);
+		for (const guarded of over.guard) expect(guarded, over.probe).toBeLessThan(ROOM);
+		const requests = h.state.requests;
 		await h.session.prompt('A short prompt');
-		expect(h.faults.slice(faults), over.probe).toEqual([]);
+		expect(h.faults, over.probe).toEqual([]);
 		expect(h.state.requests - requests, over.probe).toBe(1);
 	} finally { await h.cleanup(); }
 }, 120000);

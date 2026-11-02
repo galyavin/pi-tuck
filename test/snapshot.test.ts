@@ -2,12 +2,12 @@ import { test, expect } from 'vitest';
 import { BAND, HOST, ROOM, harness, scenario } from './budget-fixture';
 
 // One snapshot per decision: the host messages, the system part and the queued messages are taken once and reused for the whole
-// decision (the trigger, the planner, the post-cut check). The incoming prompt re-takes the snapshot after its awaited cut, because
-// the cut ran in between. The counter is a spy on the host builder.
+// decision (the trigger, the planner, the post-cut check). A prompt's cut is planned like a tool boundary's, on one snapshot.
+// The counter is a spy on the host builder.
 const cases: { name: string; at: 'prompt' | 'tool'; complete: number; calls: number }[] = [
  { name: 'prompt, no cut: one decision', at: 'prompt', complete: BAND - 5000, calls: 1 },
- { name: 'prompt, opportunistic cut: the decision and the snapshot after the cut', at: 'prompt', complete: BAND + 100, calls: 2 },
- { name: 'prompt, forced cut: the decision and the snapshot after the cut', at: 'prompt', complete: ROOM + 500, calls: 2 },
+ { name: 'prompt, opportunistic cut: one decision', at: 'prompt', complete: BAND + 100, calls: 1 },
+ { name: 'prompt, forced cut: one decision', at: 'prompt', complete: ROOM + 500, calls: 1 },
  { name: 'tool boundary, no cut: the prompt and the tool boundary, one each', at: 'tool', complete: BAND - 5000, calls: 2 },
  { name: 'tool boundary, opportunistic cut: planning and the post-cut check use the same snapshot', at: 'tool', complete: BAND + 100, calls: 2 },
  { name: 'tool boundary, forced cut', at: 'tool', complete: ROOM + 500, calls: 2 },
