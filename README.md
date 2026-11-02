@@ -105,6 +105,7 @@ Known limits today:
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up. Each look-up costs a tool call.
 - Small windows: an upstream that spends far more context on tool schemas than others (some OpenRouter upstreams do) can leave a small input room too little space, and pi-tuck then refuses to cut rather than overflow. This is what made 1.0.1 refuse at a 32k window with Pi's default 16,384 reserve. Since 1.0.4 the notice says when the provider is counting far above pi-tuck's estimate. In 1.0.4, after an oversize tool result or a "Nothing to compact" error from Pi, a session could keep refusing later prompts. 1.0.5 fixes both. Since 1.0.8, a fresh tool result too large for the room is clipped (its head and tail, with a `tuck_recall` locator to the rest) instead of refusing the run. Pin a different upstream, lower the reserve, or use a larger window; see [Small windows](#small-windows).
+- Small window, after a stopped run (1.0.8 and 1.0.9): Pi's default `compaction.keepRecentTokens` (20,000) can exceed pi-tuck's input room, which is the window less the larger of `compaction.reserveTokens` and the model's maximum output. At a 32k window with the default 16,384 reserve the room is 16,384. After a run that is stopped (Esc, or a time limit) with the context above the room, every later prompt can be refused with "The request needs a cut and Pi has none to make (Nothing to compact (session too small))", and the session stays stuck. Workaround until 1.0.10: set `"compaction": { "keepRecentTokens": N }` in Pi's `settings.json`, with N well below the room; the 32k benchmark used 3,333 (see [Small windows](#small-windows)). Windows of 128k and up are not affected at the defaults, since the room there is far above 20,000 tokens. 1.0.10 is planned to fix this: pi-tuck will make prompt-time cuts itself.
 - Semantic search (`tuck_search`) needs a Mac with Metal (Apple silicon). Elsewhere, compaction and `tuck_recall`'s word search work, there is no `tuck_search`, and nothing is downloaded.
 
 ## Benchmarks
@@ -153,6 +154,14 @@ pi-tuck keeps room for the model's reply: the larger of the model's output limit
 ```
 
 The reserve is the larger of `reserveTokens` and the model's `maxTokens`, so lowering `reserveTokens` alone does nothing when `models.json` sets a larger `maxTokens` for that model. Lower both, and keep `maxTokens` above your largest expected reply.
+
+If a session gets stuck after a stopped run (see Known limits), set `keepRecentTokens` well below the room, in `~/.pi/agent/settings.json` for all models, or for one model:
+
+```json
+{ "compaction": { "modelOverrides": { "my-provider/my-model": { "keepRecentTokens": 3333 } } } }
+```
+
+3,333 is the value the 32k benchmark used: the main run's 20,000 of a 98,304 room, scaled to a 16,384 room (`benchmark/PREREG-32K.md`).
 
 If you reach the model through OpenRouter, you can also pin one upstream, so that every request is served by the same one. Put this in `models.json` in Pi's agent folder, and name the upstream you want:
 
