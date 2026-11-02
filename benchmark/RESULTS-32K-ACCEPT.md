@@ -1,5 +1,7 @@
 # 32k suite: acceptance test of the oversize-result fix (arm C)
 
+**Corrected on 2026-11-01, after this file was first written and published.** The first version reported 0 dead tasks and a pass. The counter (`analysis/w32_stats.py`) matched only one of the two notices pi-tuck uses to refuse a run, so it missed one task: t03 task 24, refused at its prompt (0.02 s, 1 turn) with the notice "The request needs a cut and Pi has none to make (Nothing to compact (session too small))". That task is dead by the definition fixed before any arm C result. **Part 1 of the bar fails by one task, and arm C does not meet the acceptance test as pre-registered.** Part 2 and the readouts are unchanged except where marked. The counter now matches both notices; no other arm's or run's count changes (the second notice appears only in arm C's t03 and in the Pi-defaults check). See `DEVIATIONS.md`, entry of 2026-11-01 18:47.
+
 Written 2026-11-01, after all five chains of arm C finished. The test, its pass bar and the definition of a dead task were fixed in `PREREG-32K.md` (addendum of 2026-10-31 13:25 and definition of 14:55) before any arm C result existed. Nothing in the bar changed.
 
 **What ran.** pi-tuck at commit `aa30824771a91254ad1dc036c38aa88ec0232c13` (arm C, "B′") on chains t01-t05, 150 tasks, with the setup of the first batch: DeepSeek V4.1 Flash `deepseek/deepseek-v4.1-flash-1017` pinned to one upstream, window 32,768, reserve 16,384 (room 16,384), the same tasks, order, prompts, grader and caps. Arms A (Pi's built-in compaction), B (pi-tuck 1.0.3, `656f77a`) and M (observation masking) are the first batch's. **Arm C ran at a different time from A, B and M.** The t04 chains of A, B and M were redone together after the first run of them died at a grading timeout (`DEVIATIONS.md`, 2026-10-31 16:27 and 19:34); arm C's t04 ran once.
@@ -8,10 +10,10 @@ Written 2026-11-01, after all five chains of arm C finished. The test, its pass 
 
 | Part | Rule | Result |
 |---|---|---|
-| 1 | Zero dead tasks across t01-t05 | **0 dead tasks.** 5 mid-run refusals (below), counted apart by the definition. |
+| 1 | Zero dead tasks across t01-t05 | **1 dead task** (t03 task 24, refused at its prompt after task 23; task 25 ran normally). **Fail.** 5 mid-run refusals (below), counted apart by the definition. |
 | 2 | d_C ≥ d_B − 3 points | d_B = +4.26 points (94 tasks before each chain's first refusal in B); d_C = +17.33 points (150 tasks); the bar is +1.26. **Pass.** |
 
-Both parts hold, so arm C passes the acceptance test as pre-registered. The test says nothing about any build other than `aa30824`.
+Part 2 holds and Part 1 fails by one task, so arm C does not pass the acceptance test as pre-registered. The test says nothing about any build other than `aa30824`.
 
 **Mid-run refusals in arm C, each read against the events** (`analysis/refusal_audit.py`). In each, pi-tuck refused straight after the task's own fresh tool result; the prompt before that round plus the result (characters / 4) exceeds the 16,384-token room; the next task ran normally.
 
@@ -23,7 +25,7 @@ Both parts hold, so arm C passes the acceptance test as pre-registered. The test
 | t04, 15 | 9,146 | 38,749 | 18,800 |
 | t04, 22 | 12,256 | 35,421 | 21,100 |
 
-In t04 task 15 the round had two tool results; only the last is counted, so the sum is a lower bound. For reference, arm B (1.0.3) has 52 dead tasks and 4 mid-run refusals over the same five chains; arm C refused 55 fewer of the tasks B refused, and arm C resolved 46 of those 55 (arm A, 25 of the same 55).
+In t04 task 15 the round had two tool results; only the last is counted, so the sum is a lower bound. For reference, arm B (1.0.3) has 52 dead tasks and 4 mid-run refusals over the same five chains; arm C did not refuse 54 of the tasks B refused (55 in the first version, before t03 task 24 was counted), and arm C resolved 46 of those 54 (arm A, 25 of the same 54).
 
 ## Readouts without a pass line
 
