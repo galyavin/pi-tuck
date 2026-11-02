@@ -18,6 +18,12 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 - A prompt's cut no longer goes through Pi's `session_before_compact`, so another extension's veto there no longer stops it. It never
   stopped a cut between tool rounds either. Pi's own threshold and overflow cuts, and `/compact`, still ask other extensions as before.
 
+### Known issue
+
+- When the previous summary alone fills the room and a large prompt arrives, the prompt is dropped: a cut cannot yet shrink a summary on its
+  own. 1.0.10 drops it with no message, where 1.0.9 refused it with one ("Already compacted"). The next prompt runs normally. Seen once, on a
+  25,160-character prompt at a 32k window. A fix is planned for 1.0.11.
+
 ### Release gates
 
 - Passed: tests; replay of the exact build on 29 recordings (no dead task, no refused request, every oversize result clipped and read
