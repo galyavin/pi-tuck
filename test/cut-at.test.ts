@@ -323,15 +323,14 @@ test('receipts: cutAt is recorded when it is not 1, and a default receipt is as 
 	expect(receiptOf(standard.entries[0]!).triggerMarginTokens).toBe(2880);
 });
 
-test('the default cut point is 0.6: with no cutAt a request past 60% of the room is cut, and its receipt records the cut point', async () => {
-	expect(DEFAULT_CUT_AT).toBe(0.6);
+test('the default cut point is 1: with no cutAt a request is cut from the band at the room, and its receipt records no cut point', async () => {
+	expect(DEFAULT_CUT_AT).toBe(1);
 	for (const at of ['prompt', 'tool'] as const) {
-		const lean = bandOf(ROOM, DEFAULT_CUT_AT);
-		const below = await scenario({ at, complete: lean - 1, host: HOST, cutAtDefault: true });
+		const below = await scenario({ at, complete: BAND - 1, host: HOST, cutAtDefault: true });
 		expect(below.cuts, below.probe).toBe(0);
-		const inside = await scenario({ at, complete: Math.floor((lean + BAND) / 2), host: HOST, cutAtDefault: true });
+		const inside = await scenario({ at, complete: BAND, host: HOST, cutAtDefault: true });
 		expect(inside.cuts, inside.probe).toBe(1);
-		expect(inside.entries.map(receiptOf)[0]?.cutAt, inside.probe).toBe(DEFAULT_CUT_AT);
+		expect(inside.entries.map(receiptOf)[0]?.cutAt, inside.probe).toBeUndefined();
 		expect(inside.faults, inside.probe).toEqual([]);
 	}
 });
