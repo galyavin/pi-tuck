@@ -32,7 +32,9 @@ test('the guard: a missing model is a plain Error, with no capacity advice', asy
 		expect(h.errors).toHaveLength(1);
 		expect(isPlain(h.errors[0])).toBe(true);
 		expect((h.errors[0] as Error).message).toBe('No context model for the request budget');
-		expect(h.notices).toEqual([]); // the capacity advice ("lower Pi's compaction.reserveTokens") is for capacity only
+		// Every refusal says why; the capacity advice ("lower Pi's compaction.reserveTokens") is for capacity only.
+		expect(h.notices.join(' ')).toContain('No context model for the request budget');
+		expect(h.notices.join(' ')).not.toContain("lower Pi's compaction.reserveTokens");
 	});
 });
 
@@ -56,7 +58,8 @@ test('the incoming precheck: a missing model is a plain Error before any capacit
 		expect(h.errors).toHaveLength(1);
 		expect(isPlain(h.errors[0])).toBe(true);
 		expect((h.errors[0] as Error).message).toBe('No context model for the request budget');
-		expect(h.notices).toEqual([]);
+		expect(h.notices.join(' ')).toContain('No context model for the request budget');
+		expect(h.notices.join(' ')).not.toContain("lower Pi's compaction.reserveTokens");
 	});
 });
 

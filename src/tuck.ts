@@ -92,6 +92,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	let cut = tuck.buildOwnCut(entries, 1);
 	if (cut.ok) cut = tuck.applyTailBudget(entries, cut, { charsPerToken, maxTokens,
         oversizedFactor: Math.min(OVERSIZED_TAIL_FACTOR, inputRoom / Math.max(1, maxTokens)) });
+    // Nothing since the last cut: its summary alone is the conversation. A summary is compiled from the original sources, so the cut takes the
+    // whole history again under this cut's allowance, and a summary that leaves the request no room is made smaller.
+    else if (cut.reason === "no_live_messages" && entries.some(entry => entry.type === "compaction"))
+        cut = { ok: true, messages: [], selectedIds: [], firstKeptEntryId: "", compactAll: true, keptUserTurns: 0, keepFallbackToCompactAll: false };
 	if (!cut.ok) return { unavailable: `pi-tuck cannot select a cut: ${cut.reason}` };
     // The latest call's trailing receipts have not reached a subsequent response.
     // A preferred tail size must not erase this first exposure when the whole

@@ -97,3 +97,17 @@ test('an opportunistic cut the compactor proposed and Pi then fails to commit is
 		expect(ok.requests, ok.probe).toBe(1);
 	} finally { await h.cleanup(); }
 });
+
+// Every refusal says why. A refusal that is not about capacity used to end its attempt with no word (eval live32 t03-J task 24: 0.02 s, no
+// token, no notice), which looked like a hang.
+test('a refusal that is not about capacity tells the user its reason', async () => {
+	let manager: { getHeader: () => unknown } | undefined;
+	const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST, onPrompt: () => { const real = manager!.getHeader.bind(manager); let missing = true; manager!.getHeader = () => (missing ? (missing = false, null) : real()); } });
+	manager = h.manager as unknown as typeof manager;
+	try {
+		const r = await h.run();
+		expect(r.requests, r.probe).toBe(0);
+		expect(h.notices.join(' '), r.probe).toContain('pi-tuck could not plan this request (Missing native session header');
+		expect(h.notices.join(' '), r.probe).not.toContain("lower Pi's compaction.reserveTokens");
+	} finally { await h.cleanup(); }
+});

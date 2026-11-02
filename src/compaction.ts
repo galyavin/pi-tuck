@@ -295,14 +295,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const clips = new Map<string, Clip>();
 	const fail = (error: unknown, ctx: ExtensionContext) => {
 		recorder.stop("native-attempt-failed");
-        const notify = !failure && error instanceof CapacityError;
+        // Every refusal says why, once per attempt: a capacity error with what the user can change, a cut Pi failed to commit with what that
+        // means for the session, anything else as it is (an attempt that ended with no word looked like a hang).
+        const notify = !failure;
 		// A CommitFault stays whatever fails after it.
 		if (!(failure instanceof CommitFault)) failure = error instanceof Error ? error : new Error(String(error));
         pendingBoundaryCommit = false;
         pending = undefined;
         promptCut = undefined;
 		try { options.fail?.(error); } finally {
-            try { if (notify) ctx.ui.notify(refusalNotice(failure.message, factor), "error"); }
+            try { if (notify) ctx.ui.notify(failure instanceof CapacityError ? refusalNotice(failure.message, factor) : failure instanceof CommitFault
+                ? `pi-tuck: ${failure.message}; the session holds a cut its file may lack, so start a new session.`
+                : `pi-tuck could not plan this request (${failure.message}); the next prompt is planned afresh.`, "error"); }
             finally { ctx.abort(); }
         }
 	};
