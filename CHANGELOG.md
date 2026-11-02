@@ -18,6 +18,18 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 - `tuck_search` takes a result back as returned: each entry of `priorResults` is a source's `sourceSha` and `read`, unchanged. It asked for
   `start` and `end`, which no result carried.
 
+### Known issue
+
+- Affects 1.0.8 and 1.0.9. At a small window, Pi's default `compaction.keepRecentTokens` (20,000) can exceed pi-tuck's input room (the window
+  less the larger of `compaction.reserveTokens` and the model's maximum output; 16,384 at a 32k window with the default reserve). After a
+  run that is stopped (Esc, or a time limit) with the context above the room, every later prompt can be refused with "The request needs a cut
+  and Pi has none to make (Nothing to compact (session too small))", and the session stays stuck. Workaround until 1.0.10: set
+  `"compaction": {"keepRecentTokens": N}` in Pi's `settings.json` (or `compaction.modelOverrides["provider/model"].keepRecentTokens` for one
+  model), with N well below the room. Windows of 128k and up are not affected at the defaults. 1.0.10 is planned to fix this: pi-tuck will
+  make prompt-time cuts itself. Evidence: in one check at these defaults (1.0.8, 32k window, one session of 30 tasks, one model), 28 tasks
+  were lost ([`benchmark/RESULTS-DEFAULTS.md`](benchmark/RESULTS-DEFAULTS.md)); it shows that the failure occurs, not how often.
+
+## [1.0.8] - 2026-11-01
 
 ### Fixed
 

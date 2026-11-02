@@ -11,7 +11,7 @@ from w32_stats import REFUSAL, ROOM, TASK, text_of
 folder = Path(sys.argv[1])
 events = []
 for line in (folder / "events.jsonl").read_text().splitlines():
-    if REFUSAL in line or '"message_end"' in line or '"message_start"' in line or "agent_" in line:
+    if REFUSAL.search(line) or '"message_end"' in line or '"message_start"' in line or "agent_" in line:
         try:
             events.append(json.loads(line))
         except ValueError:
@@ -24,7 +24,7 @@ for e in events:
         task = int(found.group(1)) if found else task
     owner.append(task)
 for i, e in enumerate(events):
-    if e.get("type") == "extension_ui_request" and REFUSAL in e.get("message", ""):
+    if e.get("type") == "extension_ui_request" and REFUSAL.search(e.get("message", "")):
         last_request = last_result = 0
         for x in reversed(events[:i]):
             m = x.get("message") or {}

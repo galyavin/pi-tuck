@@ -13,7 +13,9 @@ from pathlib import Path
 from sessionlog import session_cuts
 
 TASK = re.compile(r"Task (\d+) of \d+")
-REFUSAL = "mandatory context cannot fit"
+# pi-tuck refuses a run with one of two notices: the request cannot fit, or it needs a cut that Pi cannot make (keepRecentTokens covers the whole session).
+# Corrected on 2026-11-01: the second text was missing, so a task refused at its prompt with it was not counted (arm C t03 task 24).
+REFUSAL = re.compile(r"mandatory context cannot fit|needs a cut and Pi has none to make")
 ROOM = 16384  # window 32,768 less the 16,384 reply reserve: the most a request may carry without the window being nominal
 
 
@@ -51,7 +53,7 @@ def scan_events(folder: Path):
     if not path.exists():
         return refused, largest
     for line in path.read_text().splitlines():
-        if REFUSAL not in line and '"usage"' not in line and "Task " not in line and "agent_" not in line:
+        if not REFUSAL.search(line) and '"usage"' not in line and "Task " not in line and "agent_" not in line:
             continue
         try:
             e = json.loads(line)
@@ -71,7 +73,7 @@ def scan_events(folder: Path):
         elif e.get("type") == "message_end" and m.get("role") == "assistant" and m.get("usage"):
             u = m["usage"]
             largest[task] = max(largest.get(task, 0), u["input"] + u.get("cacheRead", 0))
-        elif e.get("type") == "extension_ui_request" and e.get("notifyType") == "error" and REFUSAL in e.get("message", ""):
+        elif e.get("type") == "extension_ui_request" and e.get("notifyType") == "error" and REFUSAL.search(e.get("message", "")):
             if idle:
                 carry = True
             else:
