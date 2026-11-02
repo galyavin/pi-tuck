@@ -3,6 +3,29 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.10] - 2026-11-01
+
+### Fixed
+
+- A session no longer stays stuck when Pi's `compaction.keepRecentTokens` covers the whole conversation (the 1.0.8 and 1.0.9 known issue,
+  at Pi's defaults on small windows). The cut a prompt needs is now pi-tuck's own: it is planned when the prompt arrives, as at a tool
+  boundary, every request of that run carries it, and the run's first boundary saves it. Pi's cut finder, which keeps the last
+  keepRecentTokens and then has nothing to cut, is no longer asked. A run that ends before a boundary drops the cut, and the next prompt
+  decides afresh.
+
+### Changed
+
+- A prompt's cut no longer goes through Pi's `session_before_compact`, so another extension's veto there no longer stops it. It never
+  stopped a cut between tool rounds either. Pi's own threshold and overflow cuts, and `/compact`, still ask other extensions as before.
+
+### Release gates
+
+- Passed: tests; replay of the exact build on 29 recordings (no dead task, no refused request, every oversize result clipped and read
+  back); the Pi-defaults rerun on chain t06 (RESULTS-DEFAULTS-RERUN, pending).
+- **Failed as registered:** the paired 32k gate against 1.0.9 (chains t01 and t02, 60 tasks). No task was lost in either arm, but 1.0.10
+  resolved 49 tasks against 50, so "resolved no lower" failed by one task (−1.7 points, one-sided 95% lower bound −8.3;
+  [`benchmark/RESULTS-V110.md`](benchmark/RESULTS-V110.md)). The user approved shipping as an exception because of the small-window defect.
+
 ## [1.0.9] - 2026-11-01
 
 ### Changed

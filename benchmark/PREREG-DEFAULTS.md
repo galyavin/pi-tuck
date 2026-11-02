@@ -33,3 +33,7 @@ Mid-run refusals (a task refused on its own fresh tool round) with each hand-aud
 - One arm, two chains, 60 tasks: a pass shows no lost task and no stuck session in these 60 tasks, not that none can occur.
 - The model is a local quantised one, served to several lanes at once; slowness and 429 retries come from the server and are not counted as stuck unless a gap reaches 3,600 s.
 - Resolved counts here are not comparable with any other arm: different model, different chains, different time.
+
+## Amendment of 2026-11-01: rerun on the 1.0.10 candidate
+
+The first run (arm K, 1.0.8, `86935e9`, t06) did not meet the bar; its record is `RESULTS-DEFAULTS.md` and it stays. At the CEO's direction the same check is rerun on t06 with the CTO's fix build as **arm N**: pi-tuck commit `a67ec30` (1.0.10 candidate, branch `claude/prompt-cut`; replay on the 29 recordings: 0 dead tasks, 0 faults), a fresh session. Everything else is as above: suite `w32m`, `mac-studio/main` at `xhigh`, window 32,768, Pi's default compaction settings, the same caps, one lane, the same bar (0 lost tasks, 0 stuck sessions, counted with the counter that matches both refusal notices) and the same limits. Written before the rerun starts.
