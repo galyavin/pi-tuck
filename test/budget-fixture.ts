@@ -52,6 +52,22 @@ export interface Options {
  /** With `summary`: the cut kept nothing, so the summary alone is the conversation (its `firstKeptEntryId` is empty). At a prompt the prompt
   * then carries the whole request; `incoming` sizes it, else it takes the rest of `complete`. */
  summaryOnly?: boolean;
+ /** Build no history and do no prompt sizing: the caller drives the session itself, prompt by prompt. */
+ noHistory?: boolean;
+ /** Answer request N with a tool call rather than a final text, so the run keeps going after the first request. */
+ toolCalls?: (request: number) => boolean;
+ /** The size of the Nth tool result, so one run can grow by mixed amounts. */
+ toolResultTokens?: (call: number) => number;
+ /** Request N never answers: the stream stays open, as a stalled provider's does, until the turn is aborted. */
+ neverEnds?: (request: number) => boolean;
+ /** Characters of thinking on the reply to request N, as a model that replays its reasoning sends them. */
+ thinkingChars?: (request: number) => number;
+ /** Another extension, present beside the compactor: it appends N boundary entries at every turn end. */
+ turnEndEntries?: number;
+ /** Another model from the catalogue, for a case that depends on which API it uses. */
+ model?: { provider: string; id: string };
+ /** Persist the session to a file, then close it and open it again: the caller starts from a saved session. */
+ reopen?: boolean;
  /** Tokens of the fixture summary's own text (default 800). */
  summaryTokens?: number;
  /** Tokens of a steering message queued during the tool call, so it is in the next request but not in the saved conversation. */
@@ -97,6 +113,8 @@ export interface Options {
  usageFirst?: number;
  /** The scripted replies report usage input = the guard's last measure times this ratio, so the calibration factor ratchets. */
  usageRatio?: number;
+ /** A provider that reports no usage at all: the reply carries no usage object for pi-tuck to calibrate against. */
+ noUsage?: boolean;
  /** Every scripted reply reports this many output tokens (reasoning included) beside its input usage. Pi's usage threshold counts them; the compactor's calibration does not. */
  outputTokens?: number;
  /** Characters appended to the system prompt, so that the rounding of its estimate can be walked through all four residues. */
@@ -132,11 +150,12 @@ export async function harness(options: Options) {
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
  const cleanup = async () => { if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
-  const runtime = await scriptedModelRuntime(options.limits), model = runtime.getModel('openai-codex', 'gpt-6.1-sol');
+  const runtime = await scriptedModelRuntime(options.limits, options.model), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
-  if (!options.limits) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
-  const manager = SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
-  const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
+  if (!options.limits && !options.model) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
+  // A reopened session has to be a persisted one, so its entries reach a file and come back from it.
+  let manager = options.reopen ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
+  const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return { role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } }; };
   // Repeated text lets the compactor summarize almost everything away; unique text (oneTurn) makes the cut keep as much as the plan allows.
   let uniq = 0;
   const text = (n: number) => options.oneTurn ? Array.from({ length: Math.ceil(n * 4 / 24) }, () => `item ${(++uniq).toString(36)} data;`).join(' ').slice(0, n * 4) : 'Observed mechanical test data. '.repeat(Math.ceil(n * 4 / 31)).slice(0, n * 4);
@@ -159,7 +178,8 @@ export async function harness(options: Options) {
   };
   const saved = () => manager.buildSessionProjection().messages;
   const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: options.compactionEnabled ?? true, reserveTokens: options.reserveTokens ?? 32768, keepRecentTokens: options.keepRecent ?? 0 } });
-  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0 };
+  // stops records the stop reason of every reply the scripted model handed back, in order, so a caller can tell what one of its own prompts got.
+  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[] };
   let bigResult = 1, bigText = 'x', host = options.host;
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
   const note = 'Queued operator note. ';
@@ -174,6 +194,8 @@ export async function harness(options: Options) {
   const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, systemPrompt, extensionFactories: [async pi => {
    extension = pi;
    if (options.cancelCompact) pi.on('session_before_compact', () => ({ cancel: true }));
+   // Another extension at the turn boundary: it appends entries that carry no content, as a plugin writing its own boundaries does.
+   if (options.turnEndEntries) pi.on('turn_end', () => { for (let i = 0; i < options.turnEndEntries!; i++) pi.appendEntry(`stress-boundary-${i}`, { at: state.requests }); });
    if (options.onBeforeCompact) pi.on('session_before_compact', (event, ctx) => { options.onBeforeCompact!(event, ctx); });
    // The host's per-request view: present in every request, never in the saved conversation.
    pi.on('context', event => ({ messages: [hostInput(), ...event.messages.filter(m => !(m.role === 'custom' && m.customType === 'host.view'))] }));
@@ -191,7 +213,8 @@ export async function harness(options: Options) {
    // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
    // and `cutAtDefault` leaves it to the compactor's default.
    await installCompaction(pi, {
-    requestReserve: () => ({ response: 32768 }),
+    // The response reserve is Pi's setting, which is what the session actually holds; a case that needs an exact reserve passes its own below.
+    requestReserve: () => ({ response: options.reserveTokens ?? 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
     fail: e => faults.push(String(e) + (process.env.BUDGET_TRACE ? ' @ ' + String((e as Error).stack).split('\n').slice(1, 4).join(' | ') : '')), settings,
     ...options.compaction,
@@ -208,20 +231,23 @@ export async function harness(options: Options) {
    pi.on('context_with_system', (event, ctx) => { guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); });
   }] });
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-  ({ session } = await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: manager, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
+  const newSession = async (m: SessionManager) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
    name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
    execute: async () => {
     state.effects++;
     if (options.ballast && state.effects === 1) extension!.setActiveTools(['effect']);
     if (options.queued) await session!.steer(note + exact(options.queued - 6)); // the note's 22 characters are 6 tokens: the message is exactly `queued` tokens
     // The tool-boundary scenarios grow the conversation by the amount that lands the next request exactly where the case asks.
-    if (options.at === 'tool' && state.effects === 1) {
+    if (options.toolResultTokens) bigText = fit(options.toolResultTokens(state.effects)); // a run that grows by amounts the caller chose
+    else if (options.at === 'tool' && state.effects === 1) {
      const have = referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson()) + nonSystem([hostInput()]) + nonSystem(saved());
      bigResult = Math.max(1, options.complete - have); bigText = fit(bigResult);
     }
+    state.results.push(resultTokens(bigText)); // what this round lands in the conversation, so a caller can weigh a turn of its own
     return { content: [{ type: 'text', text: bigText }], details: {} };
    },
-  }] }));
+  }] })).session;
+  session = await newSession(manager);
   // Notices to the operator (a warning when a cut cannot be made, advice on a capacity failure); every other UI call is a no-op.
   const ui = new Proxy({ notify: (message: string) => { notices.push(message); } }, { get: (target, key) => key in target ? (target as never)[key] : () => undefined });
   // ctx.abort() reaches Pi through this handler, so a test can see whether the compactor aborted the run.
@@ -243,8 +269,9 @@ export async function harness(options: Options) {
   const historyComplete = () => promptTokens() + referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson()) + nonSystem([hostInput()]) + nonSystem(saved());
   const sizeFor = options.oneTurn ? 1000 : options.cycleSize ?? 6000, slack = sizeFor + 500;
   if (options.at === 'tool' && options.history !== undefined) for (let left = options.history; left > 0; left -= sizeFor) options.oneTurn ? round(Math.min(sizeFor, left)) : cycle(Math.min(sizeFor, left));
-  else if (!(options.at === 'prompt' && (options.history !== undefined || options.summaryOnly))) while (historyComplete() + slack < target) options.oneTurn ? round(sizeFor) : cycle(sizeFor);
-  if (options.at === 'prompt' && options.compactedLast) {
+  else if (!(options.at === 'prompt' && (options.history !== undefined || options.summaryOnly)) && !options.noHistory) while (historyComplete() + slack < target) options.oneTurn ? round(sizeFor) : cycle(sizeFor);
+  if (options.noHistory) { /* the caller drives the session: no history is built and no prompt is sized */ }
+  else if (options.at === 'prompt' && options.compactedLast) {
    // The compaction keeps everything after the opening request, so the saved conversation is large and the last saved entry is the compaction.
    manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + DIALOGUE_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    // The prompt carries the rest, so the last saved entry stays the compaction.
@@ -295,6 +322,16 @@ export async function harness(options: Options) {
    expect(rest).toBeGreaterThan(0);
    promptText = 'Continue ' + 'q'.repeat(rest * 4);
   }
+  // A reopened session: the file is closed and opened again, as Pi does when a saved session is resumed. Everything the caller does next runs on the loaded session.
+  // The old session is left alone rather than disposed: disposing it marks the shared extension runtime stale, and Pi's own reopen builds a fresh
+  // runtime, which this fixture does not. The loaded session and its file are what the case is about.
+  if (options.reopen) {
+   const file = manager.getSessionFile();
+   if (!file) throw Error('A reopened session needs a persisted one');
+   manager = SessionManager.open(file, dir);
+   session = await newSession(manager);
+   await session.bindExtensions({ uiContext: ui as never, abortHandler: () => { state.aborts++; void session!.abort(); } });
+  }
   const cutsBefore = manager.getEntries().filter(e => e.type === 'compaction').length;
   const rounds = options.rounds ?? 1;
   session.agent.streamFunction = (_m, _ctx, streamOptions) => {
@@ -304,9 +341,17 @@ export async function harness(options: Options) {
    options.onRequest?.(state.requests, { setHost: tokens => { host = tokens; }, pi: extension! });
    // After the first round the host view outgrows the room by itself: no cut can help from then on.
    if (options.at === 'tool-impossible' && state.requests === 1) host = ROOM + 20000;
-   const toolRound = (options.at === 'tool' || options.at === 'tool-impossible') && state.requests <= rounds;
-   if (toolRound && state.requests > 1) { bigText = text(options.laterResult ?? 100); }
+   const toolRound = options.toolCalls ? options.toolCalls(state.requests) : (options.at === 'tool' || options.at === 'tool-impossible') && state.requests <= rounds;
+   if (toolRound && state.requests > 1 && !options.toolResultTokens) { bigText = text(options.laterResult ?? 100); }
    const stream = createAssistantMessageEventStream();
+   // A request that never answers: nothing arrives until the turn is aborted, which is when a transport closes.
+   if (options.neverEnds?.(state.requests)) {
+    const stalled = answer([], 'aborted'); stalled.errorMessage = 'The stream never ended.';
+    const close = () => { stream.push({ type: 'error', reason: 'aborted', error: stalled }); stream.end(stalled); };
+    const signal = streamOptions?.signal;
+    if (!signal) close(); else if (signal.aborted) close(); else signal.addEventListener('abort', close, { once: true });
+    return stream;
+   }
    const failing = options.replies?.[state.requests - 1];
    if (failing) {
     // Pi ignores a reply that is not newer than the last cut.
@@ -317,10 +362,14 @@ export async function harness(options: Options) {
     if (failing === 'length') stream.push({ type: 'done', reason: 'length', message: failed }); else stream.push({ type: 'error', reason: 'error', error: failed });
     stream.end(failed); return stream;
    }
-   const message = answer(toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }], toolRound ? 'toolUse' : 'stop');
+   const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
+   // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
+   const thinking = options.thinkingChars?.(state.requests);
+   const message = answer(thinking ? [{ type: 'thinking', thinking: text(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, toolRound ? 'toolUse' : 'stop');
    if (options.usageFirst !== undefined && state.requests === 1) { message.usage.input = options.usageFirst; message.usage.totalTokens = options.usageFirst; }
    if (options.usageRatio !== undefined && guard.length) { message.usage.input = Math.ceil(guard.at(-1)! * options.usageRatio); message.usage.totalTokens = message.usage.input; }
    if (options.outputTokens !== undefined) { message.usage.output = options.outputTokens; message.usage.totalTokens += options.outputTokens; }
+   if (options.noUsage) delete (message as { usage?: unknown }).usage;
    stream.push({ type: 'done', reason: toolRound ? 'toolUse' : 'stop', message }); stream.end(message); return stream;
   };
   const allCompactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);

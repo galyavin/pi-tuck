@@ -28,3 +28,45 @@ jobs:
         run: npm test
       - if: runner.os == 'Linux'
         run: npx vitest run --config vitest.config.ts --exclude test/semantic-heal.test.ts --exclude test/semantic-native-owner.test.ts
+
+  # The settings stress test, on the oldest Pi the package accepts and on the newest published one. It is the only job that sets STRESS, so the
+  # normal suite stays as fast as it is. Pi 1.2.x declares its own siblings as "^1.x", which npm resolves to the newest and incompatible, so
+  # every @earendil-works package is pinned to the version under test; the newest is looked up, so this job follows Pi without an edit here.
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        pi: ["1.2.0", "latest"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pin Pi to ${{ matrix.pi }}
+        run: |
+          version='${{ matrix.pi }}'
+          if [ "$version" = latest ]; then version=$(npm view @earendil-works/pi-coding-agent version); fi
+          echo "Pi under test: $version"
+          npm install --no-save --no-audit --no-fund \
+            @earendil-works/pi-coding-agent@"$version" \
+            @earendil-works/pi-ai@"$version" \
+            @earendil-works/pi-agent-core@"$version" \
+            @earendil-works/pi-codemode@"$version" \
+            @earendil-works/pi-mcp@"$version" \
+            @earendil-works/pi-tui@"$version" \
+            @earendil-works/pi-telemetry@"$version"
+          npm ls --depth=0 2>/dev/null | grep earendil || true
+      - name: Settings stress test
+        env:
+          STRESS: "1"
+          STRESS_REPORT: "1"
+        run: npx vitest run test/stress
+      - name: Failure table
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-failures-pi-${{ matrix.pi }}
+          path: test/stress/failures.json
