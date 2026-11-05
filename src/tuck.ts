@@ -63,8 +63,9 @@ export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: Ext
 }
 /** Shared compiler observes canonical branch and current token estimate; no native preparation utility. */
 /** `newPrompt`: the cut is planned for a run that has not begun (a prompt Pi has not appended yet, an operator's manual cut, Pi's own cut before
- * a run a custom message starts); the session has moved on from an ended run. */
-export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean }, ctx: ExtensionContext,
+ * a run a custom message starts); the session has moved on from an ended run.
+ * `reRenderSummary`: the cut is due, so its summary may be re-rendered smaller (see the `no_live_messages` branch below). */
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean; reRenderSummary?: boolean }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
  const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
@@ -92,9 +93,11 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	let cut = tuck.buildOwnCut(entries, 1);
 	if (cut.ok) cut = tuck.applyTailBudget(entries, cut, { charsPerToken, maxTokens,
         oversizedFactor: Math.min(OVERSIZED_TAIL_FACTOR, inputRoom / Math.max(1, maxTokens)) });
-    // Nothing since the last cut: its summary alone is the conversation. A summary is compiled from the original sources, so the cut takes the
-    // whole history again under this cut's allowance, and a summary that leaves the request no room is made smaller.
-    else if (cut.reason === "no_live_messages" && entries.some(entry => entry.type === "compaction"))
+    // Nothing since the last cut: its summary alone is the conversation, and only a cut that is due can re-render it. A summary is compiled from
+    // the original sources, so the cut takes the whole history again under this cut's allowance, and a summary that leaves the request no room is
+    // made smaller. Inside the band a cut is opportunistic, and re-rendering there shrinks the summary and costs history for nothing (replays
+    // s04-B task 13, s08-B task 23: a 13,008-token first request became 3,336), so an opportunistic cut refuses as it did before.
+    else if (input.reRenderSummary && cut.reason === "no_live_messages" && entries.some(entry => entry.type === "compaction"))
         cut = { ok: true, messages: [], selectedIds: [], firstKeptEntryId: "", compactAll: true, keptUserTurns: 0, keepFallbackToCompactAll: false };
 	if (!cut.ok) return { unavailable: `pi-tuck cannot select a cut: ${cut.reason}` };
     // The latest call's trailing receipts have not reached a subsequent response.

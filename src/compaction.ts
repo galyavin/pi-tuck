@@ -476,7 +476,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             unreduced: "Incoming prompt compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                 const reserve = planReserve(target, room, mandatory, ctx);
-                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary, newPrompt: true }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, false);
+                // Only a due cut re-renders a summary that sits alone in the session: inside the band a cut is opportunistic, and a smaller summary
+                // there buys nothing the request needed and costs history the next recall would have found.
+                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary, newPrompt: true, reRenderSummary: !gate.opportunistic }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, false);
                 if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 const messages = withCut(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before });
                 assertNativeToolRounds(messages);

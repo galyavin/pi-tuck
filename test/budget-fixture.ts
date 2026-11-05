@@ -49,6 +49,11 @@ export interface Options {
  host: number;
  /** The saved conversation starts with a compaction summary (Pi wraps it when it converts it for the model). */
  summary?: boolean;
+ /** With `summary`: the cut kept nothing, so the summary alone is the conversation (its `firstKeptEntryId` is empty). At a prompt the prompt
+  * then carries the whole request; `incoming` sizes it, else it takes the rest of `complete`. */
+ summaryOnly?: boolean;
+ /** Tokens of the fixture summary's own text (default 800). */
+ summaryTokens?: number;
  /** Tokens of a steering message queued during the tool call, so it is in the next request but not in the saved conversation. */
  queued?: number;
  keepRecent?: number;
@@ -226,9 +231,9 @@ export async function harness(options: Options) {
   const opening = manager.appendMessage({ role: 'user', content: 'Opening task', timestamp: 0 });
   // A previous compaction: the saved conversation starts with a summary message that Pi wraps when it converts it for the model.
   if (options.summary) {
-   const records: Parameters<typeof serializeTranscript>[0] = [{ kind: 'omission', reason: 'Earlier work, summarized. ' + text(800) }];
+   const records: Parameters<typeof serializeTranscript>[0] = [{ kind: 'omission', reason: 'Earlier work, summarized. ' + text(options.summaryTokens ?? 800) }];
    if (options.omitted) records.unshift({ kind: 'excerpt', role: 'user', sourceIndex: 0, text: 'o'.repeat(options.omitted) });
-   manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + DIALOGUE_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + DIALOGUE_SUFFIX, options.summaryOnly ? '' : opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    if (options.omitted) manager.appendContextEdit(opening, null);
   }
   // History up to the request the case asks for. At the tool boundary the last tool result is sized when the tool runs.
@@ -238,7 +243,7 @@ export async function harness(options: Options) {
   const historyComplete = () => promptTokens() + referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson()) + nonSystem([hostInput()]) + nonSystem(saved());
   const sizeFor = options.oneTurn ? 1000 : options.cycleSize ?? 6000, slack = sizeFor + 500;
   if (options.at === 'tool' && options.history !== undefined) for (let left = options.history; left > 0; left -= sizeFor) options.oneTurn ? round(Math.min(sizeFor, left)) : cycle(Math.min(sizeFor, left));
-  else if (!(options.at === 'prompt' && options.history !== undefined)) while (historyComplete() + slack < target) options.oneTurn ? round(sizeFor) : cycle(sizeFor);
+  else if (!(options.at === 'prompt' && (options.history !== undefined || options.summaryOnly))) while (historyComplete() + slack < target) options.oneTurn ? round(sizeFor) : cycle(sizeFor);
   if (options.at === 'prompt' && options.compactedLast) {
    // The compaction keeps everything after the opening request, so the saved conversation is large and the last saved entry is the compaction.
    manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + DIALOGUE_SUFFIX, opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
@@ -257,6 +262,20 @@ export async function harness(options: Options) {
     expect(promptTokens() + system).toBe(options.incoming);
    } else {
     // The prompt carries the rest of the request; it is protected from every cut.
+    const rest = options.complete - historyComplete();
+    expect(rest).toBeGreaterThan(0);
+    promptText = 'Continue' + 'q'.repeat(rest * 4);
+    expect(historyComplete()).toBe(options.complete);
+   }
+  } else if (options.at === 'prompt' && options.summaryOnly) {
+   // The summary alone is the conversation, so nothing but the prompt can carry the request.
+   const system = referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson());
+   if (options.incoming !== undefined) {
+    const words = options.incoming - system - 2;
+    expect(words).toBeGreaterThan(0);
+    promptText = 'Continue' + 'q'.repeat(words * 4);
+    expect(promptTokens() + system).toBe(options.incoming);
+   } else {
     const rest = options.complete - historyComplete();
     expect(rest).toBeGreaterThan(0);
     promptText = 'Continue' + 'q'.repeat(rest * 4);
