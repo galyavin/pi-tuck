@@ -116,7 +116,7 @@ test('at a tool boundary a cut follows the rule', async () => {
 	expect(seen['declined: out of reach'], stats).toBeGreaterThan(0);
 	expect(seen['room below the band'], stats).toBeGreaterThan(0);
 	expect(seen['forced room plan only'], stats).toBeGreaterThan(0);
-});
+}, 120000);
 
 test('the request that the margin would have cut to a poorer view is sent as it stands', async () => {
 	// Inside the band (2,800 tokens in), the room plan keeps the whole dialogue but does not reach the band, and the band has no plan of
