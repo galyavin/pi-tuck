@@ -11,6 +11,22 @@ Registered in `PREREG.md` (frozen before the run) with the addenda `PREREG-TERRA
 
 Comparator names, used exactly: **"Pi's compaction prompts on mac-studio/main:xhigh"** (the local compactor, `native-local`) and **"Pi's compaction prompts on GPT-6.1 Terra"** (`native-terra`).
 
+## What tests 1a and 1b-Terra compare (read this before the numbers)
+
+These are **not summary against summary.** In both tests the agent that answered the probes was the same model (`mac-studio/main:xhigh`), but its tools differed by variant (`replay/answer.ts`):
+
+- **pi-tuck** (`tuck`) answered with pi-tuck's real **`tuck_recall` and `tuck_search`** tools, which read back the original history preserved before the cut; `tuck-lexical` (semantic search off) kept `tuck_recall` and the keyword lookup.
+- **"Pi's compaction prompts on mac-studio/main:xhigh" and "Pi's compaction prompts on GPT-6.1 Terra"** answered with **no recall tool**: a Pi session over the replayed history and the compaction entry, with Pi's built-in tools in an empty working folder, so the answer came from the summary and the kept recent messages alone.
+
+So the tests compare pi-tuck's summary together with its recall tools against Pi's summary alone. **There is no arm of pi-tuck without its recall tools in tests 1a and 1b**, so no difference and bound for that exist in this run, and none were run for this record. (The separate recall benchmark, `PREREG-RECALL.md`, has a `tuck-norecall` arm on a different set of questions; it has not been analysed and cannot give a difference for these probes.) The probes ask for facts whose evidence is at least 35,000 raw tokens before the cut, which is where a recall tool can matter most.
+
+Details, from the answer logs:
+
+- **Tools.** pi-tuck's agent had Pi's built-in tools plus `tuck_recall` and `tuck_search`; the comparators' agents had Pi's built-in tools only. Tool calls over all asks: pi-tuck `tuck_recall` 2,034, `tuck_search` 205, `bash` 9; Pi's compaction prompts on mac-studio/main:xhigh `bash` 178, `read` 1, and 1 call to `tuck_recall`, a tool it did not have; Pi's compaction prompts on GPT-6.1 Terra `bash` 236, `read` 2, and 1 call to `tuck_recall`.
+- **Could a comparator read the original history?** Not through a recall tool. The replayed history lives in memory (no session file) and the working folder was an empty temporary folder. But `bash` was unrestricted and the recordings sit on the same disk, and the log keeps tool-call counts, not their commands, so I cannot rule out that a comparator read one; nothing in the logs shows it, and the comparators' low accuracy on the error-class and test-runner probes does not suggest it.
+- **Recall calls by pi-tuck.** Over all 95 asks (one ask per cut, all of a cut's probes in one prompt; 1,961 probes): 1.04 `tuck_recall` and 0.11 `tuck_search` calls per probe, 1.14 together; every ask made at least one call. The variant with meaning search off made 1.25 per probe.
+- **Probe types.** The 783 probes behind test 1a and the 728 behind 1b-Terra are all mechanical: files changed (194 and 180), test-runner summary (172 and 162), required tag (202 and 187), error class (172 and 159), result-line rule (43 and 40). The judge-scored next-step probes (95 in the replay probe set, scored for every variant) are not in them: their evidence is the step the agent took at the cut, which lies at or after the first entry kept, so they fail the registered rule that a probe counts only if the compactor did not keep its evidence. The size of what each compactor writes also differs: median summary 85,561 characters for pi-tuck, 23,598 for the local compactor and 11,200 for Terra, while the context carried after a cut is similar (27,656, 25,790 and 22,784 tokens).
+
 ## Test 1a: retention against Pi's compaction prompts on mac-studio/main:xhigh (all 20 recordings)
 
 | | pi-tuck | Pi's compaction prompts on mac-studio/main:xhigh |
@@ -42,7 +58,15 @@ The two accuracies are over different probe sets (a probe counts for a compactor
 
 ### The claim, worded against the compactors that ran
 
-Under the registered rule the comparator for claim 1 is the better LLM compactor on the shared probes; here that is Pi's compaction prompts on mac-studio/main:xhigh (61.8%, above Terra's 57.8%). The registered claim line is supported, and it is stated only as: **pi-tuck's retention is not more than 3 points below that of "Pi's compaction prompts on mac-studio/main:xhigh" (test 1a, 20 recordings) or of "Pi's compaction prompts on GPT-6.1 Terra" (test 1b-Terra, 19 of 20 recordings, s09-A missing), on these probes.** It says nothing about any other compactor, model or tier, and it is not worded as "at least as effective as the best LLM compactors" (`PREREG-TERRA.md`). The withdrawn comparator's partial view (8 recordings, not a test) is not part of this record.
+Under the registered rule the comparator for claim 1 is the better LLM compactor on the shared probes; here that is Pi's compaction prompts on mac-studio/main:xhigh (61.8%, above Terra's 57.8%). The registered claim line is supported, and it is stated only as: **pi-tuck, answering with its recall tools, retains probed facts at a rate not more than 3 points below that of "Pi's compaction prompts on mac-studio/main:xhigh" (test 1a, 20 recordings) or of "Pi's compaction prompts on GPT-6.1 Terra" (test 1b-Terra, 19 of 20 recordings, s09-A missing), each answering from its summary alone, on these probes.** It says nothing about any other compactor, model or tier, and it is not worded as "at least as effective as the best LLM compactors" (`PREREG-TERRA.md`). The withdrawn comparator's partial view (8 recordings, not a test) is not part of this record.
+
+### Post hoc and descriptive, with no pass line: how much pi-tuck used its recall tools in test 1a
+
+Asked of the existing answer logs after the results were read; nothing was run for it.
+
+- **No probe answer lacks the tools, so there is no summary-only arm.** In the 43 asks that hold the 783 probes behind test 1a, every ask made at least one `tuck_recall` or `tuck_search` call, so 783 of 783 probes were answered in an ask that used them. The log counts calls per ask, not per probe, so "the share of answers that made a call" cannot be measured at probe level, and there is no group of answers with no call whose accuracy could be given. Answers with no call would not have been a true summary-only arm anyway, because the tools were still offered to the agent.
+- Calls per probe in these asks: 1.25 overall, from 0.57 to 2.27 across asks.
+- Split by thirds of asks by calls per probe (fewest, middle, most): pi-tuck's accuracy on the probes was 87.9%, 90.8% and 90.0%, against 64.6%, 64.3% and 63.1% for Pi's compaction prompts on mac-studio/main:xhigh on the same probes. Pi-tuck's accuracy does not rise with more calls per probe in this split, but the split does not separate the effect of the summary from the effect of the tools.
 
 ## Test 2: end to end (pi-tuck 1.0.1 minus Pi's compaction, paired by task, bootstrap over chains)
 
@@ -67,6 +91,7 @@ Under the registered rule the comparator for claim 1 is the better LLM compactor
 
 ## Limits (the registered "not claimed", and what this run adds)
 
+- Tests 1a and 1b-Terra compare pi-tuck with its recall tools against summaries alone (section above); they do not show how much of pi-tuck's result comes from the summary and how much from recall.
 - Fixed-size SWE-bench-style tasks, one local model, one build of each system. Nothing here is a statement about any other compactor, model, tier or window.
 - The probe set depends on the compactors: accuracies are over different probes, and D is over the shared ones.
 - The Test 2 and Test 3(b) verdicts change when chain s09 is left out, so both views are given.
