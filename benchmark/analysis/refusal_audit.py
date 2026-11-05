@@ -25,7 +25,7 @@ for e in events:
     owner.append(task)
 for i, e in enumerate(events):
     if e.get("type") == "extension_ui_request" and REFUSAL.search(e.get("message", "")):
-        last_request = last_result = 0
+        last_request = last_result = last_output = 0
         for x in reversed(events[:i]):
             m = x.get("message") or {}
             if x.get("type") != "message_end":
@@ -34,8 +34,9 @@ for i, e in enumerate(events):
                 last_result = sum(len(b.get("text", "")) for b in m.get("content", []) if isinstance(b, dict))
             elif m.get("role") == "assistant" and m.get("usage"):
                 last_request = m["usage"]["input"] + m["usage"].get("cacheRead", 0)
+                last_output = m["usage"].get("output", 0)  # the round's own assistant message stays in the next request (reasoning included); added 2026-11-05
                 break
         role = lambda x: (x["message"].get("role") if isinstance(x.get("message"), dict) else None) or x["type"]
         roles = [role(events[j]) + ("*" if j == i else "") for j in range(max(0, i - 3), min(len(events), i + 3)) if events[j].get("type") in ("message_end", "extension_ui_request", "agent_end")]
-        total = last_request + last_result // 4
-        print(f"{folder.name} task {owner[i]}: prompt before the round {last_request} tokens + result {last_result} chars (~{last_result // 4} tokens) = ~{total} vs room {ROOM}: {'does not fit' if total > ROOM else 'FITS - not the task own round'}; events {' > '.join(roles)}")
+        total = last_request + last_output + last_result // 4
+        print(f"{folder.name} task {owner[i]}: prompt before the round {last_request} tokens + the round's assistant output {last_output} + result {last_result} chars (~{last_result // 4} tokens) = ~{total} vs room {ROOM}: {'does not fit' if total > ROOM else 'FITS - not the task own round'}; events {' > '.join(roles)}")

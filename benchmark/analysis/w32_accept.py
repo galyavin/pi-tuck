@@ -20,7 +20,7 @@ chains = [f"t0{n}" for n in range(1, 6)]
 data = {(c, a): load(Path(args.root) / f"{c}-{a}") for c in chains for a in "ABCM"}
 resolved = lambda d, k: int(bool(d["tasks"][k]["grade"].get("resolved")))
 
-dead = {c: sorted(k for k in data[(c, "C")]["refused"] if k in data[(c, "C")]["tasks"] and (not sum((data[(c, "C")]["tasks"][k].get("usage") or {}).get(u, 0) for u in ("input", "output", "cacheRead")) or (k - 1) in data[(c, "C")]["refused"])) for c in chains}
+dead = {c: sorted({k for k in data[(c, "C")]["refused"] if k in data[(c, "C")]["tasks"] and (not sum((data[(c, "C")]["tasks"][k].get("usage") or {}).get(u, 0) for u in ("input", "output", "cacheRead")) or (k - 1) in data[(c, "C")]["refused"])} | {k for k, t in data[(c, "C")]["tasks"].items() if not sum((t.get("usage") or {}).get(u, 0) for u in ("input", "output", "cacheRead")) and t.get("aborted_for") != "wall"}) for c in chains}
 mid = {c: sorted(data[(c, "C")]["refused"] - set(dead[c])) for c in chains}
 print("PART 1  dead tasks in arm C:", sum(len(v) for v in dead.values()), dead, "| mid-run refusals:", sum(len(v) for v in mid.values()), mid)
 

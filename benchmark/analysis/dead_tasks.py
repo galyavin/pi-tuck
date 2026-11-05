@@ -44,7 +44,7 @@ for folder in sorted(Path(root).glob(f"t[0-9][0-9]-{arm}")):
     refused, largest = scan_events(folder)
     big = biggest_result(folder) if (folder / "events.jsonl").exists() else {}
     sent = lambda t: sum((t.get("usage") or {}).get(k, 0) for k in ("input", "output", "cacheRead")) > 0
-    dead = {k for k in refused if k in tasks and (not sent(tasks[k]) or (k - 1) in refused)}
+    dead = {k for k in refused if k in tasks and (not sent(tasks[k]) or (k - 1) in refused)} | {k for k, t in tasks.items() if not sent(t) and t.get("aborted_for") != "wall"}  # a task that ended by itself with no tokens is lost whatever the notice (2026-11-01); one that sat on an unanswered request to the wall cap is a stall, reported apart (2026-11-05)
     mid = refused - dead
     dead_total += len(dead)
     mid_total += len(mid)

@@ -91,7 +91,7 @@ def load(folder: Path):
     stats = json.loads((folder / "stats.json").read_text()) if (folder / "stats.json").exists() else None
     refused, largest = scan_events(folder)
     sent = lambda t: sum((t.get("usage") or {}).get(k, 0) for k in ("input", "output", "cacheRead")) > 0  # a request that carried tokens went out
-    dead = {k for k in refused if k in tasks and not sent(tasks[k])}  # PREREG-32K addendum: refused before any request was sent
+    dead = {k for k in refused if k in tasks and not sent(tasks[k])} | {k for k, t in tasks.items() if not sent(t) and t.get("aborted_for") != "wall"}  # PREREG-32K addendum: refused before any request was sent; and any task that ended by itself with no tokens (2026-11-01), not a stall at the wall cap (2026-11-05)
     return {"tasks": tasks, "stats": stats, "summarising": summarising_tasks(folder), "cuts": session_cuts(folder), "refused": refused, "dead": dead,
             "over_room": {t for t, n in largest.items() if n > ROOM}, "largest": max(largest.values(), default=0)}
 

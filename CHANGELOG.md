@@ -27,7 +27,10 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 ### Release gates
 
 - Passed: tests; replay of the exact build on 29 recordings (no dead task, no refused request, every oversize result clipped and read
-  back); the Pi-defaults rerun on chain t06 (RESULTS-DEFAULTS-RERUN, pending).
+  back); the Pi-defaults rerun on chain t06, which lost 28 of 30 tasks on 1.0.8: 0 dead tasks and 0 stuck sessions
+  ([`benchmark/RESULTS-DEFAULTS-1010.md`](benchmark/RESULTS-DEFAULTS-1010.md)). Two of its tasks sat on a first request the local server never
+  answered, ran to the 30-minute cap and recorded no token; they are read as server stalls, and a strict no-token count would not meet the bar.
+  One task was refused mid-run: its round carried 9,020 tokens of reasoning, so the next request was about 17,801 against the 16,384-token room.
 - **Failed as registered:** the paired 32k gate against 1.0.9 (chains t01 and t02, 60 tasks). No task was lost in either arm, but 1.0.10
   resolved 49 tasks against 50, so "resolved no lower" failed by one task (−1.7 points, one-sided 95% lower bound −8.3;
   [`benchmark/RESULTS-V110.md`](benchmark/RESULTS-V110.md)). The user approved shipping as an exception because of the small-window defect.
