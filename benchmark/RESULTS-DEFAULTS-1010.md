@@ -25,6 +25,8 @@ Three tasks decide the count: N tasks 12 and 16 and X task 21. Each ran to the 3
 
 **Arm X: the registered text does not decide it.** The counter its amendment names counts 1 dead task (task 21), which would mean it failed; the definition written in the bar counts 0, which would mean it passed. Both readings are given, and the choice goes to the user. It was not stuck.
 
+**The user's decision (2026-11-05, relayed by the CEO): arm X counts as passed, under the bar's definition ("a task lost because an earlier task or prompt failed"), so 0 lost tasks.** This is the user's decision on an ambiguous text, not a reading of mine. Both readings and the facts of task 21 stay above: it ran to the 30-minute wall cap on a first request the server never answered (1,800 s, 1 turn, no token recorded), and the next task ran normally. No rerun.
+
 The counter was refined on 2026-11-05, after the results were seen, so that a no-token task counts as dead only if it ended by itself; the refinement lowers the counts and is not used to decide anything here (`DEVIATIONS.md`, entry of 2026-11-05).
 
 ## What happened
