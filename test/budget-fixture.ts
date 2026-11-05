@@ -60,6 +60,9 @@ export interface Options {
  toolResultTokens?: (call: number) => number;
  /** Request N never answers: the stream stays open, as a stalled provider's does, until the turn is aborted. */
  neverEnds?: (request: number) => boolean;
+ /** Tokens of reply streamed to a stalling request before the transport went quiet. An aborted reply is saved with what arrived, so this is the
+  * content a run leaves on the session when its last request dies: the conversation it crosses the room on, with no run-end cut to tidy it. */
+ stallChars?: (request: number) => number;
  /** Characters of thinking on the reply to request N, as a model that replays its reasoning sends them. */
  thinkingChars?: (request: number) => number;
  /** Another extension, present beside the compactor: it appends N boundary entries at every turn end. */
@@ -113,6 +116,10 @@ export interface Options {
  usageFirst?: number;
  /** The scripted replies report usage input = the guard's last measure times this ratio, so the calibration factor ratchets. */
  usageRatio?: number;
+ /** A provider that enforces its own window: when the count its tokenizer makes of a request (the guard's measure times `usageRatio`, or the
+  * measure itself when that ratio is not a finite number above 0) exceeds the model's window, the request is refused with the overflow error
+  * instead of answered. Density above 1 then meets the window, and Pi's overflow recovery runs. */
+ rejectOverWindow?: boolean;
  /** A provider that reports no usage at all: the reply carries no usage object for pi-tuck to calibrate against. */
  noUsage?: boolean;
  /** Every scripted reply reports this many output tokens (reasoning included) beside its input usage. Pi's usage threshold counts them; the compactor's calibration does not. */
@@ -160,8 +167,11 @@ export async function harness(options: Options) {
   let uniq = 0;
   const text = (n: number) => options.oneTurn ? Array.from({ length: Math.ceil(n * 4 / 24) }, () => `item ${(++uniq).toString(36)} data;`).join(' ').slice(0, n * 4) : 'Observed mechanical test data. '.repeat(Math.ceil(n * 4 / 31)).slice(0, n * 4);
   // A text whose tool-result message estimates to exactly n tokens by Pi's own estimator.
-  const resultTokens = (t: string) => estimateTokens({ role: 'toolResult', toolCallId: 'x', toolName: 'effect', isError: false, timestamp: 0, content: [{ type: 'text', text: t }] });
   const fit = (n: number) => { let k = Math.max(1, n); for (let i = 0; i < 4; i++) k = Math.max(1, Math.round(k * n / resultTokens(text(k)))); return text(k); };
+  // Text whose own estimate is exactly `n` tokens: Pi counts a text-only message as ceil(characters / 4), so this is 4n characters of distinct
+  // content. `text(n)` under-sizes a prompt to about 0.6n, because its items are 13 characters and the estimator's length count assumes 24.
+  const sized = (n: number) => { const want = Math.max(0, Math.round(n) * 4); let s = ''; while (s.length < want) s += `item ${(++uniq).toString(36)} data; `; return s.slice(0, want); };
+  const resultTokens = (t: string) => estimateTokens({ role: 'toolResult', toolCallId: 'x', toolName: 'effect', isError: false, timestamp: 0, content: [{ type: 'text', text: t }] });
   let turns = 0;
   const cycle = (n: number) => {
    const id = `history-${++turns}`;
@@ -179,24 +189,28 @@ export async function harness(options: Options) {
   const saved = () => manager.buildSessionProjection().messages;
   const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: options.compactionEnabled ?? true, reserveTokens: options.reserveTokens ?? 32768, keepRecentTokens: options.keepRecent ?? 0 } });
   // stops records the stop reason of every reply the scripted model handed back, in order, so a caller can tell what one of its own prompts got.
-  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[] };
+  // counts records, per request, what the provider's tokenizer makes of it and whether a reply before it had reported usage (so density was known);
+  // overflows counts the requests the provider refused for size; vetoes the cuts another extension cancelled.
+  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, compacts: 0, vetoes: 0 };
   let bigResult = 1, bigText = 'x', host = options.host;
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
   const note = 'Queued operator note. ';
   const systemPrompt = 'Host input contact. ' + text(options.system ?? 12000) + 'p'.repeat(options.pad ?? 0);
   // The host's view can grow during a run (attempt effects are recorded in it).
-  const exact = (n: number) => { const t = text(n); return t.length >= n * 4 ? t.slice(0, n * 4) : t + 'z'.repeat(n * 4 - t.length); };
+  const exact = (n: number) => sized(n);
   const hostInput = () => ({ role: 'custom' as const, customType: 'host.view', content: exact(host), display: false, timestamp: 0 });
-  const probes: { at: string; complete: number; queued: number }[] = [];
+  // The request as Pi would build it, measured before the compactor is asked anything (these hooks are registered before the compactor's), with
+  // the number of requests already answered. A case that needs "the request before any cut" reads this, not the guard's post-cut measure.
+  const probes: { after: number; at: string; complete: number; queued: number }[] = [];
   let atRunEnd: { hostCalls: number; kept: number } | undefined;
   let extension: ExtensionAPI | undefined;
   const activeToolsJson = () => JSON.stringify(extension!.getAllTools().filter(t => extension!.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
   const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, systemPrompt, extensionFactories: [async pi => {
    extension = pi;
-   if (options.cancelCompact) pi.on('session_before_compact', () => ({ cancel: true }));
+   if (options.cancelCompact) pi.on('session_before_compact', () => { state.vetoes++; return { cancel: true }; });
    // Another extension at the turn boundary: it appends entries that carry no content, as a plugin writing its own boundaries does.
    if (options.turnEndEntries) pi.on('turn_end', () => { for (let i = 0; i < options.turnEndEntries!; i++) pi.appendEntry(`stress-boundary-${i}`, { at: state.requests }); });
-   if (options.onBeforeCompact) pi.on('session_before_compact', (event, ctx) => { options.onBeforeCompact!(event, ctx); });
+   pi.on('session_before_compact', (event, ctx) => { state.compacts++; if (options.onBeforeCompact) options.onBeforeCompact(event, ctx); });
    // The host's per-request view: present in every request, never in the saved conversation.
    pi.on('context', event => ({ messages: [hostInput(), ...event.messages.filter(m => !(m.role === 'custom' && m.customType === 'host.view'))] }));
    // Probes only (registered before the compactor's hooks): the complete request as the guard will count it, from Pi's own functions.
@@ -205,11 +219,11 @@ export async function harness(options: Options) {
    // A prompt's decision is made on `input`, while the session is idle (Pi 1.4 counts the run as started at before_agent_start).
    let starting = false; // as the compactor does: a message sent while a run starts joins it (Pi 1.1 still reports idle then)
    pi.on('before_agent_start', () => { starting = true; }); pi.on('agent_start', () => { starting = false; }); pi.on('agent_settled', () => { starting = false; });
-   pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; options.onPrompt?.(ctx); cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
+   pi.on('input', (event, ctx) => { if (!ctx.isIdle() || starting) return; options.onPrompt?.(ctx); cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); const messages = saved(); probes.push({ after: state.requests, at: 'prompt', queued: 0, complete: estimateTokens({ role: 'user', content: event.text, timestamp: 0 }) + referenceSystemPart(messages, ctx.getSystemPrompt(), toolsJson(), ctx.getSystemPrompt()) + hostTokens() + nonSystem(messages) }); });
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) options.onBoundary?.(event, ctx); });
    // The run's own measures, taken before the compactor's run-end cut (agent_before_settle), which `runEnd` reports apart.
    pi.on('agent_end', () => { atRunEnd = { hostCalls: state.hostCalls, kept: nonSystem(saved()) }; });
-   pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
+   pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ after: state.requests, at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
    // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
    // and `cutAtDefault` leaves it to the compactor's default.
    await installCompaction(pi, {
@@ -334,6 +348,15 @@ export async function harness(options: Options) {
   }
   const cutsBefore = manager.getEntries().filter(e => e.type === 'compaction').length;
   const rounds = options.rounds ?? 1;
+  // A provider's refusal of an oversized request: the overflow error a real transport returns. Pi ignores a reply no newer than the last cut, so
+  // the refusal is stamped after it.
+  const refuse = () => {
+   const newest = manager.getEntries().reduce((latest, e) => e.type === 'compaction' ? Math.max(latest, Date.parse(e.timestamp)) : latest, 0);
+   const failed = answer([], 'error');
+   failed.errorMessage = OVERFLOW_TEXT;
+   failed.timestamp = Math.max(Date.now(), newest + 1);
+   return failed;
+  };
   session.agent.streamFunction = (_m, _ctx, streamOptions) => {
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
    state.requests++;
@@ -344,9 +367,24 @@ export async function harness(options: Options) {
    const toolRound = options.toolCalls ? options.toolCalls(state.requests) : (options.at === 'tool' || options.at === 'tool-impossible') && state.requests <= rounds;
    if (toolRound && state.requests > 1 && !options.toolResultTokens) { bigText = text(options.laterResult ?? 100); }
    const stream = createAssistantMessageEventStream();
+   // What the provider's tokenizer makes of this request: the guard's measure of it times the density the case declares. A ratio that is not a
+   // finite number above 0 is no observation of density at all, so the count is the measure. `known` says a reply before this one reported a
+   // finite input, which is what makes the provider's density a fact of the session rather than a guess.
+   const density = Number.isFinite(options.usageRatio) && (options.usageRatio ?? 0) > 0 ? options.usageRatio! : 1;
+   const count = guard.length ? Math.ceil(guard.at(-1)! * density) : 0;
+   state.counts.push({ count, known: state.reports > 0 });
+   // A provider that enforces its own window refuses the request rather than answering it, and Pi runs its one compact-and-retry on the error.
+   if (options.rejectOverWindow && count > model.contextWindow) {
+    state.overflows++;
+    const failed = refuse();
+    stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
+   }
    // A request that never answers: nothing arrives until the turn is aborted, which is when a transport closes.
    if (options.neverEnds?.(state.requests)) {
     const stalled = answer([], 'aborted'); stalled.errorMessage = 'The stream never ended.';
+    const streamed = options.stallChars?.(state.requests);
+    // What did arrive is on the message the abort settles with, which is the message the session keeps.
+    if (streamed) { stalled.content = [{ type: 'text', text: sized(streamed) }]; stream.push({ type: 'start', partial: { ...stalled, content: [], stopReason: 'stop' } }); stream.push({ type: 'text_delta', contentIndex: 0, delta: (stalled.content[0] as { text: string }).text, partial: stalled }); }
     const close = () => { stream.push({ type: 'error', reason: 'aborted', error: stalled }); stream.end(stalled); };
     const signal = streamOptions?.signal;
     if (!signal) close(); else if (signal.aborted) close(); else signal.addEventListener('abort', close, { once: true });
@@ -365,11 +403,13 @@ export async function harness(options: Options) {
    const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
    // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
    const thinking = options.thinkingChars?.(state.requests);
-   const message = answer(thinking ? [{ type: 'thinking', thinking: text(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, toolRound ? 'toolUse' : 'stop');
+   const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, toolRound ? 'toolUse' : 'stop');
    if (options.usageFirst !== undefined && state.requests === 1) { message.usage.input = options.usageFirst; message.usage.totalTokens = options.usageFirst; }
    if (options.usageRatio !== undefined && guard.length) { message.usage.input = Math.ceil(guard.at(-1)! * options.usageRatio); message.usage.totalTokens = message.usage.input; }
    if (options.outputTokens !== undefined) { message.usage.output = options.outputTokens; message.usage.totalTokens += options.outputTokens; }
    if (options.noUsage) delete (message as { usage?: unknown }).usage;
+   // A reply that reports a finite input is the session's first proof of the provider's density; NaN, Infinity and no usage object report nothing.
+   if (Number.isFinite((message as { usage?: { input?: number } }).usage?.input)) state.reports++; else state.nonFinite++;
    stream.push({ type: 'done', reason: toolRound ? 'toolUse' : 'stop', message }); stream.end(message); return stream;
   };
   const allCompactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);
@@ -377,7 +417,7 @@ export async function harness(options: Options) {
   const runEnd = () => allCompactions().filter(isRunEnd);
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
-   dir, manager, session, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
+   dir, manager, session, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
    async run() {
     atRunEnd = undefined;
     await session!.prompt(promptText);
