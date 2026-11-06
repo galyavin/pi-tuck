@@ -60,11 +60,11 @@ test('the band: a lower F puts it at floor(F * room), and the margin still caps 
 
 test('the adaptive band uses the last cut and current system, bounded by the margin', () => {
 	expect(bandOf(65536, DEFAULT_CUT_AT)).toBe(39321);
-	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 1000, factor: 1 })).toBe(50000);
+	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 1000, factor: 1 })).toBe(39321);
 	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 30000, factor: 1 })).toBe(64225);
 	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 1000, tokensAfter: 1000, factor: 1 })).toBe(78643);
 	// Both sizes are estimates; the room is in the provider's tokens.
-	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 26000, factor: 1.2 })).toBe(90000);
+	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 26000, factor: 1.2 })).toBe(86215);
 });
 
 test('a saved cut raises the default band after reopening, while an explicit cutAt keeps its fixed band', async () => {

@@ -3,7 +3,6 @@ import { convertToLlm, estimateTokens, type BeforeAgentStartEvent, type Extensio
 import { measurableMessages, projectedMessages } from "./omissions.js";
 import type { RecallPolicy } from "./recall.js";
 import { isDiscardedResponse } from "./protocol.js";
-import { MAX_TAIL_TOKENS } from "./tuck/cut.js";
 
 /**
  * The one measure of the next request. The cut triggers, the cut planner (including the draft admission in tuck.ts), the post-cut
@@ -26,10 +25,13 @@ export const validCutAt = (value: unknown): value is number => typeof value === 
 /** The initial default cut point: 60% of the room before a usable previous cut. Measured against 1 with paired replays (no answer loss) and billed
  * input under automatic and explicit prompt caching (about 17% less at 128k, 10-14% at 32k). */
 export const DEFAULT_CUT_AT = 0.6;
+/** What a default band leaves above what the last cut left, as a share of the room: each cut then frees at least a fifth of the room. A larger share
+ * only carries more context on every request and bills more: on replay at 131,072, 25k of growth billed 9-15% more than 0.6 for no gain in safety. */
+const GROWTH_BETWEEN_CUTS = 0.2;
 export const bandOf = (room: number, cutAt = 1, adaptive?: { system: number; tokensAfter: number; factor: number }): number => {
 	const positive = Math.max(0, room);
 	const base = Math.floor(positive * cutAt);
-	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + MAX_TAIL_TOKENS) * adaptive.factor)) : base);
+	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter) * adaptive.factor + positive * GROWTH_BETWEEN_CUTS)) : base);
 };
 
 /** The APIs whose request converter (pi-ai openai-responses-shared) sends each signed thinking block back as an input reasoning item. */
