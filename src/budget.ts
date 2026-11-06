@@ -29,7 +29,7 @@ export const DEFAULT_CUT_AT = 0.6;
 export const bandOf = (room: number, cutAt = 1, adaptive?: { system: number; tokensAfter: number; factor: number }): number => {
 	const positive = Math.max(0, room);
 	const base = Math.floor(positive * cutAt);
-	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + MAX_TAIL_TOKENS) * adaptive.factor)) : base);
+	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + MAX_TAIL_TOKENS / 2) * adaptive.factor)) : base);
 };
 
 /** The APIs whose request converter (pi-ai openai-responses-shared) sends each signed thinking block back as an input reasoning item. */
