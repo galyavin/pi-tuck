@@ -54,6 +54,11 @@ class CapacityError extends Refusal {}
 export const refusalNotice = (message: string, factor: number): string =>
     message + "; shorten the input, use a model with a larger window, or lower Pi's compaction.reserveTokens, then retry." +
     (factor >= 1.5 ? ` This provider has counted up to ${factor.toFixed(1)}x the input pi-tuck estimates; through a router such as OpenRouter, a different upstream may count less.` : "");
+/** What the operator hears when the provider refuses a request pi-tuck admitted as over its window: the bound that reply puts on the counting, and
+ * what pi-tuck did with it. A bound pi-tuck cannot carry (above the ceiling) says so rather than implying the next request is planned at it. */
+export const overflowNotice = (contextWindow: number, bound: number, learned: boolean): string =>
+    `pi-tuck: the provider refused this request as over its ${contextWindow}-token window, so the input counted at least ${bound.toFixed(2)}x what pi-tuck estimated` +
+    (learned ? "; the next request is planned at that." : "; too far out to be a low estimate, so the factor is unchanged.");
 /** The most a seed or an overflow raise may set the calibration factor to. A paired reply's own ratio is not bounded by it. */
 export const CALIBRATION_CEILING = 1.5;
 /** How many recent paired replies (and overflow bounds, and the seed while it is among them) the calibration factor is the maximum of. */
@@ -232,7 +237,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             !isDeepStrictEqual(convertToLlm(paired.messages), paired.snapshot)) return;
         // The provider refused this exact request for exceeding the window: its true count was at least window + 1, a lower bound on the ratio. A
         // bound above the ceiling says the estimate is not merely low, so it is not learned: the overflow ends the attempt as it does without it.
-        if (overflow) { const candidate = (ctx.model.contextWindow + 1) / paired.tokens; if (candidate <= CALIBRATION_CEILING) learn(candidate); return; }
+        // Either way the operator hears it from pi-tuck. The estimate is what admitted the request, and a turn that ended in the provider's error
+        // with no word from pi-tuck read as a hang: every other refusal says why, and this is the path that skipped it.
+        if (overflow) {
+            const bound = (ctx.model.contextWindow + 1) / paired.tokens;
+            const learned = bound <= CALIBRATION_CEILING;
+            ctx.ui.notify(overflowNotice(ctx.model.contextWindow, bound, learned), "warning");
+            if (learned) learn(bound);
+            return;
+        }
         const usage = message.usage;
         if (!usage) return;
         const counts = [usage.input, usage.cacheRead, usage.cacheWrite];
