@@ -29,12 +29,11 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
     `pi -p` run, a refusal ends the run.
   - With a setup near the band, cuts can come too often: with Pi's defaults, a 40k setup at a 65,536 window made 25 cuts in 60 tool rounds, each
     freeing little. It costs extra work, not a task. One sampled cell at a 167,739 window also trips this count. The fix is planned for the next
-    patch. Real sessions at a 131,072 window do not reach it.
+    patch.
   - A wrong usage report at or under the window can still raise the estimate for a while: in the stress cell for it, a 6,000-token prompt is
     refused in a 28,672-token room.
 - If a provider keeps rejecting requests in a wording Pi does not class as a context overflow, or with a bare HTTP 413, pi-tuck does not recover
-  on its own: the provider's error reaches you, the session stays intact, and every prompt can fail until the request shrinks. `/compact` is
-  the way out.
+  on its own: the provider's error reaches you, the session stays intact, and every prompt can fail until the request shrinks. Try `/compact`.
 
 ### Release gates
 
