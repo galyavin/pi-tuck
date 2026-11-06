@@ -3,6 +3,52 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.11] - 2026-11-06
+
+### Fixed
+
+- A prompt that fits the room is no longer dropped when the previous summary alone fills it (the 1.0.10 known issue): a cut can now shrink a
+  summary that sits alone, when the cut is due. A prompt that fits beside the summary is sent as it stands.
+- A fresh tool result is clipped in more of the cases where the request would otherwise be refused. The clip's budget is now counted in the
+  same units as the request and allows for what the smallest cut keeps, so a round that fits only when clipped no longer ends the run. This
+  is most of the refusals the settings stress test found.
+- One wrong usage report no longer refuses later prompts: a reply that reports more than the model's window is not learned from.
+- When a provider refuses a request as over its window, pi-tuck now says so in a notice, where the turn could read as a hang.
+- Every refusal says why.
+
+### Added
+
+- A settings stress test (`test/stress`, run with `STRESS=1`): real Pi with a scripted fake model, across 272 cells of window, reserve,
+  keep-recent, output cap, setup size and usage reports. CI runs it on Pi 1.2.0 and the newest Pi. Rejection wordings and usage reports in
+  it are scripted: no hosted provider API is tested.
+
+### Known issues
+
+- Same settings stress test, this build: 4 of 272 cells report a failure (90 on 1.0.10), none stuck and none losing work. The next prompt runs.
+  - A fresh assistant message larger than the free room is refused: nothing can clip it yet. A short next prompt recovers. In an unattended
+    `pi -p` run, a refusal ends the run.
+  - With a setup near the band, cuts can come too often: with Pi's defaults, a 40k setup at a 65,536 window made 25 cuts in 60 tool rounds, each
+    freeing little. It costs extra work, not a task. One sampled cell at a 167,739 window also trips this count. The fix is planned for the next
+    patch. Real sessions at a 131,072 window do not reach it.
+  - A wrong usage report at or under the window can still raise the estimate for a while: in the stress cell for it, a 6,000-token prompt is
+    refused in a 28,672-token room.
+- If a provider keeps rejecting requests in a wording Pi does not class as a context overflow, or with a bare HTTP 413, pi-tuck does not recover
+  on its own: the provider's error reaches you, the session stays intact, and every prompt can fail until the request shrinks. `/compact` is
+  the way out.
+
+### Release gates
+
+- **Shipped without a live gate.** Its replay matches 1.0.10, so the paired live test has nothing to measure on recorded sessions; the fixes
+  act only where a request would otherwise be refused. For that reason replay cannot show them working either, and they are shown by the stress
+  test alone, on a scripted model.
+- Passed: tests; replay of the exact code on 29 recordings against 1.0.10 (13,946 requests, 0 differ, 0 dead tasks, the same 9 clips, all read
+  back); the stress test (no cell stuck, none losing work; no cell has a failure 1.0.10 does not. One cell makes 8 cuts where 1.0.10 made 6,
+  because its prompts now run instead of being refused).
+- An earlier 1.0.11 build ran Pi's defaults on chain t06 with no lost task
+  ([`benchmark/RESULTS-DEFAULTS-1010.md`](benchmark/RESULTS-DEFAULTS-1010.md)). One of its tasks, task 21, ran to the 30-minute wall cap on a
+  first request the local server never answered, and recorded no token. It is read as a server stall. It was counted as passing under the bar's
+  definition; the registered counter alone would count one dead task.
+
 ## [1.0.10] - 2026-11-05
 
 ### Fixed
