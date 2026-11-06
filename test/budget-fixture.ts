@@ -174,9 +174,13 @@ function sessionBase() {
 }
 
 export async function harness(options: Options) {
+ // A timestamp on an exact second is written 4 characters shorter (source-time.ts), which moves a summary by a token. Tests that walk a cut's edge
+ // token by token must not depend on the clock, so a message is never stamped on an exact second here.
+ const realNow = Date.now;
+ Date.now = () => { const now = realNow(); return now % 1000 ? now : now + 1; };
  const dir = mkdtempSync(join(sessionBase(), 'pi-host-input-')); let session: AgentSession | undefined;
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
- const cleanup = async () => { if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
+ const cleanup = async () => { Date.now = realNow; if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
   const runtime = await scriptedModelRuntime(options.limits, options.model), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
