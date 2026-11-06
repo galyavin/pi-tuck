@@ -1,7 +1,7 @@
 // PREREG-ABORTCHECK.md: answer.ts, unchanged in what it asks and scores, with three additions that only observe. (1) --compaction on|off picks Pi's
 // compaction setting (off is the main replay's own); (2) the pi-tuck `fail` option records every refusal the extension raises (the main replay has no
 // UI, so its notice is lost); (3) each answer record lists the requests of the session (stop reason, error text, token usage) and the compactions Pi ran.
-//   jiti benchmark/replay/abortcheck.ts RECORDING CUTS_DIR PROBES.json OUT.jsonl --agent mac-studio/main:xhigh --variant tuck-lexical --cuts 5 --tuck-dir DIR --compaction on|off
+//   jiti benchmark/replay/abortcheck.ts RECORDING CUTS_DIR PROBES.json OUT.jsonl --agent mac-studio/main:xhigh --variant tuck-lexical --cuts 5 --tuck-dir DIR --compaction on|off [--wall-minutes 15]
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -34,7 +34,7 @@ const [spec, thinking] = agentSpec.split(":");
 const runtime = await ModelRuntime.create({ authPath: join(process.env.HOME!, ".pi/agent/auth.json"), modelsPath: join(agentDir, "models.json") });
 const model = runtime.getModel(spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1));
 if (!model) throw new Error(`no model ${spec}`);
-const WALL_MS = 15 * 60_000;
+const WALL_MS = Number(option("--wall-minutes", "15")) * 60_000;
 
 const promptFor = (set: any[]) => [
 	"Before we continue, I need to check your memory of this session. Answer each question below about earlier work in this session. Use your tools if they help you find an answer. Do not modify any files.",
