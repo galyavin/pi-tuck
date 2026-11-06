@@ -13,7 +13,9 @@ from pathlib import Path
 from sessionlog import session_cuts
 
 TASK = re.compile(r"Task (\d+) of \d+")
-REFUSAL = "mandatory context cannot fit"
+# pi-tuck refuses a run with one of two notices: the request cannot fit, or it needs a cut that Pi cannot make (keepRecentTokens covers the whole session).
+# Corrected on 2026-11-01: the second text was missing, so a task refused at its prompt with it was not counted (arm C t03 task 24).
+REFUSAL = re.compile(r"mandatory context cannot fit|needs a cut and Pi has none to make")
 ROOM = 16384  # window 32,768 less the 16,384 reply reserve: the most a request may carry without the window being nominal
 
 
@@ -51,7 +53,7 @@ def scan_events(folder: Path):
     if not path.exists():
         return refused, largest
     for line in path.read_text().splitlines():
-        if REFUSAL not in line and '"usage"' not in line and "Task " not in line and "agent_" not in line:
+        if not REFUSAL.search(line) and '"usage"' not in line and "Task " not in line and "agent_" not in line:
             continue
         try:
             e = json.loads(line)
@@ -71,7 +73,7 @@ def scan_events(folder: Path):
         elif e.get("type") == "message_end" and m.get("role") == "assistant" and m.get("usage"):
             u = m["usage"]
             largest[task] = max(largest.get(task, 0), u["input"] + u.get("cacheRead", 0))
-        elif e.get("type") == "extension_ui_request" and e.get("notifyType") == "error" and REFUSAL in e.get("message", ""):
+        elif e.get("type") == "extension_ui_request" and e.get("notifyType") == "error" and REFUSAL.search(e.get("message", "")):
             if idle:
                 carry = True
             else:
@@ -89,7 +91,7 @@ def load(folder: Path):
     stats = json.loads((folder / "stats.json").read_text()) if (folder / "stats.json").exists() else None
     refused, largest = scan_events(folder)
     sent = lambda t: sum((t.get("usage") or {}).get(k, 0) for k in ("input", "output", "cacheRead")) > 0  # a request that carried tokens went out
-    dead = {k for k in refused if k in tasks and not sent(tasks[k])}  # PREREG-32K addendum: refused before any request was sent
+    dead = {k for k in refused if k in tasks and not sent(tasks[k])} | {k for k, t in tasks.items() if not sent(t) and t.get("aborted_for") != "wall"}  # PREREG-32K addendum: refused before any request was sent; and any task that ended by itself with no tokens (2026-11-01), not a stall at the wall cap (2026-11-05)
     return {"tasks": tasks, "stats": stats, "summarising": summarising_tasks(folder), "cuts": session_cuts(folder), "refused": refused, "dead": dead,
             "over_room": {t for t, n in largest.items() if n > ROOM}, "largest": max(largest.values(), default=0)}
 

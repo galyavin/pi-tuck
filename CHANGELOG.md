@@ -3,6 +3,39 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.10] - 2026-11-05
+
+### Fixed
+
+- A session no longer stays stuck when Pi's `compaction.keepRecentTokens` covers the whole conversation (the 1.0.8 and 1.0.9 known issue,
+  at Pi's defaults on small windows). The cut a prompt needs is now pi-tuck's own: it is planned when the prompt arrives, as at a tool
+  boundary, every request of that run carries it, and the run's first boundary saves it. Pi's cut finder, which keeps the last
+  keepRecentTokens and then has nothing to cut, is no longer asked. A run that ends before a boundary drops the cut, and the next prompt
+  decides afresh.
+
+### Changed
+
+- A prompt's cut no longer goes through Pi's `session_before_compact`, so another extension's veto there no longer stops it. It never
+  stopped a cut between tool rounds either. Pi's own threshold and overflow cuts, and `/compact`, still ask other extensions as before.
+
+### Known issue
+
+- When the previous summary alone fills the room and a large prompt arrives, the prompt is dropped: a cut cannot yet shrink a summary on its
+  own. 1.0.10 drops it with no message, where 1.0.9 refused it with one ("Already compacted"). The next prompt runs normally. Seen once, on a
+  25,160-character prompt at a 32k window. A fix is planned for 1.0.11.
+
+### Release gates
+
+- Passed: tests; replay of the exact build on 29 recordings (no dead task, no refused request, every oversize result clipped and read
+  back); the Pi-defaults rerun on chain t06, which lost 28 of 30 tasks on 1.0.8: 0 dead tasks and 0 stuck sessions
+  ([`benchmark/RESULTS-DEFAULTS-1010.md`](benchmark/RESULTS-DEFAULTS-1010.md)). It ran on a slow local server: 27 of 30 tasks hit the 30-minute
+  wall cap, and 2 of them sat on a first request the server never answered and recorded no token. Those 2 are read as server stalls, and a strict
+  no-token count would not meet the bar.
+  One task was refused mid-run: its round carried 9,020 tokens of reasoning, so the next request was about 17,801 against the 16,384-token room.
+- **Failed as registered:** the paired 32k gate against 1.0.9 (chains t01 and t02, 60 tasks). No task was lost in either arm, but 1.0.10
+  resolved 49 tasks against 50, so "resolved no lower" failed by one task (−1.7 points, one-sided 95% lower bound −8.3;
+  [`benchmark/RESULTS-V110.md`](benchmark/RESULTS-V110.md)). The user approved shipping as an exception because of the small-window defect.
+
 ## [1.0.9] - 2026-11-01
 
 ### Changed
@@ -18,6 +51,18 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 - `tuck_search` takes a result back as returned: each entry of `priorResults` is a source's `sourceSha` and `read`, unchanged. It asked for
   `start` and `end`, which no result carried.
 
+### Known issue
+
+- Affects 1.0.8 and 1.0.9. At a small window, Pi's default `compaction.keepRecentTokens` (20,000) can exceed pi-tuck's input room (the window
+  less the larger of `compaction.reserveTokens` and the model's maximum output; 16,384 at a 32k window with the default reserve). After a
+  run that is stopped (Esc, or a time limit) with the context above the room, every later prompt can be refused with "The request needs a cut
+  and Pi has none to make (Nothing to compact (session too small))", and the session stays stuck. Workaround until 1.0.10: set
+  `"compaction": {"keepRecentTokens": N}` in Pi's `settings.json` (or `compaction.modelOverrides["provider/model"].keepRecentTokens` for one
+  model), with N well below the room. Windows of 128k and up are not affected at the defaults. 1.0.10 is planned to fix this: pi-tuck will
+  make prompt-time cuts itself. Evidence: in one check at these defaults (1.0.8, 32k window, one session of 30 tasks, one model), 28 tasks
+  were lost ([`benchmark/RESULTS-DEFAULTS.md`](benchmark/RESULTS-DEFAULTS.md)); it shows that the failure occurs, not how often.
+
+## [1.0.8] - 2026-11-01
 
 ### Fixed
 
