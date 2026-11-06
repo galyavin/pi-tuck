@@ -29,3 +29,8 @@ Each set is **answered**, **aborted early** (an error before the wall, with the 
 ## Not claimed
 
 Only against the two comparators named, on this model, these recordings and this window; never "the best LLM compactors"; nothing about any other build; not a live-session rate of aborts (these are replays of recorded sessions with Pi's compaction on). A first, exploratory look at the 20 answer sets at cuts 5 to 8 on pi-tuck `v1.0.10` with the main replay's cuts happened before this registration; it is a diagnostic, its result is in a local note, and it is not part of this test.
+
+## Addendum 2026-11-06, before any result is read
+
+- A set that ends on a server-side error ("the inference engine stopped unexpectedly and is restarting", a refused connection, a capacity reply) is infrastructure, not an abort of the build: its record is kept aside, it is never counted as answered, aborted early or wall-bound, and it is rerun; the first record stays as evidence of the interruption. This was first seen at 14:27, when the model server's engine restarted during the run.
+- The scheduler counts every answer job of mine against one lane total and reads the allowed lanes from a file, so the lanes can be cut to 3 at the stop without restarting.
