@@ -20,6 +20,7 @@ const tuckDir = resolve(option("--tuck-dir", join(import.meta.dirname, "..", "..
 // The astra model was withdrawn by the project owner on 2026-10-31 (PREREG-TERRA.md): native-frontier is refused. native-terra is Pi's compaction prompts on GPT-6.1 Terra.
 const terra = option("--terra", "openai/gpt-6.1-terra"), terraThinking = option("--terra-thinking", "xhigh");
 const localModel = option("--local", "mac-studio/main"), localThinking = option("--local-thinking", "xhigh");
+for (const spec of [terra, localModel]) if (/openrouter/i.test(spec)) throw new Error("OpenRouter is not used: mac-studio only: " + spec);
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const { tuck, tuckObservedDraft } = await jiti.import(join(tuckDir, "src", "tuck.ts")) as any;

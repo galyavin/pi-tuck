@@ -4,6 +4,7 @@ Usage: live.py --arm A|B --session s01 --tasks ID,ID,... [--tuck PATH] [--out DI
 Writes DIR/tasks.jsonl (one record per task), DIR/events.jsonl (Pi's RPC events, streaming deltas left out), DIR/session.jsonl (the
 Pi session file, every entry kept across cuts) and DIR/patches/."""
 import argparse
+import errno
 import json
 import os
 import queue
@@ -17,12 +18,21 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import BENCH, IMAGE, RUNS, SUITES, agent_dir, dataset, sh  # noqa: E402
+from common import BENCH, IMAGE, RUNS, SUITES, TUCK_ARMS, agent_dir, assert_mac_studio_only, dataset, sh  # noqa: E402
 from prompts import tag, task_prompt  # noqa: E402
 import swe_eval  # noqa: E402
 
 TASK_WALL_SECONDS = 30 * 60
 TASK_MAX_TURNS = 120
+WALL_SECONDS = TASK_WALL_SECONDS  # --wall-seconds: 0 means no wall cap (the mac-studio rule of 2026-11-02)
+STALL_SECONDS = 0  # --stall-seconds: with no event for this long the run is aborted and the session ends as an infrastructure stall (0 = off)
+
+
+def wait_for_space(min_free_gb: int = 4):
+    """Hold a task back while the host disk is nearly full: a full disk on 2026-11-01 ended three sessions and left the Docker VM with I/O errors."""
+    while shutil.disk_usage(RUNS).free < min_free_gb * 2**30:
+        print(f"{time.strftime('%H:%M:%S')} less than {min_free_gb} GB free on the host; waiting", flush=True)
+        time.sleep(30)
 
 
 def wait_for_provider(suite: str = "main"):
@@ -61,8 +71,18 @@ class Rpc:
                 continue
             if record.get("type") != "message_update":
                 record["_t"] = time.time()
-                self.log.write(json.dumps(record) + "\n")
-                self.log.flush()
+                pending = json.dumps(record) + "\n"
+                while True:  # a full host disk is waited out, not fatal to the reader
+                    try:
+                        if pending is not None:
+                            self.log.write(pending)
+                            pending = None
+                        self.log.flush()
+                        break
+                    except OSError as error:
+                        if error.errno != errno.ENOSPC:
+                            raise
+                        time.sleep(10)
             self.events.put(record)
         self.events.put({"type": "_exit"})
 
@@ -98,7 +118,7 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
     """Prompt and wait for agent_settled, aborting past the wall or turn limit. Returns what the events say about the task."""
     while not rpc.events.empty():
         rpc.events.get_nowait()
-    started = time.time()
+    started = last_event = time.time()
     response = rpc.call({"type": "prompt", "message": prompt})
     if not response.get("success"):
         return {"error": response.get("error"), "seconds": 0}
@@ -115,11 +135,16 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
             event = rpc.events.get(timeout=5)
         except queue.Empty:
             event = None
-        if aborted_for is None and (working() > TASK_WALL_SECONDS or turns >= TASK_MAX_TURNS):
-            aborted_for = "wall" if working() > TASK_WALL_SECONDS else "turns"
+        walled = bool(WALL_SECONDS) and working() > WALL_SECONDS
+        if aborted_for is None and (walled or turns >= TASK_MAX_TURNS):
+            aborted_for = "wall" if walled else "turns"
             rpc.call({"type": "abort"})
+        if STALL_SECONDS and event is None and time.time() - last_event > STALL_SECONDS:
+            rpc.call({"type": "abort"})
+            raise RuntimeError(f"stall: no event for {STALL_SECONDS} s")  # an infrastructure stall: the chain is set aside and redone, never scored
         if event is None:
             continue
+        last_event = time.time()
         kind = event["type"]
         if kind == "_exit":
             return {"error": "pi exited", "seconds": time.time() - started}
@@ -156,31 +181,39 @@ def run_task(rpc: Rpc, prompt: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", required=True, choices=["A", "B", "C", "M", "T"])
+    parser.add_argument("--arm", required=True, choices=["A", "M", *TUCK_ARMS])
     parser.add_argument("--suite", default="main", choices=sorted(SUITES))
     parser.add_argument("--session", required=True)
     parser.add_argument("--tasks", required=True)
     parser.add_argument("--tuck", help="pi-tuck checkout or package folder (arm B)")
     parser.add_argument("--out")
+    parser.add_argument("--wall-seconds", type=int, default=TASK_WALL_SECONDS, help="wall cap per task in working seconds; 0 = none")
+    parser.add_argument("--stall-seconds", type=int, default=0, help="abort and end the session when no event arrives for this long; 0 = off")
+    parser.add_argument("--thinking", help="thinking level, overriding the suite's")
     args = parser.parse_args()
+    global WALL_SECONDS, STALL_SECONDS
+    WALL_SECONDS, STALL_SECONDS = args.wall_seconds, args.stall_seconds
     rows = dataset()
     tasks = args.tasks.split(",")
     suite = SUITES[args.suite]
+    assert_mac_studio_only(suite["model"])  # OpenRouter is not used: refuse at start
     out = Path(args.out or RUNS / suite["root"] / f"{args.session}-{args.arm}")
     (out / "patches").mkdir(parents=True, exist_ok=True)
     cwd = RUNS / "w" / f"{args.session}{args.arm}"
     cwd.mkdir(parents=True, exist_ok=True)
     container_file = out / "container"
     extensions = [str(BENCH / "harness" / "container-tools.ts")]
-    if args.arm in ("B", "C", "T"):
+    if args.arm in TUCK_ARMS:
         if not args.tuck:
-            sys.exit("arms B, C and T need --tuck")
+            sys.exit(f"arm {args.arm} needs --tuck")
         extensions.append(str(Path(args.tuck).resolve() / "index.ts"))
     if args.arm == "M":  # observation masking over Pi's own compaction (PREREG-32K.md, arm M)
         extensions.append(str(BENCH / "harness" / "mask-extension.ts"))
-    env = {**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir(args.arm, args.suite)), "TUCK_EVAL_CONTAINER_FILE": str(container_file), "TUCK_EVAL_MASK_LOG": str(out / "mask.log")}
+    agent_path = agent_dir(args.arm, args.suite)
+    assert_mac_studio_only(suite["model"], agent_path)
+    env = {**os.environ, "PI_CODING_AGENT_DIR": str(agent_path), "TUCK_EVAL_CONTAINER_FILE": str(container_file), "TUCK_EVAL_MASK_LOG": str(out / "mask.log")}
     command = ["pi", "--mode", "rpc", "--no-extensions", *sum((["-e", e] for e in extensions), []), "--no-skills", "--no-prompt-templates",
-               "--no-context-files", "--no-mcp", "--no-themes", "--session-dir", str(out / "pi-sessions"), "--model", f"{suite['model']}:{suite['thinking']}"]
+               "--no-context-files", "--no-mcp", "--no-themes", "--session-dir", str(out / "pi-sessions"), "--model", f"{suite['model']}:{args.thinking or suite['thinking']}"]
     (out / "run.json").write_text(json.dumps({"arm": args.arm, "suite": args.suite, "session": args.session, "tasks": tasks, "command": command, "tuck": args.tuck,
                                               "started": time.time()}, indent=1))
     rpc = Rpc(command, cwd, env, out / "events.jsonl")
@@ -207,6 +240,7 @@ def main():
                 pulling[tasks[index]] = prefetch.submit(pull, tasks[index])  # the next task's image downloads while this one runs
             start_container(name, instance, cwd)
             container_file.write_text(name)
+            wait_for_space()
             wait_for_provider(args.suite)
             outcome = run_task(rpc, task_prompt(args.session, index, len(tasks), row, str(cwd)))
             patch = patch_of(name, row["base_commit"])

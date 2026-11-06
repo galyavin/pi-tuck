@@ -9,6 +9,7 @@ const SPEND = join(import.meta.dirname, "..", "runs", "lme", "spend.jsonl");
 
 /** One completion; `spec` is provider/model:thinking. Every call's cost is appended to runs/lme/spend.jsonl. */
 export async function complete(spec: string, text: string, label: string): Promise<string> {
+	if (/openrouter/i.test(spec)) throw new Error("OpenRouter is not used: mac-studio only: " + spec);
 	const [id, thinking] = spec.split(":");
 	const model = runtime.getModel(id.slice(0, id.indexOf("/")), id.slice(id.indexOf("/") + 1));
 	if (!model) throw new Error(`no model ${spec}`);

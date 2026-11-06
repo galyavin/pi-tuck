@@ -4,7 +4,7 @@
 //   jiti benchmark/lme/answer.ts RECORDINGS_DIR QUESTIONS.json CUTS_ROOT OUT.jsonl --variant tuck|tuck-lexical|tuck-norecall|native|full --qids ID,ID
 //        [--agent SPEC] [--tuck-dir DIR] [--agent-dir DIR] [--warm 0|1]
 //   CUTS_ROOT holds <question_id>/cuts-<tuck|native>.json (ignored for `full`). Questions already in OUT.jsonl are skipped.
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createJiti } from "jiti";
@@ -12,6 +12,7 @@ import { createJiti } from "jiti";
 const [recDir, questionsPath, cutsRoot, outPath, ...rest] = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : fallback; };
 const agentSpec = option("--agent", "openrouter/deepseek/deepseek-v4.1-flash-1017:high");
+if (/openrouter/i.test(agentSpec)) throw new Error("OpenRouter is not used: mac-studio only: pass --agent mac-studio/main:xhigh");
 const tuckDir = resolve(option("--tuck-dir", join(import.meta.dirname, "..", "..")));
 const agentDir = resolve(option("--agent-dir", join(import.meta.dirname, "..", "runs", "agent", "L")));
 process.env.PI_CODING_AGENT_DIR = agentDir; // set before Pi or pi-tuck read it
@@ -39,6 +40,10 @@ const promptFor = (q: any) => [`Current date: ${q.question_date}.`,
 	"Answer the question below from what we discussed in our earlier conversations in this session. Use your tools if they help you find it. If the conversations do not contain the information, say that it was not mentioned. Reply with only the answer, in a sentence or two.",
 	"", `Question: ${q.question}`].join("\n");
 
+/** Work folders this run made; removed after each question and, for a crash or abort, at exit. */
+const workDirs: string[] = [];
+process.on("exit", () => { for (const d of workDirs) rmSync(d, { recursive: true, force: true }); });
+
 async function ask(qid: string) {
 	const q = questions[qid];
 	const rec = loadRecording(join(recDir, `${qid}.jsonl`));
@@ -49,6 +54,7 @@ async function ask(qid: string) {
 		entries = stateEntries(rec, cutsOf.cuts, rec.entries.length);
 	}
 	const work = mkdtempSync(join(tmpdir(), "tuck-lme-"));
+	workDirs.push(work);
 	const settings = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: true, maxRetries: 40, baseDelayMs: 5000, maxAgentDelayMs: 60000 } } as any);
 	let handle: any;
 	let activeTools: string[] | undefined;
@@ -103,6 +109,7 @@ async function ask(qid: string) {
 	const answer = session.getLastAssistantText() ?? "";
 	const semantic = handle?.semanticStatus?.()?.local;
 	session.dispose();
+	rmSync(work, { recursive: true, force: true });
 	await handle?.close?.().catch(() => {});
 	return { answer, ms: Date.now() - started, usage, tools, toolResultChars, responseIds, error, activeTools, index, semantic: semantic ? { state: semantic.state, coveredUnits: semantic.coveredUnits, totalUnits: semantic.totalUnits } : undefined };
 }

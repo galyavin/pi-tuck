@@ -14,7 +14,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from common import RUNS, SUITES  # noqa: E402
+from common import RUNS, SUITES, assert_mac_studio_only  # noqa: E402
 
 
 def finished(session: str, arm: str, root: str = "live") -> int:
@@ -31,6 +31,9 @@ def prune(session: str, tasks: list[str], removed: int, root: str = "live", arms
     return max(both, removed)
 
 
+EXTRA: list[str] = []  # options passed through to live.py: --wall-seconds, --stall-seconds, --thinking
+
+
 def chain(session: str, tasks: list[str], tucks: dict[str, str], suite: str = "main", arms: str = "AB"):
     root = SUITES[suite]["root"]
     out = {arm: RUNS / root / f"{session}-{arm}" for arm in arms}
@@ -40,7 +43,7 @@ def chain(session: str, tasks: list[str], tucks: dict[str, str], suite: str = "m
         shutil.rmtree(o, ignore_errors=True)
     procs = []
     for arm in arms:
-        cmd = [sys.executable, str(HERE / "live.py"), "--arm", arm, "--session", session, "--tasks", ",".join(tasks), "--suite", suite]
+        cmd = [sys.executable, str(HERE / "live.py"), "--arm", arm, "--session", session, "--tasks", ",".join(tasks), "--suite", suite, *EXTRA]
         if arm in tucks:
             cmd += ["--tuck", tucks[arm]]
         out[arm].parent.mkdir(parents=True, exist_ok=True)
@@ -63,11 +66,17 @@ if __name__ == "__main__":
     parser.add_argument("--suite", default="main", choices=sorted(SUITES))
     parser.add_argument("--arms", default="AB")
     parser.add_argument("--tuck-tail", help="arm T: pi-tuck with the small-window tail fix (PREREG-32K)")
+    parser.add_argument("--tuck-arm", action="append", default=[], metavar="ARM=PATH", help="pi-tuck build for one arm, e.g. D=runs/tuck-e15de72")
+    parser.add_argument("--wall-seconds", type=int)
+    parser.add_argument("--stall-seconds", type=int)
+    parser.add_argument("--thinking")
     args = parser.parse_args()
+    assert_mac_studio_only(SUITES[args.suite]["model"])  # OpenRouter is not used: refuse at start
+    EXTRA += [f"--{k.replace('_', '-')}={v}" for k, v in (('wall_seconds', args.wall_seconds), ('stall_seconds', args.stall_seconds), ('thinking', args.thinking)) if v is not None]
     plan = json.loads((HERE.parent / "data" / "sessions.json").read_text())["sessions"]
     prefix = "s" if args.suite == "main" else "t"
     wanted = args.sessions.split(",") if args.sessions else [s for s in plan if s.startswith(prefix)]
-    tucks = {"B": args.tuck, "C": args.tuck, **({"T": args.tuck_tail} if args.tuck_tail else {})}  # C: pi-tuck 1.0.3 on the main chains (PREREG-V103.md)
+    tucks = {"B": args.tuck, "C": args.tuck, **({"T": args.tuck_tail} if args.tuck_tail else {}), **dict(a.split("=", 1) for a in args.tuck_arm)}  # C: pi-tuck 1.0.3 on the main chains (PREREG-V103.md)
     with ThreadPoolExecutor(args.pairs) as pool:
         for session, status in pool.map(lambda s: chain(s, plan[s], tucks, args.suite, args.arms), wanted):
             print(session, status, flush=True)

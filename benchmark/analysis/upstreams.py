@@ -6,6 +6,7 @@ With --all every request is looked up and the per-request log is written to FOLD
 import argparse
 import json
 import os
+import sys
 import random
 import time
 import urllib.request
@@ -17,6 +18,7 @@ parser.add_argument("folders", nargs="+")
 parser.add_argument("--sample", type=int, default=40)
 parser.add_argument("--all", action="store_true")
 args = parser.parse_args()
+sys.exit("OpenRouter is not used: mac-studio only: upstreams.py calls OpenRouter's generation endpoint; recorded upstreams.jsonl files stay as evidence")
 rng = random.Random(1)
 for folder in args.folders:
     ids = []

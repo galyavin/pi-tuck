@@ -1,6 +1,6 @@
 """Export the small, publishable tables (the raw session files and events stay out of git).
 
-Usage: export_csv.py LIVE_DIR REPLAY_DIR OUT_DIR
+Usage: export_csv.py LIVE_DIR REPLAY_DIR OUT_DIR [--exclude-variant=NAME ...]
 Writes OUT_DIR/live_tasks.csv, live_cuts.csv, replay_scores.csv, replay_cuts.csv."""
 import csv
 import json
@@ -10,7 +10,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sessionlog import session_cuts  # noqa: E402
 
-live, replay, out = (Path(a) for a in sys.argv[1:4])
+positional = [a for a in sys.argv[1:] if not a.startswith("--exclude-variant=")]
+EXCLUDED = {a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--exclude-variant=")}  # variants whose rows stay out of the export (e.g. native-terra until test 1b-Terra is final)
+live, replay, out = (Path(a) for a in positional[:3])
 out.mkdir(parents=True, exist_ok=True)
 
 
@@ -41,9 +43,13 @@ for folder in sorted(p for p in replay.iterdir() if p.is_dir()):
     for f in sorted(folder.glob("scores-*.jsonl")):
         for line in f.read_text().splitlines():
             s = json.loads(line)
+            if s["variant"] in EXCLUDED:
+                continue
             scores.append([folder.name, s["variant"], s["cut"], s["agent"], s["probe"], s["type"], s["age"], s.get("task"), s["correct"], int(s["answered"]), int(s["failed"])])
     for f in sorted(folder.glob("cuts-*.json")):
         d = json.loads(f.read_text())
+        if d["variant"] in EXCLUDED:
+            continue
         for r in d["log"]:
             rcuts.append([folder.name, d["variant"], r["cut"], r["position"], r.get("preCutTokens"), r.get("ms"), r.get("carriedTokens"), r.get("summaryChars"), r.get("firstKeptIndex"), r.get("refused", "")])
 write("replay_scores.csv", ["recording", "variant", "cut", "agent", "probe", "type", "age", "task", "correct", "answered", "run_failed"], scores)
