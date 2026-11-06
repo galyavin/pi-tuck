@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, expectParity, harness, nonSystem, receiptOf, scenario } from './budget-fixture';
-import { DEFAULT_CUT_AT, TRIGGER_MARGIN_FRACTION, bandOf, decideCut, validCutAt, type Plan } from '../src/budget';
+import { DEFAULT_CUT_AT, TRIGGER_MARGIN_FRACTION, bandOf, decideCut, validCutAt, type Plan, chooseCut } from '../src/budget';
 import { installCompaction } from '../src/compaction';
 
 // The cut point `cutAt` (F): a cut is triggered at, and preferably planned to, the band min(room - margin, floor(F * room)). The exact room
@@ -371,4 +371,13 @@ test('cutAt 1 restores the earlier cut point: the same requests give the same de
 		const outcome = (r: typeof standard) => ({ cuts: r.cuts, requests: r.requests, effects: r.effects, guard: r.guard, faults: r.faults, receipts: r.entries.map(receiptOf) });
 		expect(outcome(explicit), `${at} ${complete}`).toEqual(outcome(standard));
 	}
+});
+
+test('with no explicit cut point, a cut no one needs yet must free a tenth of the room; a due cut need not', () => {
+	const input = { before: 40_000, mandatory: 8_000, room: 49_000, band: 48_020, fits: (tokens: number, limit: number) => tokens < limit, unreduced: 'x' };
+	const plan = (after: number) => () => ({ draft: true as const, after, mode: 'dialogue' });
+	expect(chooseCut({ ...input, usefulOnly: true, opportunistic: true, plan: plan(38_000) }).kind).toBe('none');
+	expect(chooseCut({ ...input, usefulOnly: true, opportunistic: true, plan: plan(30_000) }).kind).toBe('cut');
+	expect(chooseCut({ ...input, usefulOnly: true, opportunistic: false, plan: plan(38_000) }).kind).toBe('cut');
+	expect(chooseCut({ ...input, opportunistic: true, plan: plan(38_000) }).kind).toBe('cut');
 });

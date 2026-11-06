@@ -436,7 +436,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             }
             // Pi checks old history before appending a new idle prompt. During an active run/manual cut the latest admitted input stays protected.
             const decision = chooseCut({
-                before, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx),
+                before, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
                 opportunistic: thresholdOpportunistic,
                 unreduced: "Compaction did not reduce context within the estimated request budget",
                 plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>; reserve: number }> => {
@@ -496,7 +496,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (gate.kind !== "plan") return;
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
         const decision = chooseCut({
-            before, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), opportunistic: gate.opportunistic,
+            before, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined, opportunistic: gate.opportunistic,
             unreduced: "Incoming prompt compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                 const reserve = planReserve(target, room, band, mandatory, ctx);
@@ -555,7 +555,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             floorKept = undefined;
             const before = measure(saved);
             return decideCut({
-            total: before + mandatory, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx),
+            total: before + mandatory, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                 const reserve = planReserve(target, room, band, mandatory, ctx);

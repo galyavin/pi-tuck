@@ -101,6 +101,8 @@ export type Decision<D extends object = {}> =
 	| { kind: "cut"; target: Target; plan: Extract<Plan<D>, { draft: true }> }
 	| { kind: "fault"; capacity: boolean; message: string };
 export interface CutInput<D extends object = {}> {
+	/** The band adapts by itself (no explicit cut point), so a cut that isn't due must also free a tenth of the room. */
+	usefulOnly?: boolean;
 	/** Saved conversation, measured by the planner's own function. */
 	before: number;
 	/** Input that no cut can remove: system part, host input, queued messages, or the incoming prompt. */
@@ -134,12 +136,15 @@ export type Verdict<D extends object = {}> = Exclude<Decision<D>, { kind: "defer
 export function chooseCut<D extends object = {}>(input: CutInput<D> & { opportunistic: boolean }): Verdict<D> {
 	const { before, mandatory, room, band, fits, plan, unreduced } = input;
 	const lands = (p: Plan<D>): p is Extract<Plan<D>, { draft: true }> => p.draft && p.after < before && fits(p.after + mandatory, band);
+	// A cut no one needs yet must be worth its summary: one that frees under a tenth of the room would trigger again within a round or two.
+	// Without this, a band at the cap takes the room plan on every round where free room is small. A due cut is not asked: it has to happen.
+	const worthwhile = (p: Extract<Plan<D>, { draft: true }>) => !input.usefulOnly || !input.opportunistic || !fits(10 * (before - p.after), room);
 	let roomPlan: Plan<D> | undefined;
 	const exact = () => roomPlan ??= plan("room");
-	if (band >= bandOf(room)) { const e = exact(); if (lands(e)) return { kind: "cut", target: "room", plan: e }; }
+	if (band >= bandOf(room)) { const e = exact(); if (lands(e) && worthwhile(e)) return { kind: "cut", target: "room", plan: e }; }
 	const preferred = plan("band");
 	if (input.opportunistic) {
-		if (!lands(preferred)) return { kind: "none" };
+		if (!lands(preferred) || !worthwhile(preferred)) return { kind: "none" };
 		const e = exact();
 		return e.draft && e.mode === preferred.mode ? { kind: "cut", target: "band", plan: preferred } : { kind: "none" };
 	}
