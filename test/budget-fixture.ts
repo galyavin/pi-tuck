@@ -141,6 +141,8 @@ export interface Options {
  systemTokens?: number;
  /** The wording a request over the window comes back with, as the provider in question words its refusal. */
  rejectWith?: string;
+ /** The HTTP status the transport reports beside that wording (a gateway's bodyless 413 carries none). */
+ rejectStatus?: number;
  /** A server that does not refuse an oversize request: it keeps the end of it and answers as if nothing had happened. 'stop' reports input usage
   * equal to the window; 'lengthZero' is the variant Pi lists for Xiaomi, a stop at length, no output, and the window reported as input. */
  truncateOverWindow?: 'stop' | 'lengthZero';
@@ -176,7 +178,9 @@ export async function harness(options: Options) {
   if (!options.limits && !options.model) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
   // A reopened session has to be a persisted one, so its entries reach a file and come back from it.
   let manager = options.reopen ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
-  const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return { role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } }; };
+  // A complete assistant message of this content. `replyOf` builds one without recording it, for measuring a reply that has not been sent yet.
+  const replyOf = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
+  const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return replyOf(content, stopReason); };
   // Repeated text lets the compactor summarize almost everything away; unique text (oneTurn) makes the cut keep as much as the plan allows.
   let uniq = 0;
   const text = (n: number) => options.oneTurn ? Array.from({ length: Math.ceil(n * 4 / 24) }, () => `item ${(++uniq).toString(36)} data;`).join(' ').slice(0, n * 4) : 'Observed mechanical test data. '.repeat(Math.ceil(n * 4 / 31)).slice(0, n * 4);
@@ -427,7 +431,7 @@ export async function harness(options: Options) {
    const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
    // A reply whose own body is large arrives with the round, so it is in the next request before any cut can reach it.
    if (options.replyTokens && toolRound) reply.unshift({ type: 'text', text: sized(Math.max(0, Math.round(options.replyTokens(state.requests)))) });
-   state.assistantSizes[state.requests - 1] = est({ role: 'assistant', content: reply, timestamp: 0 });
+   state.assistantSizes[state.requests - 1] = est(replyOf(reply, toolRound ? 'toolUse' : 'stop'));
    // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
    const thinking = options.thinkingChars?.(state.requests);
    const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, toolRound ? 'toolUse' : 'stop');
