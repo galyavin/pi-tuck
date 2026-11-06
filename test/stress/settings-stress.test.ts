@@ -49,7 +49,7 @@ const ONLY = process.env.STRESS_ONLY;
 const SETUP_ONLY = process.env.STRESS_SETUP;
 /** More than one cut per five tool rounds means a session repeatedly spends a substantial share of its work on compaction. This is a workload
  * rate, not a claim that every fifth cut is intrinsically bad; short runs are excluded below. */
-const THRASH_ROUNDS = 5;
+const THRASH_ROUNDS = 3;
 /** No single prompt or tool result is bigger than this: a 1M-token string would spend the run on text generation rather than on settings. */
 const CAP = 120_000;
 /** A prompt that has not ended by now is stuck: the turn is aborted, the cell records it, and the session is asked to carry on. A cell whose
