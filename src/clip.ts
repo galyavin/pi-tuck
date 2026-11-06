@@ -26,7 +26,7 @@ const clipped = (text: string, keep: number, entryId: string): ToolResultMessage
 export const clipBudgets = (room: number, factor: number, mandatory: number, kept?: number): number[] => {
     const free = Math.floor(room / Math.max(1, factor)) - mandatory;
     if (free <= 0) return [];
-    return [...new Set(kept === undefined ? [Math.floor(free / 2)] : [Math.floor(free / 2), free - kept])].filter(budget => budget > 0);
+    return [...new Set(kept === undefined ? [Math.floor(free / 2)] : [Math.floor(free / 2), free - kept - 1])].filter(budget => budget > 0);
 };
 
 /** The round's text results within `budget` tokens together: each result smaller than an equal share of what is left stays whole, and the

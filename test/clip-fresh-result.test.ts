@@ -40,6 +40,23 @@ test('a fresh result larger than the room is clipped in the request, not refused
 	} finally { await h.cleanup(); }
 }, 120000);
 
+test('a floor that includes a fresh result sizes the retry without counting that result twice', async () => {
+	const h = await harness({ at: 'tool', limits: { contextWindow: 65005, maxTokens: 11523 }, reserveTokens: 3,
+		compaction: { requestReserve: () => ({ response: 11523, responseExact: true as const }) },
+		systemTokens: 5469, host: 614, history: 10000, fresh: 16499, complete: 62049,
+		keepRecent: 65430, usageRatio: 1.099, rounds: 1, liveTools: true });
+	const requests: string[] = [];
+	h.extension().on('context_with_system', event => { requests.push(JSON.stringify(event.messages)); });
+	try {
+		const run = await h.run();
+		expect(run.faults, run.probe).toEqual([]);
+		expect(run.requests, run.probe).toBe(2);
+		expect(requests.at(-1)).toContain('tuck_recall');
+		const receipt = h.manager.getBranch().findLast(entry => entry.type === 'message' && entry.message.role === 'toolResult');
+		expect(receipt && JSON.stringify(receipt)).not.toContain('are not shown');
+	} finally { await h.cleanup(); }
+}, 120000);
+
 // eval live32 t01-C task 2: one reply's three parallel bash calls, none larger than the room alone, too large together.
 test('a round of parallel results shares the budget: the small one stays whole, the large ones are clipped, and the round fits', () => {
 	const round = [result('a', 18223), result('b', 27178), result('c', 5395)];
@@ -92,7 +109,7 @@ test('the clip budget converts the provider room by the factor before halving it
 // (free 7,320, quote 6,614, result 3,517), where the request was refused although clipping the round to 706 fits it.
 test('a round the half leaves whole is clipped to what the smallest cut leaves of the free room', () => {
 	const budgets = clipBudgets(7320, 1, 0, 6614);
-	expect(budgets).toEqual([3660, 706]);
+	expect(budgets).toEqual([3660, 705]);
 	const one = [result('r', 14000)];
 	const size = conversationTokens(one as never);
 	expect(size).toBeGreaterThan(budgets[1]!);

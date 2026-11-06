@@ -18,9 +18,8 @@ export type Measure = (messages: AgentMessage[]) => number;
 /** The summary view that produced a draft: the whole pre-cut dialogue, or the same dialogue shrunk to the allowance. Both carry the file ledger. */
 export type DraftMode = "dialogue" | "shrunk";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
-    // `floorTokens` is what the smallest cut leaves the request besides the conversation it drops - the summary floor and its quote of the
-    // prompt - measured by the same preview as the cut itself, so a caller can size what is left against it instead of guessing.
-    | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean; floorTokens?: number };
+    // The actual floor projection lets the caller measure it without the fresh results it may clip.
+    | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean; floorMessages?: AgentMessage[] };
 interface SearchHit { index: number; role: string; summary: string }
 export interface RecallContinuation { query: string; throughEntryId: string; offset: number }
 /** Includes JSON escaping, hit metadata and continuation, not just excerpt text. */
@@ -222,7 +221,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const model = ctx.model;
     const floorAt = (keep: number) => {
         const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        return { ledger, base: measure(preview(serializeTranscript([...mandatory, ...ledger]) + DIALOGUE_SUFFIX)) };
+        const messages = preview(serializeTranscript([...mandatory, ...ledger]) + DIALOGUE_SUFFIX);
+        return { ledger, messages, base: measure(messages) };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
     // When the whole floor cannot fit, the trail and the ledger keep only their headings and counts; only that can refuse the cut.
@@ -230,7 +230,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (!fits(floor.base) && (items.length || actions.length)) floor = floorAt(0);
     const { ledger, base } = floor;
     if (!model || !fits(base))
-        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorTokens: base };
+        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorMessages: floor.messages };
     const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
     const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entryById.get(id)!)), receiptContext,
         ranking: { maxBriefChars, mandatorySourceIndices: new Set(mandatory.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },
@@ -268,7 +268,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const { summary, after } = offer ?? assemble(tuck.compileShrunkDialogue(compileInput));
     // Draft reduction concerns conversation. Final request admission owns the effective system/tools.
     if (after + reserveTokens >= model.contextWindow || after >= before)
-        return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow };
+        return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floor.messages };
     const mode: DraftMode = offer ? "dialogue" : "shrunk";
 	return { compaction: { summary, firstKeptEntryId: cut.firstKeptEntryId, tokensBefore: input.tokensBefore, details: { ...details, tokensAfter: after, view: offer ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
     };

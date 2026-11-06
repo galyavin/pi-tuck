@@ -553,7 +553,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
                 if (!draft.compaction) {
                     // The planner's own floor, so a clip's second budget is measured against what the smallest cut really keeps.
-                    if (draft.floorTokens !== undefined) floorKept = Math.min(floorKept ?? draft.floorTokens, draft.floorTokens);
+                    if (draft.floorMessages && event.toolResults) {
+                        const fresh = new Set(event.toolResults.map(result => result.toolCallId));
+                        const kept = measure(draft.floorMessages.filter(message =>
+                            !(message.role === "toolResult" && fresh.has((message as ToolResultMessage).toolCallId))));
+                        floorKept = Math.min(floorKept ?? kept, kept);
+                    }
                     return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 }
                 const header = ctx.sessionManager.getHeader();
