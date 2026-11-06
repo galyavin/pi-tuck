@@ -12,7 +12,7 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 - A fresh tool result is clipped in more of the cases where the request would otherwise be refused. The clip's budget is now counted in the
   same units as the request and allows for what the smallest cut keeps, so a round that fits only when clipped no longer ends the run. This
   is most of the refusals the settings stress test found.
-- One wrong usage report no longer refuses later prompts: a reply that reports more than the model's window is not learned from.
+- A reply that reports more than the model's window no longer raises pi-tuck's estimate for later requests.
 - When a provider refuses a request as over its window, pi-tuck now says so in a notice, where the turn could read as a hang.
 - Every refusal says why.
 
@@ -30,8 +30,8 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   - With a setup near the band, cuts can come too often: with Pi's defaults, a 40k setup at a 65,536 window made 25 cuts in 60 tool rounds, each
     freeing little. It costs extra work, not a task. One sampled cell at a 167,739 window also trips this count. The fix is planned for the next
     patch.
-  - A wrong usage report at or under the window can still raise the estimate for a while: in the stress cell for it, a 6,000-token prompt is
-    refused in a 28,672-token room.
+  - A reply that reports more than the window reads to Pi as a silent overflow, so Pi asks for a recovery cut. When nothing can be cut, pi-tuck
+    refuses the next prompt: in the stress cell for it, a 6,000-token prompt in a 28,672-token room. The prompt after that runs.
 - If a provider keeps rejecting requests in a wording Pi does not class as a context overflow, or with a bare HTTP 413, pi-tuck does not recover
   on its own: the provider's error reaches you, the session stays intact, and every prompt can fail until the request shrinks. Try `/compact`.
 
