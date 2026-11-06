@@ -18,7 +18,9 @@ export type Measure = (messages: AgentMessage[]) => number;
 /** The summary view that produced a draft: the whole pre-cut dialogue, or the same dialogue shrunk to the allowance. Both carry the file ledger. */
 export type DraftMode = "dialogue" | "shrunk";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
-    | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean };
+    // `floorTokens` is what the smallest cut leaves the request besides the conversation it drops - the summary floor and its quote of the
+    // prompt - measured by the same preview as the cut itself, so a caller can size what is left against it instead of guessing.
+    | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean; floorTokens?: number };
 interface SearchHit { index: number; role: string; summary: string }
 export interface RecallContinuation { query: string; throughEntryId: string; offset: number }
 /** Includes JSON escaping, hit metadata and continuation, not just excerpt text. */
@@ -228,7 +230,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (!fits(floor.base) && (items.length || actions.length)) floor = floorAt(0);
     const { ledger, base } = floor;
     if (!model || !fits(base))
-        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow) };
+        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorTokens: base };
     const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
     const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entryById.get(id)!)), receiptContext,
         ranking: { maxBriefChars, mandatorySourceIndices: new Set(mandatory.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },

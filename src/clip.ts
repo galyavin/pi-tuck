@@ -16,6 +16,19 @@ const clipped = (text: string, keep: number, entryId: string): ToolResultMessage
         `tuck_recall {"entryId":"${entryId}","offset":${head}}, up to ${MAX_RECALL_CHARACTERS} characters a call]\n` + text.slice(text.length - tail) }];
 };
 
+/** The budgets to offer a fresh round the room cannot hold whole, in the units the round and the mandatory input are counted in, tried in order.
+ * The room is the provider's, so it is divided by the factor the provider's counts have been running at - the same conversion the planner's own
+ * reserve makes (budget.ts) - before the input no cut can remove is taken out; counting the provider's room against an estimate asks the round for
+ * more than the room holds at a factor above 1. The first try is half of what that leaves. `kept` is what the smallest cut leaves the request
+ * besides the fresh results - the summary floor and its quote of the prompt - measured from the planner's own preview, not a new formula: a half
+ * cannot spend it, so the second try is the whole free room less it. Omit it when the planner bailed before building a preview, and only the half
+ * is tried. Nothing is offered when the mandatory input alone leaves no room. */
+export const clipBudgets = (room: number, factor: number, mandatory: number, kept?: number): number[] => {
+    const free = Math.floor(room / Math.max(1, factor)) - mandatory;
+    if (free <= 0) return [];
+    return [...new Set(kept === undefined ? [Math.floor(free / 2)] : [Math.floor(free / 2), free - kept])].filter(budget => budget > 0);
+};
+
 /** The round's text results within `budget` tokens together: each result smaller than an equal share of what is left stays whole, and the
  * rest are clipped to that share, keeping the most head and tail characters that fit it. None when the round already fits, or when a share
  * cannot hold even the locator. A round of one result gets the whole budget. Deterministic: the same round and budget always clip the same way. */

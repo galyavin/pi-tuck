@@ -5,10 +5,10 @@ import { exportSource } from "./source-export.js";
 import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
-import { applyClips, clipFor, type Clip } from "./clip.js";
+import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
 import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
-import { isContextOverflow } from "@earendil-works/pi-ai";
+import { isContextOverflow, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
@@ -521,7 +521,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const queued = event.context.pendingMessages.length ? conversationTokens(event.context.pendingMessages as Messages) : 0;
         const mandatory = system + host + queued;
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
+        // The cut previews this decision has built, in the order it built them. The clip retry below measures them for what a cut leaves the
+        // request besides the fresh results. Reset per decision, so a retry sizes itself against the cut it is retrying, not an earlier attempt's.
+        let previews: Messages[] = [];
+        let floorKept: number | undefined;
         const decide = () => {
+            previews = [];
+            floorKept = undefined;
             const before = measure(saved);
             return decideCut({
             total: before + mandatory, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx),
@@ -529,29 +535,41 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                 const reserve = planReserve(target, room, mandatory, ctx);
                 const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
-                if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
+                if (!draft.compaction) {
+                    // The planner's own floor, so a clip's second budget is measured against what the smallest cut really keeps.
+                    if (draft.floorTokens !== undefined) floorKept = Math.min(floorKept ?? draft.floorTokens, draft.floorTokens);
+                    return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
+                }
                 const header = ctx.sessionManager.getHeader();
                 if (!header) throw new Error("Missing native session header at tool-loop boundary");
                 const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...ctx.sessionManager.getBranch()]);
                 preview.appendCompaction(draft.compaction.summary, draft.compaction.firstKeptEntryId, before, draft.compaction.details, true);
                 const messages = preview.buildSessionProjection().messages;
                 assertNativeToolRounds(messages);
+                previews.push(messages);
                 return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve };
             },
             });
         };
         let decision = decide();
-        // Only a request that would be refused is clipped. A fresh result is kept whole by every cut (it has not reached the model yet), so
-        // a round larger than the room refuses the run. In their place the request carries the results' heads and tails, together at most
-        // half of what the room leaves the conversation, each with a tuck_recall locator to its rest. When even that is refused the refusal stands.
+        // Only a request that would be refused is clipped. A fresh result is kept whole by every cut (it has not reached the model yet), so a round
+        // larger than the room refuses the run; in its place the request carries the result's head and tail with a tuck_recall locator to the rest.
+        // clipBudgets states the budgets tried and why they are counted in the estimate's units; `kept` is measured from the previews this decision
+        // built, so the second budget is the cut's own floor and not a new formula. When nothing is clipped or the decision still faults, the
+        // refusal stands.
         if (decision.kind === "fault" && event.toolResults) {
             const branch = ctx.sessionManager.getBranch();
             const entryIdOf = (toolCallId: string) => branch.findLast(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === toolCallId)?.id;
-            const round = clipFor(event.toolResults, entryIdOf, Math.floor((room - mandatory) / 2));
-            if (round.length) {
+            const fresh = new Set(event.toolResults.map(result => result.toolCallId));
+            const kept = previews.length ? Math.min(...previews.map(preview => measure(preview.filter(message =>
+                !(message.role === "toolResult" && fresh.has((message as ToolResultMessage).toolCallId)))))) : floorKept;
+            for (const budget of clipBudgets(room, factor, mandatory, kept)) {
+                const round = clipFor(event.toolResults, entryIdOf, budget);
+                if (!round.length) continue;
                 for (const clip of round) clips.set(clip.toolCallId, clip);
                 const clippedDecision = decide();
-                if (clippedDecision.kind === "fault") for (const clip of round) clips.delete(clip.toolCallId); else decision = clippedDecision;
+                if (clippedDecision.kind === "fault") for (const clip of round) clips.delete(clip.toolCallId);
+                else { decision = clippedDecision; break; }
             }
         }
         const before = measure(saved);
