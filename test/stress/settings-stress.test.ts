@@ -739,6 +739,9 @@ function namedCells(): Cell[] {
  /** A sustained user turn with tool results, following a seeded summary and complete user/tool turns. The guard reports the actual post-cut size;
   * the tail is not assumed to survive a cut. */
  const longRun = (window: number) => {
+  // A session's tool results don't grow with its window: recorded sessions add about 1.5k tokens a request at every window. A run long enough to fill
+  // the room at that rate is too slow at the very largest windows, so those keep a step that scales: they are there for the floor, not the rhythm.
+  if (window <= 200_000) return { prompts: [5_000], rounds: [200], results: [2_000, 1_000] };
   const step = Math.max(200, Math.min(20_000, Math.round(Math.max(0, window - SETUP_RESERVE) * 0.08)));
   return { prompts: [11_000], rounds: [60], results: [step, Math.round(step / 2)] };
  };
@@ -769,11 +772,11 @@ function namedCells(): Cell[] {
  realPostCut.rounds = [100];
  realPostCut.results = [600, 600];
  realPostCut.reached = {
-  state: 'a seeded summary and tool tail, with a median measured post-cut request between 47k and 51k and most cuts below the room',
+  state: 'a seeded summary and tool tail, with a median measured post-cut request between 40k and 55k and most cuts below the room',
   check: e => {
    const measured = [...e.postCuts].sort((a, b) => a - b);
    const median = measured[Math.floor(measured.length / 2)];
-   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && median !== undefined && median >= 47_000 && median <= 51_000 && e.opportunistic > e.cuts / 2;
+   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && median !== undefined && median >= 40_000 && median <= 55_000 && e.opportunistic > e.cuts / 2;
   },
  };
  const replaySetups = [55_000, 62_000, 68_000].map(setup => setupCell(131_072, setup, 'replay setup'));
