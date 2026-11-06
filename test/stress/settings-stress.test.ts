@@ -17,15 +17,21 @@
  *
  *   STRESS=1 npx vitest run test/stress
  *   STRESS=1 STRESS_CELLS=20 STRESS_REPORT=1 npx vitest run test/stress
+ *   STRESS=1 STRESS_SETUP=1 npx vitest run test/stress
  *
  * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures to test/stress/failures.json,
  * STRESS_TRACE="a piece of a cell name" prints what happened to each of that cell's prompts, and STRESS_STRICT=1 turns the table into a failing
  * run. Without STRESS_STRICT the run reports: a finding is a finding whether or not it is fixed yet, and the grid keeps running after the first.
+ * STRESS_SETUP="a piece of a cell name" runs only the cells that carry a setup size — the sampled ones and the named grid — which is the part that
+ * answers whether setup size and thrash are the real bottleneck; the rest of the grid is skipped, so one command finishes inside a minute or two.
  */
 import { afterAll, expect, test } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { est, harness, nonSystem, type Options } from '../budget-fixture';
+import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
+// The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
+import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 
 const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const CELLS = Math.max(1, Number(process.env.STRESS_CELLS) || 200);
@@ -33,10 +39,17 @@ const SEED = (Number(process.env.STRESS_SEED) || 0x5eed) >>> 0;
 const REPORT = process.env.STRESS_REPORT;
 /** Make the table a gate. Off by default, so a known finding does not turn every run red before it is fixed. */
 const STRICT = /^(1|true|yes)$/i.test(process.env.STRESS_STRICT ?? '');
+/** Ten sampled cells, evenly spaced, are run twice and compared as the named ones are; a seeded grid must give the same answer on the same seed. */
+const SAMPLE_EVERY = Math.max(1, Math.floor(CELLS / 10));
 /** Trace one cell by a piece of its name: STRESS_TRACE="cell 1" prints what happened to each of its prompts. */
 const TRACE = process.env.STRESS_TRACE;
 /** Run only the cells whose name contains this, to work one finding at a time: STRESS_ONLY="keepRecent 2x". */
 const ONLY = process.env.STRESS_ONLY;
+/** Run only the cells whose name contains this, and for the sampled grid any cell that carries a sampled setup: STRESS_SETUP=setup, STRESS_SETUP=provider. */
+const SETUP_ONLY = process.env.STRESS_SETUP;
+/** A cut is thrash when the run takes more than one per this many tool rounds. A cut that frees less than a round's worth of context leaves the
+ * session cutting again on the next request, and a replay that cuts 21-37 times per 100 turns spends its whole budget on summaries. */
+const THRASH_ROUNDS = 3;
 /** No single prompt or tool result is bigger than this: a 1M-token string would spend the run on text generation rather than on settings. */
 const CAP = 120_000;
 /** A prompt that has not ended by now is stuck: the turn is aborted, the cell records it, and the session is asked to carry on. A cell whose
@@ -46,17 +59,47 @@ const PROMPT_MS = 60_000;
 /** The fixture's model, which every cell that does not name another goes out on. */
 const DEFAULT_API = 'openai-codex-responses (openai-codex/gpt-6.1-sol)';
 
-type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'notice' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
+type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'notice' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
 type Failure = { cell: string; rule: Rule; message: string; params: Record<string, unknown> };
 const failures: Failure[] = [];
 const ran: string[] = [];
 /** What the grid actually reached, so a run that cut nothing is visible as one that tested nothing. */
-const cov = { cells: 0, room: 0, cut: 0, cuts: 0, answered: 0, refused: 0, aboveRoom: 0, overflows: 0 };
+const cov = { cells: 0, room: 0, cut: 0, cuts: 0, answered: 0, refused: 0, aboveRoom: 0, overflows: 0, truncations: 0, clips: 0 };
 /** Coverage describes a cell, not a run of it: outside STRESS_STRICT every named cell runs three times, and the re-runs are a second opinion on the
  * same settings rather than new ground, so only the first run of each name counts here. */
 const covCounted = new Set<string>();
 /** Every model API the run went out on, so the summary says which ones the numbers came from. */
 const apis = new Set<string>();
+/** One row per named setup cell: the point is to see a run that is near the limit and still under it, which a pass/fail table cannot show. */
+interface SetupRow { name: string; window: number; setup: number; floor: number; room: number; band: number; rounds: number; cuts: number; perRound: number; nextShare: number; meanFreed: number; thrashes: boolean }
+// ---- setup size ----
+// A Scoops replay at 131k spends about 24k of a 53k post-cut context on setup, and each cut frees only about 16k, so the setup and the band together
+// decide what a session has left to work with. The sampled grid ties setup to the window, so it never shows that; the setup cells cross five setup
+// sizes with four windows at Pi's own defaults: reserve 16,384, output cap 8,192, keepRecent 20,000.
+const SETUP_RESERVE = 16_384;
+const SETUP_MAX = 8_192;
+const SETUP_KEEP = 20_000;
+const SETUP_SIZE = 24_000;
+/** What the fixture adds to a setup whatever its size: the tool schemas the host registers, the overhead of the system message, and its own heading.
+ *  Measured off a run with a token-exact system prompt, so a cell that names a setup of 24,000 carries a request whose setup part measures 24,000; the
+ *  setup table prints the measured floor beside the setup each cell asked for, which is the check that holds. The fixture's `system` option does not
+ *  count what a real setup counts: it sizes the prompt with `text()`, whose items are 13 characters against the 24 the estimator's length count
+ *  assumes, so the prompt comes out at about 0.6 of the number asked for. A setup cell asks for `systemTokens` instead. */
+const SETUP_SCHEMA = 52;
+/** What a probe assumes a request costs before any conversation at a given setup: the setup the cell names plus the round that produced the message.
+ *  The probe replaces it with the guard's own measure, which is what every room rule in this file is judged on. */
+const SETUP_OVERHEAD = 1_500;
+
+
+const setupRows: SetupRow[] = [];
+/** One row per provider cell: what the scripted provider really did, and whether pi-ai's own classifier called it a context overflow. That answer
+ *  decides whether the host runs its one compact-and-retry at all, and it is pi-ai's fact rather than this test's, so the run prints it. */
+interface ProviderRow { name: string; saw: string; pi: number }
+const providerRows: ProviderRow[] = [];
+/** The builders of the cells whose sizes depend on the floor pi-tuck's guard measures. `namedCells()` fills this in and the test runs each one twice:
+ *  a probe to measure the floor, then the cell at that floor. */
+const calibrationCells: ((floor: number) => Cell)[] = [];
+const setupSeen = new Set<string>();
 /** The report goes to stderr: a reporter that hides a passing test's stdout must still show the summary line and the table of failures. */
 const report = (line: string) => { process.stderr.write(`${line}\n`); };
 
@@ -94,8 +137,19 @@ interface Evidence {
  aborts: number;
  /** Requests the provider refused for exceeding its own window, vetoes of `session_before_compact`, and replies that reported no usage. */
  overflows: number;
+ /** How many of the replies this run kept pi-ai's own isContextOverflow classes as a context overflow, at the cell's window. Which wordings and
+  *  which truncations Pi reads as an overflow decides whether the host retries at all, so the provider cells name it. */
+ piOverflow: number;
  vetoes: number;
  nonFinite: number;
+ /** Requests a server took over its own window and answered anyway, and requests that went out carrying a clipped fresh result. */
+ truncations: number;
+ clips: number;
+ /** The largest fresh tool result and the largest fresh assistant body the run sent: the two sizes a cut cannot reach. */
+ maxFresh: number;
+ maxAssistant: number;
+ /** The largest calibration factor the run produced, which is what turns pi-tuck's measure into the provider's count. */
+ maxFactor: number;
  notices: number;
  faults: number;
  /** What a prompt threw inside the host, for the case that is about the host refusing before pi-tuck is asked anything. */
@@ -110,6 +164,11 @@ interface Cell {
  window: number;
  /** pi-tuck's reserve setting; the room is the window less the larger of this and the model's output cap. */
  reserve: number;
+ /** The setup the run carries: system message plus tool schemas plus the host's view. Sampled cells leave this unset and scale it with the window;
+  * the setup grid names it, because a replay at 131k spends about 24k of a 53k post-cut context on setup and each cut frees only about 16k. */
+ setup?: number;
+ /** True for the sampled grid, so a rule can reach those cells by their shape rather than by their name. */
+ sampled?: boolean;
  keepRecent: number;
  /** The model's own maximum reply length. */
  maxTokens: number;
@@ -134,7 +193,13 @@ interface Cell {
  hostFault?: string;
  /** The state this cell exists to exercise. Without it the cell can pass having tested nothing, which is worse than failing. */
  reached?: Reached;
+ /** Clear what the cell records for itself. The harness state is built fresh for every run, and a cell that runs twice - the determinism repeat -
+  * must not read a state its own first run recorded. */
+ reset?: () => void;
  extra?: Partial<Options>;
+ /** A run that exists to measure the request, not to test anything: no finding is counted from it, no coverage and no setup row. The cells whose sizes
+  * depend on the floor pi-tuck measures are built twice, once as a probe and once at the floor the probe measured. */
+ probe?: boolean;
 }
 
 const base = (name: string, over: Partial<Cell>): Cell => {
@@ -169,17 +234,20 @@ function sample(i: number): Cell {
  const room = Math.max(0, window - Math.max(reserve, maxTokens));
  const keepRecent = Math.round(r.uniform(0, 2 * room));
  const usageRatio = Number(r.uniform(0.7, 1.5).toFixed(3));
- // The system part and the host's view scale with the window: a fixed 12,000-token prompt would leave a 4,000-token window nothing to test.
- const system = Math.min(12_000, Math.max(200, Math.round(window * 0.08)));
- const host = Math.min(6_000, Math.max(50, Math.round(window * 0.03)));
+ // Setup size is its own axis, sampled log-uniform from 1,000 to 60,000. Tying it to the window at 8% hid the case a replay shows: at 131k about
+ // 24k of a 53k post-cut context is setup, and each cut frees only about 16k, so the setup and the band, not the window, decide what is left.
+ const setup = Math.round(r.log(1_000, 60_000));
+ const host = Math.max(50, Math.round(setup * 0.1));
+ const system = Math.max(200, setup - host - SETUP_SCHEMA);
  const sizes = [0.02, 0.2, 0.55, 1.15, 0.03, 0.35].map(f => Math.max(20, Math.min(CAP, Math.round(room * f))));
  const rounds = [0, 1, 2, 0, 1, 3].map(k => Math.max(0, k + r.int(-1, 1)));
  const results = [0.05, 0.15, 0.3].map(f => Math.max(20, Math.min(CAP, Math.round(room * f))));
  return {
-  name: `cell ${i} (window ${window}, reserve ${reserve}, keepRecent ${keepRecent}, maxTokens ${maxTokens}, usage ${usageRatio})`,
-  window, reserve, keepRecent, maxTokens, usageRatio, system, host, prompts: sizes, rounds, results,
-  // With no room at all, nothing but a refusal is possible, and the rules below say so by arithmetic rather than by exemption.
-  why: room <= 0 ? 'the reserve and the output cap leave no room at all' : undefined,
+  name: `cell ${i} (window ${window}, setup ${setup}, reserve ${reserve}, keepRecent ${keepRecent}, maxTokens ${maxTokens}, usage ${usageRatio})`,
+  window, reserve, keepRecent, maxTokens, usageRatio, system, host, setup, sampled: true, prompts: sizes, rounds, results,
+  // With no room at all, nothing but a refusal is possible, and the rules below say so by arithmetic rather than by exemption. A setup at or above
+  // the room is the same kind of arithmetic: the request has no conversation left to cut, so the only answer is a refusal.
+  why: room <= 0 ? 'the reserve and the output cap leave no room at all' : setup >= room ? 'the setup alone leaves no room for a conversation' : undefined,
  };
 }
 
@@ -202,15 +270,27 @@ async function drive(h: Harness, body: string, ms: number): Promise<'ended' | 'h
 const stripTimes = (s: string) => s.replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, 'T').replace(/\b01[0-9A-HJKMNP-TV-Z]{24}\b/g, 'ID').replace(/\b[0-9A-HJKMNP-TV-Z]{26}\b/g, 'ID');
 
 /** Run one cell: six prompts of mixed size with tool rounds of mixed result size, and every rule applied as it goes. */
-async function runCell(cell: Cell): Promise<Run> {
+ async function runCell(cell: Cell): Promise<Run> {
+ if (!cell.probe) return runCellInner(cell);
+ // A probe measures the request and nothing else: no finding is counted from a cell that was built for a floor the guard has not measured yet.
+ const counting = COUNT; COUNT = false;
+ try { return await runCellInner(cell); } finally { COUNT = counting; }
+}
+
+async function runCellInner(cell: Cell): Promise<Run> {
  const t0 = Date.now();
+ cell.reset?.();
  const reserve = Math.max(cell.reserve, cell.maxTokens);
  const room = cell.window - reserve;
+ // The point a cut aims under: pi-tuck's band, which is what a setup at or above it leaves nothing to cut into.
+ const band = bandOf(Math.max(0, room), DEFAULT_CUT_AT);
  // A non-finite usage number is no observation at all, so it counts as 1.
  const factor = Number.isFinite(cell.usageRatio) ? Math.max(1, cell.usageRatio!) : 1;
  let startReq = 0, roundEnd = 0;
  const h = await harness({
-  at: 'prompt', complete: Math.max(2_000, cell.window), host: cell.host, noHistory: true, oneTurn: true, system: cell.system,
+  // The setup the cell carries: the system message, and the host's view of the conversation, which together stand in for a real system prompt and
+  // its tool schemas. A cell that names a setup gets exactly that much setup; the sampled grid scales it with the window.
+  at: 'prompt', complete: cell.setup ?? Math.max(2_000, cell.window), host: cell.host, noHistory: true, oneTurn: true, systemTokens: cell.system,
   limits: { contextWindow: cell.window, maxTokens: cell.maxTokens },
   reserveTokens: cell.reserve, keepRecent: cell.keepRecent, usageRatio: cell.usageRatio,
   // The provider counts by its own tokenizer and holds its window: a request whose count passes it comes back as an overflow, not an answer.
@@ -220,11 +300,11 @@ async function runCell(cell: Cell): Promise<Run> {
   ...cell.extra,
  });
  const guard: number[] = [], summaries: string[] = [], stops: string[] = [], counts: { count: number; known: boolean }[] = [];
- const promptSizes: number[] = [], resultSizes: number[] = [], threw: string[] = [], promptRequests: number[] = [];
+ const promptSizes: number[] = [], resultSizes: number[] = [], threw: string[] = [], promptRequests: number[] = [], resultCounts: number[] = [];
  // Compactions this cell saved, run-end cuts included: a cut that closes a run is still a cut the session keeps.
  const cutStart = h.manager.getEntries().filter(e => e.type === 'compaction').length;
  const savedCuts = () => h.manager.getEntries().filter(e => e.type === 'compaction').length - cutStart;
- let answered = 0, refused = 0, hung = 0, cuts = 0;
+ let answered = 0, refused = 0, hung = 0, cuts = 0, piOver = 0;
  if (TRACE && cell.name.includes(TRACE)) report(`trace cell ${cell.name}: window=${cell.window} reserve=${cell.reserve} keepRecent=${cell.keepRecent} maxTokens=${cell.maxTokens} usage=${cell.usageRatio} system=${cell.system} host=${cell.host} prompts=${JSON.stringify(cell.prompts)} rounds=${JSON.stringify(cell.rounds)} results=${JSON.stringify(cell.results)}`);
  try {
   // What a request costs before any conversation: the system part, the tools and the host's view. A cut removes conversation, never this.
@@ -240,7 +320,7 @@ async function runCell(cell: Cell): Promise<Run> {
    promptSizes.push(tokens);
    const ms = cell.stallPrompt === i + 1 ? cell.abortAfter ?? 1_500 : PROMPT_MS;
    startReq = h.state.requests; roundEnd = startReq + (cell.rounds[i] ?? 0);
-   const seen = { requests: h.state.requests, notices: h.notices.length, faults: h.faults.length, guard: h.guard.length, stops: h.state.stops.length, results: h.state.results.length, counts: h.state.counts.length };
+   const seen = { requests: h.state.requests, notices: h.notices.length, faults: h.faults.length, guard: h.guard.length, stops: h.state.stops.length, results: h.state.results.length, counts: h.state.counts.length, clips: h.state.clips, answers: h.state.answers.length };
    const outcome = await drive(h, body, ms);
    threw.push(lastThrew);
    const requests = h.state.requests - seen.requests;
@@ -252,10 +332,19 @@ async function runCell(cell: Cell): Promise<Run> {
    const charged = h.state.counts.slice(seen.counts, seen.counts + requests);
    counts.push(...charged);
    promptRequests.push(requests);
+   // A tool round is a round where the model asked for work and a result came back: that is the denominator the thrash rule counts, not the requests a
+   // turn cost, which also counts the plain answer that closes the turn.
+   resultCounts.push(h.state.results.length - seen.results);
    resultSizes.push(...h.state.results.slice(seen.results));
    // The turn answered if an assistant message this turn produced ended normally: a tool round ends with toolUse, the last message of the whole
    // session can belong to an earlier prompt, and a cut can drop messages, so the message's own time is what ties it to this turn.
    const stopped = h.state.stops.slice(seen.stops);
+   // Whether pi-ai classes what came back as an overflow is a fact of pi-ai, not of this test: it decides whether the host runs its one
+   // compact-and-retry at all, so each provider cell names the classification it expects and a wrong guess shows up as a hollow cell. The fixture
+   // hands over the message exactly as the scripted model returned it, which is the message the host reads.
+   // pi-ai reads message.usage without guarding it, so asking it about a reply that reported no usage throws - which is the host fault the
+   // "no usage reported" cell names, and a classification question only for a reply that got far enough to carry a usage object.
+   for (const reply of h.state.answers.slice(seen.answers)) if (reply.usage && isContextOverflow(reply, cell.window)) piOver++;
    const stoppedLast = stopped.at(-1);
    stops.push(outcome === 'hung' ? 'hung' : stoppedLast ?? 'none');
    if (outcome === 'hung') hung++;
@@ -277,16 +366,31 @@ async function runCell(cell: Cell): Promise<Run> {
    if (h.faults.length > seen.faults) record(cell, 'refusal', `pi-tuck faulted in a state the host itself cannot carry: ${h.faults.at(-1)}`);
   }
   if (!cell.hostFault && wasRefused && h.notices.length === seen.notices) record(cell, 'notice', `prompt ${i + 1} was refused (stop ${stopped.join(',') || 'none'}, ${requests} requests) with no notice to the operator`, { prompt: i + 1, tokens, requests });
-  // The prompt alone fits the room when the request it would make, at the reserve the session must hold and the counting factor the provider's
-  // own usage implies, stays inside the window. The turn's own tool results count too: a cut never drops the prompt it answers or a result that
-  // has not reached the model yet, so a run whose turn is bigger than the room is refused whatever the prompt alone weighs.
-  const carried = h.state.results.slice(seen.results).reduce((a, b) => a + b, 0);
-   // The smallest request that can answer this prompt: the mandatory part, the prompt, the results the turn already holds, and a summary that
-   // quotes the prompt verbatim as its contract requires, with room for its headings and counts. If that fits the room, refusing is not the last
-   // resort: some cut could have carried it.
-  const smallest = floor + 2 * tokens + carried + 200 + Math.floor(room * 0.05);
-  const fitsAlone = Math.ceil(smallest * factor) + reserve < cell.window - 64;
-   if (!cell.hostFault && wasRefused && fitsAlone && !cell.why) record(cell, 'refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, carried ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, carried, floor, smallest, room, factor });
+  // A refusal is only the last resort when nothing that fits the room can answer the prompt. The bound is the smallest request that could:
+  // the mandatory part, the prompt, a summary that quotes the prompt verbatim as its contract requires with room for its headings, and the fresh
+  // messages the turn has produced. A mid-run cut carries the prompt once, as that quote, so the prompt is counted once and not twice. A fresh
+  // tool result can be clipped since 1.0.8, so it counts at 200 tokens rather than at its own size. A fresh assistant message can be clipped by
+  // nothing and dropped by no cut, so it counts whole. Then the factor the provider's own usage implies, and the reserve the session must hold.
+  const fresh = h.state.results.slice(seen.results);
+  const carried = h.state.assistantSizes.slice(seen.requests, h.state.requests).reduce((a, b) => a + b, 0);
+  const smallest = Math.ceil((floor + tokens + 200 + carried + 200 * fresh.length) * factor);
+  const fitsAlone = smallest + reserve < cell.window - 64;
+  // pi-tuck sizes a clip at half the room its own measure leaves (src/compaction.ts). The provider counts that clipped round at the factor, so a
+  // clip sized without the factor can still go over the window; if a clip sized to the room the provider actually leaves would have fit, the clip
+  // budget is the reason the run refused, and a refusal is a finding whether or not a clip was tried.
+  const clipAware = Math.floor((room - Math.ceil(floor * factor)) / 2);
+  const afterClip = Math.ceil((floor + tokens + 200 + carried + Math.max(0, clipAware)) * factor);
+  const clipWouldFit = fresh.length > 0 && afterClip + reserve < cell.window - 64;
+  // A fresh assistant body above the free room as pi-tuck estimates it, but below the free room as the provider counts it, is a message the cut
+  // that answers this round cannot see coming: pi-tuck planned the request before the model wrote the body that overflows it.
+  const freeRoom = Math.floor(room / factor) - floor;
+  const freshAssistant = Math.max(0, ...h.state.assistantSizes.slice(seen.requests, h.state.requests));
+  // The claim is that the model's own reply overflowed a room pi-tuck thought it had, so there must be such a room and such a reply: a run whose
+  // setup already leaves nothing free is the arithmetic case, and a reply of no content is not the cause of anything.
+  const assistantOverRoom = freeRoom > 0 && freshAssistant > 0 && freshAssistant > freeRoom && freshAssistant < room - floor;
+  if (!cell.hostFault && wasRefused && !cell.why && assistantOverRoom) record(cell, 'fresh-room', `prompt ${i + 1} was refused on a fresh assistant body of ${freshAssistant} tokens, above the free room as pi-tuck estimates it (${freeRoom}) and below what the room holds at the provider's count (${room - floor}): nothing clips or cuts a fresh assistant message, so the run stopped where the model's own reply overflowed`, { prompt: i + 1, tokens, freshAssistant, freeRoom, floor });
+  else if (!cell.hostFault && wasRefused && !cell.why && fitsAlone && clipWouldFit) record(cell, h.state.clips > seen.clips ? 'clip-room' : 'no-clip', `prompt ${i + 1} of ${tokens} tokens was refused although a clip sized to the room the provider leaves would fit (${afterClip} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), floor ${floor}, clip budget ${Math.max(0, clipAware)} against pi-tuck's own ${Math.floor((room - floor) / 2)}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, floor, afterClip, clipAware, room, factor });
+  else if (!cell.hostFault && wasRefused && fitsAlone) record(cell, 'refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
    if (!cell.hostFault && (wasRefused || outcome === 'hung')) {
     // Nothing may leave a session unable to take the next prompt: a short one has to get through, when the room can hold it at all — which
     // means beside the conversation the failure left behind, not only beside the prompt.
@@ -303,7 +407,43 @@ async function runCell(cell: Cell): Promise<Run> {
     summaries.push(cut.summary);
    }
    cuts = h.compactions().length;
-   if (TRACE && cell.name.includes(TRACE)) report(`trace p${i + 1}: tokens=${tokens} requests=${requests} stop=${stopped.join(',') || 'none'} peak=${peak} floor=${floor} room=${room} cuts=${savedCuts()} notice=${h.notices.length} counts=${JSON.stringify(charged)} probes=${JSON.stringify(h.probes.slice(probeStart))} threw=${lastThrew.slice(0, 900)} ${(h.faults.at(-1) ?? 'no fault').slice(0, 500)}`);
+   if (TRACE && cell.name.includes(TRACE)) report(`trace p${i + 1}: tokens=${tokens} requests=${requests} stop=${stopped.join(',') || 'none'} peak=${peak} floor=${floor} room=${room} cuts=${savedCuts()} notice=${h.notices.length} counts=${JSON.stringify(charged)} probes=${JSON.stringify(h.probes.slice(Math.max(probeStart, h.probes.length - 6)))} threw=${lastThrew.slice(0, 900)} ${(h.faults.at(-1) ?? 'no fault').slice(0, 500)}`);
+  }
+  // Thrash: cuts against rounds, counted from the run's first cut. A cut that lands under the band and is followed by another cut on the very next
+  // request freed less than the round it answered, so the session pays a summary for every round of work. Nothing is exempt: a setup at or above the
+  // band is exactly the case under test. Cuts and fresh messages are indexed by context build, since a refused build is a step the session took too.
+  const rounds = resultCounts.reduce((a, b) => a + b, 0);
+  // Builds are 0-based context builds, one per request. `cutCounts[j]` is the compactions saved when build j was measured, and the probe runs before
+  // pi-tuck's own hook in the same event, so build j is the last build still measured at full size and build j+1 the first measured after the cut: the
+  // cut removed what those two builds differ by, once the messages the turn added between them are put back.
+  const builds = h.state.cutCounts;
+  const cutBuilds: number[] = [];
+  for (let j = 0; j < builds.length; j++) if (builds[j] > (j === 0 ? cutStart : builds[j - 1])) cutBuilds.push(j);
+  // What lands in the conversation as build j is built: the reply to the request before it and the result of the round that reply asked for. Putting
+  // them back on the earlier side is what makes two neighbouring builds a like-for-like comparison.
+  const freshInto = (j: number) => h.state.results.reduce((sum, size, k) => sum + (h.state.resultAt[k] === j ? size : 0), 0) + (h.state.assistantSizes[j - 1] ?? 0);
+  // A cut shows in the guard as a request smaller than the one before it, which the session alone cannot do: between two builds the conversation only
+  // grows. The manager records a saved summary a build after the request it produced, so the shrink, not the count, marks the build a cut first
+  // reached. Only a shrink next to a recorded cut counts, since clipping a fresh result makes a request smaller too.
+  const shrinks = new Set<number>();
+  for (const c of cutBuilds) {
+    if (c - 1 > 0 && h.guard[c - 1] < h.guard[c - 2]) shrinks.add(c - 1);
+    else if (c > 0 && h.guard[c] !== undefined && h.guard[c - 1] !== undefined && h.guard[c] < h.guard[c - 1]) shrinks.add(c);
+  }
+  const freed = [...shrinks].sort((a, b) => a - b).map(j => h.guard[j - 1] + freshInto(j) - h.guard[j]);
+  const meanFreed = freed.length ? Math.round(freed.reduce((a, b) => a + b, 0) / freed.length) : 0;
+  const nextShare = cutBuilds.length ? cutBuilds.filter(j => cutBuilds.includes(j + 1)).length / cutBuilds.length : 0;
+  // The rate needs a run long enough to be a rate: one cut in three rounds says nothing, so the rule reaches runs of at least 12 tool rounds, named or
+  // sampled, and exempts nothing else. A setup at or above the band is exactly the case under test.
+  const thrashApplies = rounds >= 12;
+  const cutsAt = builds.length ? Math.max(cutBuilds.length, builds[builds.length - 1] - cutStart) : 0;
+  const thrashes = thrashApplies && cutsAt * THRASH_ROUNDS > rounds;
+  if (thrashApplies && thrashes) record(cell, 'thrash', `${cutsAt} cuts in ${rounds} tool rounds is more than one per ${THRASH_ROUNDS}: the mean cut freed ${meanFreed} tokens against a band of ${band} and a setup of ${cell.setup ?? floor}, and ${Math.round(nextShare * 100)}% of cuts were followed by another cut on the very next request`, { window: cell.window, setup: cell.setup ?? floor, band, rounds, cuts: cutsAt, meanFreed, nextShare });
+  // The table covers the named setup cells and any sampled run long enough for the thrash rule to reach it; a sampled cell of six rounds is a rate
+  // measured over nothing, and the sampled grid is reported by the coverage line.
+  if (cell.setup !== undefined && !cell.probe && (cell.name.startsWith('setup ') || rounds >= 12) && !setupSeen.has(cell.name)) {
+   setupSeen.add(cell.name);
+   setupRows.push({ name: cell.name, window: cell.window, setup: cell.setup, floor, room, band, rounds, cuts: cutsAt, perRound: rounds ? cutsAt / rounds : 0, nextShare, meanFreed, thrashes });
   }
   // The cell's own claim, read off what happened rather than what was asked for. A cell that never reached its state tested nothing, and that is
   // a finding about the test: it is recorded so it cannot hide behind a clean table.
@@ -312,25 +452,42 @@ async function runCell(cell: Cell): Promise<Run> {
     window: cell.window, reserve, room, factor, floor, savedStart, savedRoles, guard, counts,
     probes: h.probes.slice(probeStart), prompts: promptSizes, results: resultSizes, requests: promptRequests, cuts: savedCuts(),
     answered, refused, hung, aborts: h.state.aborts, overflows: h.state.overflows, vetoes: h.state.vetoes,
+    truncations: h.state.truncations, clips: h.state.clips, piOverflow: piOver, maxFresh: Math.max(0, ...h.state.results), maxAssistant: Math.max(0, ...h.state.assistantSizes),
+    maxFactor: Math.max(1, ...h.state.counts.map((c, k) => c.known ? c.count / Math.max(1, h.guard[k]) : 1)),
     nonFinite: h.state.nonFinite, notices: h.notices.length, faults: h.faults.length, threw: threw.filter(Boolean).join(' | '),
    };
+   if (cell.name.startsWith('provider:') && !covCounted.has(cell.name)) {
+    providerRows.push({
+     name: cell.name.slice('provider: '.length),
+     saw: h.state.truncations ? `truncated ${h.state.truncations}x` : `rejected ${e.overflows}x`,
+     pi: e.piOverflow,
+    });
+   }
    if (!cell.reached.check(e)) {
-    const numbers = `room=${room} floor=${floor} saved=${savedStart} prompts=${JSON.stringify(promptSizes)} results=${JSON.stringify(resultSizes)} guard=${JSON.stringify(guard)} probes=${JSON.stringify(e.probes)} cuts=${e.cuts} answered=${answered} refused=${refused} hung=${hung} aborts=${e.aborts} overflows=${e.overflows} vetoes=${e.vetoes} counts=${JSON.stringify(counts)}`;
+    const numbers = `room=${room} band=${band} floor=${floor} saved=${savedStart} prompts=${JSON.stringify(promptSizes)} results=${JSON.stringify(resultSizes)} guard=${JSON.stringify(guard)} probes=${JSON.stringify(e.probes)} cuts=${e.cuts} rounds=${rounds} fresh=${e.maxFresh} assistant=${e.maxAssistant} truncations=${e.truncations} clips=${e.clips} piOverflow=${e.piOverflow} answered=${answered} refused=${refused} hung=${hung} aborts=${e.aborts} overflows=${e.overflows} vetoes=${e.vetoes} counts=${JSON.stringify(counts)}`;
     record(cell, 'hollow', `the run never reached the state the cell names (${cell.reached.state}): ${numbers}`, { room, floor, savedStart, cuts: e.cuts });
    }
-   if (TRACE && cell.name.includes(TRACE)) report(`trace reached ${cell.reached.check(e)}: ${cell.reached.state} ms=${Date.now() - t0}`);
+   if (TRACE && cell.name.includes(TRACE)) report(`trace reached ${cell.reached.check(e)}: ${cell.reached.state} ms=${Date.now() - t0} cutBuilds=${JSON.stringify(cutBuilds)} freed=${JSON.stringify(freed)} guard=${JSON.stringify(guard.slice(0, 40))}`);
   }
   cuts = savedCuts();
  } finally { await h.cleanup(); }
  const summary = { cells: 1, room: room > 0 ? 1 : 0, cut: cuts > 0 ? 1 : 0, cuts, answered, refused, aboveRoom: h.probes.filter(p => p.at === 'prompt' && p.complete > room).length, overflows: h.state.overflows };
- if (!covCounted.has(cell.name)) { covCounted.add(cell.name); cov.cells++; cov.room += summary.room; cov.cut += summary.cut; cov.cuts += summary.cuts; cov.answered += answered; cov.refused += refused; cov.aboveRoom += summary.aboveRoom; cov.overflows += summary.overflows; }
+ if (!cell.probe && !covCounted.has(cell.name)) { covCounted.add(cell.name); cov.cells++; cov.room += summary.room; cov.cut += summary.cut; cov.cuts += summary.cuts; cov.answered += answered; cov.refused += refused; cov.aboveRoom += summary.aboveRoom; cov.overflows += summary.overflows; cov.truncations += h.state.truncations; cov.clips += h.state.clips; }
  const summariesText = summaries.map(stripTimes).join('\n');
  const payload = JSON.stringify({ guard, stops, summariesText, faults: h.faults, notices: h.notices });
- return { digest: createHash('sha256').update(payload).digest('hex').slice(0, 16), guard, stops, summariesText, faults: [...h.faults], notices: [...h.notices] };
+ return { digest: createHash('sha256').update(payload).digest('hex').slice(0, 16), guard, stops, summariesText, faults: [...h.faults], notices: [...h.notices], prompts: promptSizes };
+}
+
+/** What a request at this setup costs before any conversation: the guard's own measure of the smallest request that carried a prompt, less that
+ *  prompt. Only a run can say, because it is the guard's measure, not the fixture's arithmetic, that every room rule is judged on. */
+function measuredFloor(run: Run) {
+ const smallest = Math.min(...run.prompts);
+ const carrying = run.guard.filter(v => v >= smallest);
+ return carrying.length ? Math.min(...carrying) - smallest : 0;
 }
 
 /** What one run of a cell is held to: the sizes it asked the model with, the answers it got, what it saved and what it said. */
-interface Run { digest: string; guard: number[]; stops: string[]; summariesText: string; faults: string[]; notices: string[] }
+interface Run { digest: string; guard: number[]; stops: string[]; summariesText: string; faults: string[]; notices: string[]; prompts: number[] }
 
 /** Two runs of one cell match when every quantity agrees. A saved summary quotes entry ids, and those are fresh every run, so a count may move
  * by a few tokens; anything larger is the same input giving a different answer. */
@@ -349,9 +506,27 @@ function divergence(a: Run, b: Run): string | undefined {
  return undefined;
 }
 
+/** Off while the determinism repeats re-judge the same cell: their findings are counted once, from the first run, and a violation that shows only on a
+ * repeat is reported as nondeterminism rather than as a second failure of the same rule. */
+let COUNT = true;
+
 function record(cell: Cell, rule: Rule, message: string, params: Record<string, unknown> = {}) {
+ if (!COUNT) return;
  failures.push({ cell: cell.name, rule, message, params: { api: cell.api ?? DEFAULT_API, ...params } });
  if (failures.length <= 60) report(`FAIL [${rule}] ${cell.name}: ${message}`);
+}
+
+/** Run a cell twice more and compare the two. The repeats re-judge the same cell, so their findings are not counted again; only a difference between
+ * them is reported, as nondeterminism. */
+async function repeat(cell: Cell) {
+ COUNT = false;
+ let diff: string | undefined;
+ try {
+  const a = await runCell(cell);
+  const b = await runCell(cell);
+  diff = divergence(a, b);
+ } finally { COUNT = true; }
+ if (diff) record(cell, 'determinism', `the same settings answered differently: ${diff}`);
 }
 
 /** The named states, each one run whatever the grid samples. Each says what it exists to exercise and proves at the end that it got there. */
@@ -503,6 +678,132 @@ function namedCells(): Cell[] {
   ...grow(roomOf({ window: 32_768, reserve: 4_096, maxTokens: 4_096 }), 1.05), extra: { turnEndEntries: 3 },
   reached: cutAtLeast('boundary entries appended at turn_end'),
  });
+ /** Enough tool rounds to run the trigger four times over where the setup leaves room. Each round adds a prompt and a result of 2% of the room, and a
+  * cut lands the context back on the band at 60% of the room, so a cycle is about ten rounds: 60 rounds is six cycles, past the three the brief asks
+  * for. Where the setup leaves no room the same run is arithmetic, and the cell says so in its own `reached`. */
+ const longRun = (window: number) => {
+  const step = Math.max(200, Math.round(Math.max(0, window - SETUP_RESERVE) * 0.02));
+  return { prompts: Array.from({ length: 60 }, () => step), rounds: Array.from({ length: 60 }, () => 1), results: [step] };
+ };
+ const setupReached = (setup: number, band: number, room: number): Reached => ({
+  state: `at least one cut with the setup of ${setup} below the band of ${band}, or a noticed refusal where the setup leaves no room of ${room}`,
+  check: e => setup < band ? e.cuts >= 1 : setup >= room ? e.refused >= 1 && e.notices > 0 : e.cuts >= 1 || (e.refused >= 1 && e.notices > 0),
+ });
+ const setupCell = (window: number, setup: number, label = 'Pi defaults'): Cell => {
+  const room = window - SETUP_RESERVE;
+  return base(`setup ${setup} at window ${window} (${label})`, {
+   window, reserve: SETUP_RESERVE, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup,
+   system: Math.max(200, setup - 500 - SETUP_SCHEMA), host: 500, // the host's view is 500 tokens and the schemas cost SETUP_SCHEMA, so the request's setup part measures the setup the cell names
+   ...longRun(window),
+   reached: setupReached(setup, bandOf(Math.max(0, room), DEFAULT_CUT_AT), room),
+   // A setup at or above the room is arithmetic, like a cell whose reserve leaves no room: the request has no conversation left to cut.
+   why: setup >= room ? 'the setup alone leaves no room for a conversation' : undefined,
+  });
+ };
+ const setupGrid = [2_000, 12_000, 24_000, 40_000, 60_000].flatMap(setup => [32_768, 65_536, 131_072, 1_000_000].map(window => setupCell(window, setup)));
+ // R&D's replay on real recordings: the same settings at the windows those sessions actually ran at, where 1.0.10 cut 21-37 times per 100 turns and
+ // 17-33% of cuts were followed by another cut on the very next request. Those windows answer to the same rules as every other cell.
+ const replayWindows = [57_344, 61_440, 73_728, 81_920].map(window => setupCell(window, SETUP_SIZE, 'replay window'));
+ const replaySetups = [55_000, 62_000, 68_000].map(setup => setupCell(131_072, setup, 'replay setup'));
+ // The replay's second prompt: at 131,072 with a 68k setup the second prompt is refused with "Complete Pi context and response reserve exceed", which
+ // is Pi's own check rather than pi-tuck's. The cell asks only that the session says so, in words, and takes the prompt after it.
+ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)', {
+  window: 131_072, reserve: SETUP_RESERVE, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: 68_000, system: 68_000 - 500 - SETUP_SCHEMA, host: 500,
+  prompts: [40_000, 40_000, 300], rounds: [1, 0, 0], results: [2_000],
+  // On 1.0.10 the second prompt was refused with "Complete Pi context and response reserve exceed", which is Pi's own check rather than pi-tuck's. What
+  // the cell holds either way is that a second prompt of the size that refused forces a cut or a refusal with a notice, and that the session takes the
+  // short prompt after it: a run that let the prompt through untouched tested nothing about the replay.
+  reached: { state: 'a second prompt of the size the replay refused at, cut or refused with a notice', check: e => (e.cuts >= 1 || (e.refused >= 1 && e.notices > 0)) && e.answered >= 3 },
+ });
+ // A fresh tool result and a fresh assistant body are the two sizes no cut drops and no request arrives without. Both cells put one just above the
+ // free room as pi-tuck estimates it — the room divided by the factor the provider's usage implies, less the mandatory part — and below what the room
+ // actually holds, which is the band where a clip should carry the round and a refusal is a finding.
+ const freshBand = (window: number, ratio: number, floor: number) => {
+  const room = window - SETUP_RESERVE;
+  return { room, estimated: Math.floor(room / ratio) - floor, actual: room - floor };
+ };
+ const freshResult = (window: number, ratio: number, floor: number): Cell => {
+  const { room, estimated, actual } = freshBand(window, ratio, floor);
+  const size = Math.max(200, Math.round((estimated + actual) / 2));
+  // pi-tuck clips a fresh result to half the room its own measure leaves (src/compaction.ts), and sizes the request it sends at the provider's count.
+  // The prompt therefore has to be small enough that a clip sized to the room the provider actually leaves would still fit: otherwise the prompt alone
+  // busts the room and the refusal is arithmetic, not the clip budget. The 400 is the summary heading and the slack of the bound that reads the run.
+  const clipAware = Math.floor((room - Math.ceil(floor * ratio)) / 2);
+  const prompt = Math.max(200, Math.min(2_000, Math.floor(room / ratio) - floor - clipAware - 400));
+  return base(`setup ${SETUP_SIZE} with a fresh result of ${size} above the estimated room at window ${window} (factor ${ratio})`, {
+   window, reserve: SETUP_RESERVE, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: SETUP_SIZE, system: SETUP_SIZE - 500 - SETUP_SCHEMA, host: 500,
+   usageRatio: ratio, prompts: [prompt, 200], rounds: [1, 0], results: [size],
+   // The inequality is checked against what the request measured, not only against what the cell asked for: the conversation the prompt left behind is
+   // read off the guard's own measure of the request the result went into, so the free room is the one pi-tuck had in front of it.
+   reached: { state: `a fresh result of ${size} above the free room as pi-tuck estimates it and below what the room holds`, check: e => freshResultFits(e, size) },
+  });
+ };
+ const freshAssistant = (window: number, ratio: number, floor: number, reserve = SETUP_RESERVE): Cell => {
+  const { estimated, actual } = freshBand(window, ratio, floor);
+  const size = Math.max(200, Math.round(estimated * 1.05));
+  return base(`setup ${SETUP_SIZE} with a fresh assistant body of ${size} above the estimated room at window ${window} (factor ${ratio})`, {
+   window, reserve, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: SETUP_SIZE, system: SETUP_SIZE - 500 - SETUP_SCHEMA, host: 500,
+   usageRatio: ratio, prompts: [200, 200], rounds: [1, 0], results: [200], extra: { replyTokens: request => (request === 1 ? size : 0) },
+   reached: { state: `a fresh assistant body of ${size} above the free room as pi-tuck estimates it and below what the room holds`, check: e => freshBodyFits(e, size) },
+  });
+ };
+ // ---- provider behaviour, faked ----
+ // Real-provider checks are barred, so these cells are the only coverage of provider behaviour and no test here calls a hosted API. The scripted
+ // model speaks the provider's own words: these are the strings Pi lists in pi-ai's utils/overflow.js, sent when the request is over the window.
+ // Each cell makes the request go over by the tokenizer's density, which is how it happens in the field: the guard's measure stays inside the room
+ // and the provider's count is over its window. The first request of a session is planned before any usage has reported a factor, so pi-tuck sends it
+ // without knowing, and what the session does next is the finding.
+ const providerCell = (label: string, extra: Partial<Options>, over: Partial<Cell> = {}): Cell => base(`provider: ${label}`, {
+  window: 16_384, reserve: 2_048, maxTokens: 2_048, system: 600, host: 400, usageRatio: 1.9,
+  prompts: [9_000, 300, 300], rounds: [0, 0, 0], results: [], reached: { state: 'a request the scripted provider rejected for its own window, in wording pi-ai classes as an overflow', check: e => e.overflows >= 1 && e.piOverflow >= 1 }, ...over,
+  extra: { rejectWith: 'the request exceeds the available context size, try increasing it', ...extra },
+ });
+ const providerCells = [
+  providerCell('Anthropic rejects the prompt', { rejectWith: 'prompt is too long: 21000 tokens > 20000 maximum' }),
+  providerCell('OpenAI rejects the prompt', { rejectWith: 'Your input exceeds the context window of this model. Please adjust your input.' }),
+  providerCell('Google rejects the prompt', { rejectWith: 'The input token count (21000) exceeds the maximum number of tokens allowed (20000).' }),
+  providerCell('llama.cpp rejects the prompt', { rejectWith: 'the request exceeds the available context size, try increasing it' }),
+  providerCell('HTTP 413 with no body', { rejectWith: '', rejectStatus: 413 }, { reached: { state: 'a bodyless HTTP 413, which pi-ai classes as an overflow only for a Cerebras request', check: e => e.overflows >= 1 && e.piOverflow === 0 } }),
+  // A wording Pi does not recognise arrives as a plain provider error. The session must still take the next prompt, and pi-tuck must not fault on its
+  // own: an unrecognised refusal is the host's business, and pi-tuck's job is to leave the session able to answer it.
+  providerCell('a wording Pi does not recognise', { rejectWith: 'upstream refused: too many bytes for this deployment' }, { reached: { state: 'a refusal in wording pi-ai does not class as an overflow', check: e => e.overflows >= 1 && e.piOverflow === 0 } }),
+  // A server that keeps the end of an oversize request answers it anyway and reports usage equal to the window, so the session's own count comes back
+  // smaller than the context it believes it sent. The Xiaomi variant Pi lists reports a stop for length with no output at all. The density has to be
+  // the one that puts the provider's count over its window while pi-tuck's measure of the same request is still inside the room (14,336): 1.35x does it.
+  // pi-ai's silent-overflow check wants input *above* the window, so a server that reports exactly the window passes it for an answer; the Xiaomi
+  // variant, a length stop with no output and the window read back as input, is the one it catches.
+  providerCell('silent truncation, answered normally', { truncateOverWindow: 'stop' }, { usageRatio: 1.35, prompts: [12_000, 300, 300], reached: { state: 'a truncated reply whose usage equals the window, which pi-ai reads as an answer rather than an overflow', check: e => e.truncations >= 1 && e.piOverflow === 0 } }),
+  providerCell('silent truncation, stop for length and no output', { truncateOverWindow: 'lengthZero' }, { usageRatio: 1.35, prompts: [12_000, 300, 300], reached: { state: 'a length stop with no output filling the window, which pi-ai classes as an overflow', check: e => e.truncations >= 1 && e.piOverflow >= 1 } }),
+ ];
+ // Usage that is a wrong observation rather than no observation: a count that jumps tenfold for one reply, a count of zero beside a cache that holds
+ // the whole session, and a count that adds the cached tokens to the input as well. Each must leave the session taking its next prompt. The cell
+ // records the report the scripted model actually sent, so reaching the state is that the odd usage went out, not that the cell asked for one.
+ type UsagePatch = ReturnType<NonNullable<Options['usageAt']>>;
+ const oddUsage = (label: string, at: (request: number, measured: number) => UsagePatch, state: string): Cell => {
+  const fired: number[] = [];
+  const cell = base(`usage: ${label}`, {
+   window: 32_768, reserve: 4_096, maxTokens: 4_096, system: 800, host: 200, usageRatio: 1.1,
+   prompts: [4_000, 6_000, 8_000, 300], rounds: [1, 1, 0, 0], results: [1_500],
+   extra: { usageAt: (request, measured) => { const patch = at(request, measured); if (Object.keys(patch).length) fired.push(request); return patch; } },
+   reached: { state, check: e => fired.length >= 1 && e.counts.some(c => c.known) },
+  });
+  cell.reset = () => { fired.length = 0; };
+  return cell;
+ };
+ const oddUsageCells = [
+  oddUsage('jumps tenfold on one reply and returns', (request, count) => request === 3 ? { input: count * 10 } : {}, 'a reply whose usage was ten times the request before it'),
+  oddUsage('input zero beside a large cache read', request => request === 2 ? { input: 0, cacheRead: 60_000 } : {}, 'a reply that reported no input and a 60,000-token cache'),
+  oddUsage('counts the cached tokens twice', (request, count) => request === 2 ? { input: count, cacheRead: count } : {}, 'a reply whose usage counted the cache in the input as well'),
+ ];
+ // The five cells from Scoops replays that refused mid-run. Their sizes are set against the free room pi-tuck leaves, and only the guard's own measure
+ // of the request says what that is, so each is built twice: once as a probe to measure the floor, once at the floor the probe measured.
+ calibrationCells.push(
+  floor => freshResult(57_344, 1.25, floor),
+  floor => freshResult(61_440, 1.25, floor),
+  floor => freshResult(65_536, 1.25, floor),
+  floor => freshAssistant(61_440, 1.44, floor),
+  floor => freshAssistant(32_768, 1.44, floor),
+ );
  return [
   atDefaults(32_768), atDefaults(65_536), atDefaults(131_072), atDefaults(1_000_000),
   keepAt(1), keepAt(2),
@@ -534,29 +835,59 @@ function namedCells(): Cell[] {
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
+  ...setupGrid, ...replayWindows, ...replaySetups, replaySecond,
+  ...providerCells, ...oddUsageCells,
  ];
 }
 
-test(`settings stress: ${CELLS} sampled cells and the named edge cases`, async () => {
+/** The inequality the cell exists to hold, measured against the guard's own floor: the fresh result is bigger than the free room as pi-tuck's
+ *  calibration leaves it beside the setup, and smaller than what the room actually holds. In that band a clip carries the round and the request fits,
+ *  so a refusal there is a finding. Reaching the state is the message really being sent at that size, which the harness records itself, and the free
+ *  room being what the cell sized it against. */
+function freshResultFits(e: Evidence, size: number) {
+ return Math.abs(e.maxFresh - size) <= 4 && freeRoomHolds(size, e);
+}
+/** The same for a fresh assistant body, which no cut drops and no clip reaches: it sits in the request that answers the round it came from. A setup
+ *  that leaves no free room at all is arithmetic, like the no-room cells: the cell reaches when the run refused or cut on it. */
+function freshBodyFits(e: Evidence, size: number) {
+ // A setup that leaves no free room at all is arithmetic, like the no-room cells: nothing of the cell's own sizing ever gets sent, so the cell reaches
+ // when the run refused or cut on the setup alone.
+ if (e.room - e.floor <= 0) return e.floor + e.reserve >= e.window && (e.refused >= 1 || e.cuts >= 1);
+ return Math.abs(e.maxAssistant - size) <= 40 && freeRoomHolds(size, e);
+}
+const freeRoomHolds = (size: number, e: Evidence) => size > Math.floor(e.room / e.factor) - e.floor && size < e.room - e.floor;
+
+test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeout: 0 }, async () => {
  if (!RUN) return;
  const started = Date.now();
  for (let i = 0; i < CELLS; i++) {
   const cell = sample(i);
   if (ONLY && !cell.name.includes(ONLY)) continue;
+  if (SETUP_ONLY && cell.setup === undefined) continue;
   ran.push(cell.name); apis.add(cell.api ?? DEFAULT_API);
   try { await runCell(cell); } catch (error) { record(cell, 'harness', `the cell could not run: ${String(error).slice(0, 300)}`); }
+  if (i % SAMPLE_EVERY !== 0) continue;
+  try { await repeat(cell); } catch (error) { record(cell, 'harness', `the repeat could not run: ${String(error).slice(0, 300)}`); }
  }
  for (const cell of namedCells()) {
   if (ONLY && !cell.name.includes(ONLY)) continue;
+  if (SETUP_ONLY && SETUP_ONLY !== '1' && !cell.name.includes(SETUP_ONLY)) continue;
   ran.push(cell.name); apis.add(cell.api ?? DEFAULT_API);
   try { await runCell(cell); } catch (error) { record(cell, 'harness', `the case could not run: ${String(error).slice(0, 300)}`); }
-  if (STRICT) continue;
-  // The determinism check runs the cell twice more and compares. It is the expensive part, so it is off under STRESS_STRICT, where the point is
-  // the table of findings, not a second opinion on one build.
-  const a = await runCell(cell);
-  const b = await runCell(cell);
-  const diff = divergence(a, b);
-  if (diff) record(cell, 'determinism', `the same settings answered differently: ${diff}`);
+  // The determinism check runs the cell twice more and compares, sampled cells and named ones alike, under STRESS_STRICT as well.
+  try { await repeat(cell); } catch (error) { record(cell, 'harness', `the repeat could not run: ${String(error).slice(0, 300)}`); }
+ }
+ // The two cells that size a fresh message against the free room can only be sized by measurement: what pi-tuck has room for depends on the floor its
+ // own guard reads, and that is not known until the harness exists. The first pass is the probe, and the second is the cell.
+ for (const build of calibrationCells) {
+  const probe = await runCell({ ...build(SETUP_SIZE + SETUP_OVERHEAD), probe: true });
+  const floor = measuredFloor(probe);
+  // A cell whose setup leaves no free room at all cannot be probed: nothing gets a request through to measure. Its assumed floor stands, and the cell
+  // is the arithmetic case, whose `reached` says so.
+  const sized = build(floor > 0 ? floor : SETUP_SIZE + SETUP_OVERHEAD);
+  ran.push(sized.name); apis.add(sized.api ?? DEFAULT_API);
+  await runCell(sized);
+  await repeat(sized);
  }
  // Every rule holds after the last cell, so a finding is reported whatever the order the cells ran in.
  if (failures.length > 60) report(`stress: ${failures.length - 60} further failures not printed above`);
@@ -566,9 +897,26 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, async (
  const sorted = [...byClass.entries()].sort((a, b) => b[1].count - a[1].count);
  report(`\nstress: cells run ${ran.length}, failures ${failures.length}, top failure class ${sorted[0]?.[0] ?? 'none'}`);
  // What the grid actually reached. A run that cut nothing tested nothing, and this line is where that shows.
- report(`stress: coverage: cells with room ${cov.room}/${cov.cells}, cells with a cut ${cov.cut}/${cov.cells}, total cuts ${cov.cuts}, prompts answered ${cov.answered}, prompts refused ${cov.refused}, prompts planned above the room ${cov.aboveRoom}, provider overflows ${cov.overflows}`);
+ report(`stress: coverage: cells with room ${cov.room}/${cov.cells}, cells with a cut ${cov.cut}/${cov.cells}, total cuts ${cov.cuts}, prompts answered ${cov.answered}, prompts refused ${cov.refused}, prompts planned above the room ${cov.aboveRoom}, provider overflows ${cov.overflows}, provider truncations ${cov.truncations}, clips ${cov.clips}`);
  report('class           failures  cells');
  for (const [rule, row] of sorted) report(`${rule.padEnd(15)}  ${String(row.count).padStart(6)}  ${[...row.cells].slice(0, 2).join(' | ')}${row.cells.size > 2 ? ` | +${row.cells.size - 2} more` : ''}`);
+ // One row per named setup cell. A pass/fail table cannot show a run that is near the limit and still under it, and that is where a session spends
+ // its life: `near` marks the cells whose cuts per round are within a third of the thrash limit without crossing it.
+ if (setupRows.length) {
+  report('window    setup   floor   band    rounds  cuts  cuts/round  next%  mean-freed  verdict');
+  for (const r of setupRows) {
+   const over = r.setup >= r.band;
+   const verdict = r.setup >= r.room ? 'no room' : r.rounds < 12 ? `${r.cuts ? 'cut' : 'no cut'}, short run` : r.thrashes ? 'thrash' : r.perRound * THRASH_ROUNDS >= 0.67 ? 'near limit' : r.cuts === 0 ? over ? 'no cut, setup over band' : 'no cut' : over ? 'ok, setup over band' : 'ok';
+   report(`${String(r.window).padStart(7)}  ${String(r.setup).padStart(6)}  ${String(r.floor).padStart(6)}  ${String(r.band).padStart(6)}  ${String(r.rounds).padStart(6)}  ${String(r.cuts).padStart(4)}  ${r.perRound.toFixed(3).padStart(10)}  ${String(Math.round(r.nextShare * 100)).padStart(5)}  ${String(r.meanFreed).padStart(10)}  ${verdict}`);
+  }
+  report(`stress: setup cells ${setupRows.length}, thrashing ${setupRows.filter(r => r.thrashes).length}, cutting nothing ${setupRows.filter(r => r.cuts === 0).length}`);
+ }
+ // Whether pi-ai classes each provider's wording as a context overflow is what decides if the host compacts and retries at all, so the run says it
+ // per cell instead of leaving it inside a pass. A cell whose expectation was wrong shows up here as well as in its own hollow failure.
+ if (providerRows.length) {
+  report('provider cell                          the scripted provider  pi-ai calls it an overflow');
+  for (const r of providerRows) report(`${r.name.padEnd(35)}  ${r.saw.padStart(12)}  ${r.pi ? `yes, ${r.pi} repl${r.pi > 1 ? 'ies' : 'y'}` : 'no'}`);
+ }
  if (REPORT) {
   writeFileSync('test/stress/failures.json', JSON.stringify({ seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, failures }, null, 1));
   report(`stress: wrote ${failures.length} failures to test/stress/failures.json`);

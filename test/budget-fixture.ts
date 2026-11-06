@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Type } from 'typebox';
-import { createAssistantMessageEventStream, getCurrentSystemMessage, type AssistantMessage } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, getCurrentSystemMessage, type AssistantMessage, type Usage } from '@earendil-works/pi-ai';
 import { convertToLlm, createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager, SettingsManager, type AgentSession, type ExtensionAPI, type ExtensionContext, type SessionBeforeCompactEvent, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { installCompaction, type CompactionOptions } from '../src/compaction';
 import { bandOf } from '../src/budget';
@@ -135,8 +135,22 @@ export interface Options {
  compactionEnabled?: boolean;
  /** The model's window and maximum output when they are not the 272,000 and 128,000 the pins assume (a small-room test). The fixture then does not check the room. */
  limits?: { contextWindow: number; maxTokens: number };
- /** Tokens of the system prompt (default 12,000, about the size of a real host's). */
+ /** Tokens of the system prompt (default 12,000, about the size of a real host's). Sized by the fixture's `text()`, which estimates to about 0.6 of the number, because its items are 13 characters and the estimator's length count assumes 24. */
  system?: number;
+ /** Tokens of the system prompt, counted the way the guard counts them: text whose own estimate is the number given. A cell that names a setup uses this, so the setup a run carries is the setup the cell says it carries. */
+ systemTokens?: number;
+ /** The wording a request over the window comes back with, as the provider in question words its refusal. */
+ rejectWith?: string;
+ /** A server that does not refuse an oversize request: it keeps the end of it and answers as if nothing had happened. 'stop' reports input usage
+  * equal to the window; 'lengthZero' is the variant Pi lists for Xiaomi, a stop at length, no output, and the window reported as input. */
+ truncateOverWindow?: 'stop' | 'lengthZero';
+ /** Tokens of the assistant reply's own text, per request. A tool call that carries a large body is a fresh message no cut can drop and no clip may
+  * shrink, so it overflows the room in a different way from a fresh result: the cut that answers it has already happened. */
+ /** A reply whose own text is this many tokens, on top of its tool call. */
+ replyTokens?: (request: number) => number;
+ /** The usage request N reports, overriding the density and the other usage options: a count that jumps for one reply, no input at all beside a
+  * large cache read, or cached tokens counted twice. */
+ usageAt?: (request: number, measured: number) => Partial<Usage>;
  /** Every tool a live session carries is active: Pi's read, bash, edit and write, and pi-tuck's own two, beside the fixture's `effect`. */
  liveTools?: boolean;
 }
@@ -191,11 +205,14 @@ export async function harness(options: Options) {
   // stops records the stop reason of every reply the scripted model handed back, in order, so a caller can tell what one of its own prompts got.
   // counts records, per request, what the provider's tokenizer makes of it and whether a reply before it had reported usage (so density was known);
   // overflows counts the requests the provider refused for size; vetoes the cuts another extension cancelled.
-  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, compacts: 0, vetoes: 0 };
+  // clips counts the requests that went out with a clipped fresh result in them, which is pi-tuck's own doing and visible nowhere but on the wire;
+  // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
+  // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
+  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
   const note = 'Queued operator note. ';
-  const systemPrompt = 'Host input contact. ' + text(options.system ?? 12000) + 'p'.repeat(options.pad ?? 0);
+  const systemPrompt = 'Host input contact. ' + (options.systemTokens !== undefined ? sized(options.systemTokens) : text(options.system ?? 12000)) + 'p'.repeat(options.pad ?? 0);
   // The host's view can grow during a run (attempt effects are recorded in it).
   const exact = (n: number) => sized(n);
   const hostInput = () => ({ role: 'custom' as const, customType: 'host.view', content: exact(host), display: false, timestamp: 0 });
@@ -242,7 +259,7 @@ export async function harness(options: Options) {
     pi.on('turn_end', event => { if (event.toolResults.length) options.afterDecision!(decisions++, unseen); });
    }
    // The guard's number for every request, computed independently (registered after the compactor's hook).
-   pi.on('context_with_system', (event, ctx) => { guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); });
+   pi.on('context_with_system', (event, ctx) => { guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); state.cutCounts.push(cutsAtRequest.at(-1)!); if (event.messages.some(m => m.role === 'toolResult' && JSON.stringify((m as { content?: unknown }).content ?? '').includes('[pi-tuck: characters'))) state.clips++; });
   }] });
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
   const newSession = async (m: SessionManager) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
@@ -257,7 +274,7 @@ export async function harness(options: Options) {
      const have = referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson()) + nonSystem([hostInput()]) + nonSystem(saved());
      bigResult = Math.max(1, options.complete - have); bigText = fit(bigResult);
     }
-    state.results.push(resultTokens(bigText)); // what this round lands in the conversation, so a caller can weigh a turn of its own
+    state.results.push(resultTokens(bigText)); state.resultAt.push(state.requests); // what this round lands in the conversation, so a caller can weigh a turn of its own
     return { content: [{ type: 'text', text: bigText }], details: {} };
    },
   }] })).session;
@@ -350,15 +367,17 @@ export async function harness(options: Options) {
   const rounds = options.rounds ?? 1;
   // A provider's refusal of an oversized request: the overflow error a real transport returns. Pi ignores a reply no newer than the last cut, so
   // the refusal is stamped after it.
-  const refuse = () => {
+  const refuse = (wording = OVERFLOW_TEXT, status?: number) => {
    const newest = manager.getEntries().reduce((latest, e) => e.type === 'compaction' ? Math.max(latest, Date.parse(e.timestamp)) : latest, 0);
    const failed = answer([], 'error');
-   failed.errorMessage = OVERFLOW_TEXT;
+   failed.errorMessage = wording;
+   // A gateway that answers with a bare 413 carries no wording at all, which is the case Pi's second rule is written for.
+   if (status !== undefined) (failed as unknown as { status?: number }).status = status;
    failed.timestamp = Math.max(Date.now(), newest + 1);
    return failed;
   };
   session.agent.streamFunction = (_m, _ctx, streamOptions) => {
-   if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
+   if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); state.answers.push(m); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
    state.requests++;
    if (state.requests === 2) state.delivered = JSON.stringify(_ctx.messages).includes(note);
    options.onRequest?.(state.requests, { setHost: tokens => { host = tokens; }, pi: extension! });
@@ -374,14 +393,18 @@ export async function harness(options: Options) {
    const count = guard.length ? Math.ceil(guard.at(-1)! * density) : 0;
    state.counts.push({ count, known: state.reports > 0 });
    // A provider that enforces its own window refuses the request rather than answering it, and Pi runs its one compact-and-retry on the error.
-   if (options.rejectOverWindow && count > model.contextWindow) {
+   // A server that keeps the end of an oversize request instead (`truncateOverWindow`) answers it, and the reply below carries its usage.
+   const truncated = options.truncateOverWindow !== undefined && count > model.contextWindow;
+   if (options.rejectOverWindow && !truncated && count > model.contextWindow) {
     state.overflows++;
-    const failed = refuse();
+    state.assistantSizes[state.requests - 1] = 0; // the model sent no content at all for this request
+    const failed = refuse(options.rejectWith ?? OVERFLOW_TEXT, options.rejectStatus);
+    state.answers.push(failed);
     stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
    }
    // A request that never answers: nothing arrives until the turn is aborted, which is when a transport closes.
    if (options.neverEnds?.(state.requests)) {
-    const stalled = answer([], 'aborted'); stalled.errorMessage = 'The stream never ended.';
+    const stalled = answer([], 'aborted'); stalled.errorMessage = 'The stream never ended.'; state.answers.push(stalled);
     const streamed = options.stallChars?.(state.requests);
     // What did arrive is on the message the abort settles with, which is the message the session keeps.
     if (streamed) { stalled.content = [{ type: 'text', text: sized(streamed) }]; stream.push({ type: 'start', partial: { ...stalled, content: [], stopReason: 'stop' } }); stream.push({ type: 'text_delta', contentIndex: 0, delta: (stalled.content[0] as { text: string }).text, partial: stalled }); }
@@ -397,19 +420,34 @@ export async function harness(options: Options) {
     const failed = failing === 'length' ? answer([{ type: 'text', text: 'A reply cut short' }], 'length') : answer([], 'error');
     if (failing === 'overflow') failed.errorMessage = OVERFLOW_TEXT; else failed.usage.output = failed.usage.totalTokens = 2048;
     failed.timestamp = Math.max(Date.now(), cutAt + 1);
+    state.answers.push(failed);
     if (failing === 'length') stream.push({ type: 'done', reason: 'length', message: failed }); else stream.push({ type: 'error', reason: 'error', error: failed });
     stream.end(failed); return stream;
    }
    const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
+   // A reply whose own body is large arrives with the round, so it is in the next request before any cut can reach it.
+   if (options.replyTokens && toolRound) reply.unshift({ type: 'text', text: sized(Math.max(0, Math.round(options.replyTokens(state.requests)))) });
+   state.assistantSizes[state.requests - 1] = est({ role: 'assistant', content: reply, timestamp: 0 });
    // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
    const thinking = options.thinkingChars?.(state.requests);
    const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, toolRound ? 'toolUse' : 'stop');
    if (options.usageFirst !== undefined && state.requests === 1) { message.usage.input = options.usageFirst; message.usage.totalTokens = options.usageFirst; }
    if (options.usageRatio !== undefined && guard.length) { message.usage.input = Math.ceil(guard.at(-1)! * options.usageRatio); message.usage.totalTokens = message.usage.input; }
    if (options.outputTokens !== undefined) { message.usage.output = options.outputTokens; message.usage.totalTokens += options.outputTokens; }
+   // The server that took an oversize request reports its own window as the input it read, and nothing of what it dropped. The Xiaomi variant
+   // stops at length with no output at all, which is what makes Pi call it a recoverable length rather than an answer.
+   if (truncated) {
+    state.truncations++;
+    message.usage.input = model.contextWindow; message.usage.totalTokens = model.contextWindow + message.usage.output;
+    if (options.truncateOverWindow === 'lengthZero') { message.content = [{ type: 'text', text: 'The server stopped here.' }]; message.stopReason = 'length'; message.usage.output = 0; message.usage.totalTokens = model.contextWindow; }
+   }
+   if (options.usageAt) Object.assign(message.usage, options.usageAt(state.requests, guard.at(-1) ?? 0));
    if (options.noUsage) delete (message as { usage?: unknown }).usage;
    // A reply that reports a finite input is the session's first proof of the provider's density; NaN, Infinity and no usage object report nothing.
    if (Number.isFinite((message as { usage?: { input?: number } }).usage?.input)) state.reports++; else state.nonFinite++;
+   // Every reply is measured as pi-tuck measures it, so a caller can weigh the assistant content a run just added to the session.
+   state.replies.push(estimateTokens(message));
+   state.answers.push(message);
    stream.push({ type: 'done', reason: toolRound ? 'toolUse' : 'stop', message }); stream.end(message); return stream;
   };
   const allCompactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);
