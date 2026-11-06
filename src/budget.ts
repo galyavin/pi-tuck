@@ -3,6 +3,7 @@ import { convertToLlm, estimateTokens, type BeforeAgentStartEvent, type Extensio
 import { measurableMessages, projectedMessages } from "./omissions.js";
 import type { RecallPolicy } from "./recall.js";
 import { isDiscardedResponse } from "./protocol.js";
+import { MAX_TAIL_TOKENS } from "./tuck/cut.js";
 
 /**
  * The one measure of the next request. The cut triggers, the cut planner (including the draft admission in tuck.ts), the post-cut
@@ -19,16 +20,16 @@ export const TRIGGER_MARGIN_FRACTION = 0.02;
 /** Whether `value` is a cut point: a fraction of the room above 0 and at most 1. */
 export const validCutAt = (value: unknown): value is number => typeof value === "number" && value > 0 && value <= 1;
 /**
- * The one owner of the band: the limit a cut is triggered at and preferably planned to. It is the room less the margin, or the cut point
- * `cutAt` (a fraction of the room) when that is lower. The exact room stays the limit of every throw, fault and the complete-context guard,
- * whatever the cut point. With `cutAt` 1 the band is the room less the margin alone.
+ * The one owner of the band: the limit a cut is triggered at and preferably planned to. An adaptive default may raise the cut point above
+ * 60% using the last cut's conversation size and current system size, both estimates, so they are converted to the room's units by the factor. Explicit cut points use the fraction alone. The margin caps both.
  */
-/** The default cut point: a cut once a request passes 60% of the room. Measured against 1 with paired replays (no answer loss) and billed
+/** The initial default cut point: 60% of the room before a usable previous cut. Measured against 1 with paired replays (no answer loss) and billed
  * input under automatic and explicit prompt caching (about 17% less at 128k, 10-14% at 32k). */
 export const DEFAULT_CUT_AT = 0.6;
-export const bandOf = (room: number, cutAt = 1): number => {
+export const bandOf = (room: number, cutAt = 1, adaptive?: { system: number; tokensAfter: number; factor: number }): number => {
 	const positive = Math.max(0, room);
-	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), Math.floor(positive * cutAt));
+	const base = Math.floor(positive * cutAt);
+	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + MAX_TAIL_TOKENS) * adaptive.factor)) : base);
 };
 
 /** The APIs whose request converter (pi-ai openai-responses-shared) sends each signed thinking block back as an input reasoning item. */
@@ -126,7 +127,7 @@ export type Verdict<D extends object = {}> = Exclude<Decision<D>, { kind: "defer
  * A lean band, one the cut point binds (`band < bandOf(room)`), is planned first and the room plan landing below it is not taken for that:
  * the room plan keeps a native tail of up to half the room, so it can land just under a band that far below the room, and the next round
  * would cut again, freeing little. The room is planned only where the rules above use it: to compare the mode, or when the band has no plan
- * and a cut is due. With the default cut point the band is never lean and the order and the decisions are those above.
+ * and a cut is due. An adaptive band can also reach the margin, in which case the room plan is tried first.
  * The margin adds no new decision fault. Exceptions thrown by `plan` are not caught here: they are faults, and they now surface at
  * boundaries inside the band too, where no planner ran before the margin.
  */

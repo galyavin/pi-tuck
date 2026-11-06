@@ -71,7 +71,7 @@ const covCounted = new Set<string>();
 /** Every model API the run went out on, so the summary says which ones the numbers came from. */
 const apis = new Set<string>();
 /** One row per named setup cell: the point is to see a run that is near the limit and still under it, which a pass/fail table cannot show. */
-interface SetupRow { name: string; window: number; setup: number; floor: number; room: number; band: number; postCut: number | undefined; rounds: number; cuts: number; perRound: number; nextShare: number; meanFreed: number; thrashes: boolean }
+interface SetupRow { name: string; window: number; setup: number; floor: number; room: number; band: number; postCut: number | undefined; rounds: number; cuts: number; opportunistic: number; perRound: number; nextShare: number; meanFreed: number; thrashes: boolean }
 // ---- setup size ----
 // A Scoops replay at 131k spends about 24k of a 53k post-cut context on setup, and each cut frees only about 16k, so the setup and the band together
 // decide what a session has left to work with. The sampled grid ties setup to the window, so it never shows that; the setup cells cross five setup
@@ -130,6 +130,8 @@ interface Evidence {
  requests: number[];
  /** Compactions this cell saved, run-end cuts included. */
  cuts: number;
+ /** Cuts whose calibrated decision boundary was below the room. */
+ opportunistic: number;
  /** Guard measurements of requests after observable cuts. */
  postCuts: number[];
  answered: number;
@@ -478,8 +480,18 @@ async function runCellInner(cell: Cell): Promise<Run> {
   // sampled, and exempts nothing else. A setup at or above the band is exactly the case under test.
   const thrashApplies = rounds >= 12;
   const cutsAt = savedCuts();
-  const thrashes = thrashApplies && cutsAt * THRASH_ROUNDS > rounds;
-  if (thrashApplies && thrashes) record(cell, 'thrash', `${cutsAt} cuts in ${rounds} tool rounds is more than one per ${THRASH_ROUNDS}: the mean cut freed ${meanFreed} tokens against a band of ${band} and a setup of ${cell.setup ?? floor}, and ${Math.round(nextShare * 100)}% of cuts were followed by another cut on the very next request`, { window: cell.window, setup: cell.setup ?? floor, band, rounds, cuts: cutsAt, meanFreed, nextShare });
+  // Classify each cut at its own decision boundary, including run-end cuts: the receipt records both the pre-cut conversation and mandatory input.
+  // A cut at the calibrated room is forced and does not count towards the opportunistic thrash rate.
+  let unclassifiedCuts = 0;
+  const opportunistic = entries.filter(entry => {
+   const receipt = (entry.details as { diagnosticReceipt?: { before?: { value: number }; settings?: { mandatoryInputTokens?: number; calibrationFactor?: number } } } | undefined)?.diagnosticReceipt;
+   const mandatory = receipt?.settings?.mandatoryInputTokens;
+   if (receipt?.before === undefined || mandatory === undefined) { unclassifiedCuts++; return false; }
+   return Math.ceil((receipt.before.value + mandatory) * (receipt.settings?.calibrationFactor ?? 1)) < room;
+  }).length;
+  if (unclassifiedCuts) record(cell, 'harness', `${unclassifiedCuts} cuts have no decision receipt, so their relation to the room cannot be classified`);
+  const thrashes = thrashApplies && opportunistic * THRASH_ROUNDS > rounds;
+  if (thrashApplies && thrashes) record(cell, 'thrash', `${opportunistic} cuts below the room in ${rounds} tool rounds is more than one per ${THRASH_ROUNDS}: the mean cut freed ${meanFreed} tokens against an initial band of ${band} and a setup of ${cell.setup ?? floor}, and ${Math.round(nextShare * 100)}% of cuts were followed by another cut on the very next request`, { window: cell.window, setup: cell.setup ?? floor, band, rounds, cuts: cutsAt, opportunistic, meanFreed, nextShare });
   // A slow-growing session can cut infrequently while every cut buys almost no room. On a long run, require the mean of at least three comparable
   // cuts to free one tenth of the room: ten such gains together equal the whole usable room, a scale independent of the chosen round size.
   if (rounds >= 12 && room > 0 && freed.length >= 3 && meanFreed < room / 10)
@@ -489,14 +501,14 @@ async function runCellInner(cell: Cell): Promise<Run> {
   if (cell.setup !== undefined && !cell.probe && (cell.name.startsWith('setup ') || rounds >= 12) && !setupSeen.has(cell.name)) {
    setupSeen.add(cell.name);
    const orderedPostCuts = [...postCuts].sort((a, b) => a - b);
-   setupRows.push({ name: cell.name, window: cell.window, setup: cell.setup, floor, room, band, postCut: orderedPostCuts[Math.floor(orderedPostCuts.length / 2)], rounds, cuts: cutsAt, perRound: rounds ? cutsAt / rounds : 0, nextShare, meanFreed, thrashes });
+   setupRows.push({ name: cell.name, window: cell.window, setup: cell.setup, floor, room, band, postCut: orderedPostCuts[Math.floor(orderedPostCuts.length / 2)], rounds, cuts: cutsAt, opportunistic, perRound: rounds ? opportunistic / rounds : 0, nextShare, meanFreed, thrashes });
   }
   // The cell's own claim, read off what happened rather than what was asked for. A cell that never reached its state tested nothing, and that is
   // a finding about the test: it is recorded so it cannot hide behind a clean table.
   if (cell.reached) {
    const e: Evidence = {
     window: cell.window, reserve, room, factor, floor, savedStart, savedRoles, guard, counts,
-    probes: h.probes.slice(probeStart), prompts: promptSizes, results: resultSizes, requests: promptRequests, cuts: savedCuts(), postCuts,
+    probes: h.probes.slice(probeStart), prompts: promptSizes, results: resultSizes, requests: promptRequests, cuts: savedCuts(), opportunistic, postCuts,
     answered, refused, hung, aborts: h.state.aborts, overflows: h.state.overflows, vetoes: h.state.vetoes,
     truncations: h.state.truncations, clips: h.state.clips, piOverflow: piOver, maxFresh: Math.max(0, ...h.state.results), maxAssistant: Math.max(0, ...h.state.assistantSizes),
     maxFactor: Math.max(1, ...h.state.counts.map((c, k) => c.known ? c.count / Math.max(1, h.guard[k]) : 1)),
@@ -751,12 +763,17 @@ function namedCells(): Cell[] {
  // 17-33% of cuts were followed by another cut on the very next request. Those windows answer to the same rules as every other cell.
  const replayWindows = [57_344, 61_440, 73_728, 81_920].map(window => setupCell(window, SETUP_SIZE, 'replay window'));
  const realPostCut = setupCell(81_920, SETUP_SIZE, 'real post-cut 49k');
+ // Smaller mixed tool rounds allow the trigger to cross the margin without routinely jumping past the room. The prompt remains in the
+ // protected current turn and is sized so the measured request includes a realistic setup, summary and tail together.
+ realPostCut.prompts = [5_000];
+ realPostCut.rounds = [100];
+ realPostCut.results = [600, 600];
  realPostCut.reached = {
-  state: 'a seeded summary and tool tail, with a median measured post-cut request between 47k and 51k',
+  state: 'a seeded summary and tool tail, with a median measured post-cut request between 47k and 51k and most cuts below the room',
   check: e => {
    const measured = [...e.postCuts].sort((a, b) => a - b);
    const median = measured[Math.floor(measured.length / 2)];
-   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && median !== undefined && median >= 47_000 && median <= 51_000;
+   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && median !== undefined && median >= 47_000 && median <= 51_000 && e.opportunistic > e.cuts / 2;
   },
  };
  const replaySetups = [55_000, 62_000, 68_000].map(setup => setupCell(131_072, setup, 'replay setup'));
@@ -865,7 +882,7 @@ function namedCells(): Cell[] {
  return [
   atDefaults(32_768), atDefaults(65_536), atDefaults(131_072), atDefaults(1_000_000),
   keepAt(1), keepAt(2),
-  promptOverRoom, promptOverWindow, resultOverWindow, reopened, aborted,
+  promptOverRoom, promptOverWindow, resultOverWindow, reopened, aborted, stalled,
   reasoning('openai-codex-responses'), reasoning('openai-completions', { provider: 'groq', id: 'openai/gpt-oss-120b' }),
   small, tiny, big(1_000_000), big(2_000_000), outputAboveRoom,
   // What the provider's own count does to the arithmetic: above 1 the guard's measure is too small, far above 1 it is nowhere near, below 1 it is
@@ -961,11 +978,11 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  // One row per named setup cell. A pass/fail table cannot show a run that is near the limit and still under it, and that is where a session spends
  // its life: `near` marks the cells whose cuts per round are within a third of the thrash limit without crossing it.
  if (setupRows.length) {
-  report('window    setup   floor   band  post-cut  rounds  cuts  cuts/round  next%  mean-freed  verdict  cell');
+  report('window    setup   floor   initial-band  post-cut  rounds  cuts  below  below/round  next%  mean-freed  verdict  cell');
   for (const r of setupRows) {
    const over = r.setup >= r.band;
    const verdict = r.setup >= r.room ? 'no room' : r.rounds < 12 ? `${r.cuts ? 'cut' : 'no cut'}, short run` : r.thrashes ? 'thrash' : r.perRound * THRASH_ROUNDS >= 0.67 ? 'near limit' : r.cuts === 0 ? over ? 'no cut, setup over band' : 'no cut' : over ? 'ok, setup over band' : 'ok';
-   report(`${String(r.window).padStart(7)}  ${String(r.setup).padStart(6)}  ${String(r.floor).padStart(6)}  ${String(r.band).padStart(6)}  ${String(r.postCut ?? '-').padStart(8)}  ${String(r.rounds).padStart(6)}  ${String(r.cuts).padStart(4)}  ${r.perRound.toFixed(3).padStart(10)}  ${String(Math.round(r.nextShare * 100)).padStart(5)}  ${String(r.meanFreed).padStart(10)}  ${verdict}  ${r.name}`);
+   report(`${String(r.window).padStart(7)}  ${String(r.setup).padStart(6)}  ${String(r.floor).padStart(6)}  ${String(r.band).padStart(12)}  ${String(r.postCut ?? '-').padStart(8)}  ${String(r.rounds).padStart(6)}  ${String(r.cuts).padStart(4)}  ${String(r.opportunistic).padStart(5)}  ${r.perRound.toFixed(3).padStart(11)}  ${String(Math.round(r.nextShare * 100)).padStart(5)}  ${String(r.meanFreed).padStart(10)}  ${verdict}  ${r.name}`);
   }
   report(`stress: setup cells ${setupRows.length}, thrashing ${setupRows.filter(r => r.thrashes).length}, cutting nothing ${setupRows.filter(r => r.cuts === 0).length}`);
  }

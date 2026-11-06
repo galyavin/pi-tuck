@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { BAND, HOST, ROOM, harness, receiptOf, scenario } from './budget-fixture';
-import { conversationTokens, measurableConversationTokens, projectedConversationTokens } from '../src/budget';
+import { conversationTokens, measurableConversationTokens, planningReserve, projectedConversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft, type DraftMode, type Tuck } from '../src/tuck';
 import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
 
@@ -36,6 +36,26 @@ function session(rounds = 12) {
 // Force one view: for the shrunk view, the dialogue offer is too large to be admitted.
 const forcing = (target: DraftMode): Tuck => ({ ...tuck, compileDialogue: input =>
 	target === 'dialogue' ? tuck.compileDialogue(input) : 'z'.repeat(input.ranking.maxBriefChars + 1) });
+
+test('the tail budget halves the room left after fixed input, capped at 25k', () => {
+	const s = session();
+	try {
+		const measure = (messages: Parameters<typeof conversationTokens>[0]) => measurableConversationTokens(messages, s.ctx);
+		let limit: number | undefined;
+		const observing: Tuck = { ...tuck, applyTailBudget: (entries, cut, options) => {
+			limit = options.maxTokens;
+			return tuck.applyTailBudget(entries, cut, options);
+		} };
+		const before = measure(s.manager.buildSessionProjection().messages);
+		const window = 272000, room = 65536, system = 24000;
+		tuckObservedDraft(observing, { branchEntries: s.manager.getBranch(), tokensBefore: before }, s.ctx,
+			planningReserve(window, room, 1, system), measure, {}, true);
+		expect(limit).toBe(Math.floor((room - system - 1) / 2));
+		tuckObservedDraft(observing, { branchEntries: s.manager.getBranch(), tokensBefore: before }, s.ctx,
+			planningReserve(window, 120000, 1, system), measure, {}, true);
+		expect(limit).toBe(25000);
+	} finally { s.dispose(); }
+});
 
 for (const target of MODES)
 test(`the mode recorded is the view that produced the summary: ${target}`, () => {

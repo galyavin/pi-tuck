@@ -58,6 +58,32 @@ test('the band: a lower F puts it at floor(F * room), and the margin still caps 
 	}
 });
 
+test('the adaptive band uses the last cut and current system, bounded by the margin', () => {
+	expect(bandOf(65536, DEFAULT_CUT_AT)).toBe(39321);
+	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 1000, factor: 1 })).toBe(50000);
+	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 30000, factor: 1 })).toBe(64225);
+	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 1000, tokensAfter: 1000, factor: 1 })).toBe(78643);
+	// Both sizes are estimates; the room is in the provider's tokens.
+	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 26000, factor: 1.2 })).toBe(90000);
+});
+
+test('a saved cut raises the default band after reopening, while an explicit cutAt keeps its fixed band', async () => {
+	const run = async (adaptive: boolean, after?: number) => {
+		const h = await harness({ at: 'prompt', complete: 100_000, host: HOST, summary: true,
+			...(adaptive ? { cutAtDefault: true } : { compaction: { cutAt: DEFAULT_CUT_AT } }) });
+		try {
+			const prior = h.manager.getBranch().findLast(entry => entry.type === 'compaction');
+			if (!prior || prior.type !== 'compaction') throw new Error('missing prior cut');
+			if (after !== undefined) prior.details = { ...(prior.details as object), tokensAfter: after };
+			return await h.run();
+		} finally { await h.cleanup(); }
+	};
+	const noField = await run(true), adaptive = await run(true, 100_000), explicit = await run(false, 100_000);
+	expect(noField.cuts, noField.probe).toBe(1);
+	expect(adaptive.cuts, adaptive.probe).toBe(0);
+	expect(explicit.cuts, explicit.probe).toBe(1);
+});
+
 test('a cut point is a number above 0 and at most 1', () => {
 	for (const good of [1, 0.6, 0.999, 0.0001, Number.MIN_VALUE]) expect(validCutAt(good), String(good)).toBe(true);
 	for (const bad of [0, -0.5, -1, 1.0000001, 2, 100, NaN, Infinity, -Infinity, '0.6', '1', null, undefined, true, false, [], [0.6], {}]) expect(validCutAt(bad), String(bad)).toBe(false);
