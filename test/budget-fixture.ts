@@ -26,6 +26,8 @@ type Messages = Parameters<typeof convertToLlm>[0];
 // An independent reference for the arithmetic, written from Pi's own functions and not from budget.ts.
 export const est = estimateTokens;
 export const nonSystem = (messages: Messages) => convertToLlm(messages).reduce((sum, m) => sum + (m.role === 'system' ? 0 : estimateTokens(m)), 0);
+/** How many messages a projection carries, on the same conversion `nonSystem` weighs, so two views of one session can be counted alike. */
+export const nonSystemCount = (messages: Messages) => convertToLlm(messages).filter(m => m.role !== 'system').length;
 /** The guard's system formula over the request's own messages. */
 export function referenceGuardSystem(messages: Messages, prompt: string) {
  const system = getCurrentSystemMessage(convertToLlm(messages));
@@ -71,6 +73,9 @@ export interface Options {
  model?: { provider: string; id: string };
  /** Persist the session to a file, then close it and open it again: the caller starts from a saved session. */
  reopen?: boolean;
+ /** Persist the session to a file as it runs, but do not reopen it: a case that reads the saved file back at the end needs a persisted session,
+  * and the run itself stays a first-open one. What reaches the disk is the same either way; only the file is new. */
+ persist?: boolean;
  /** Tokens of the fixture summary's own text (default 800). */
  summaryTokens?: number;
  /** Tokens of a steering message queued during the tool call, so it is in the next request but not in the saved conversation. */
@@ -176,8 +181,9 @@ export async function harness(options: Options) {
   const runtime = await scriptedModelRuntime(options.limits, options.model), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
   if (!options.limits && !options.model) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
-  // A reopened session has to be a persisted one, so its entries reach a file and come back from it.
-  let manager = options.reopen ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
+  // A reopened session has to be a persisted one, so its entries reach a file and come back from it. `persist` stops short of the reopen: the file
+  // exists, the run never leaves it.
+  let manager = options.reopen || options.persist ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
   // A complete assistant message of this content. `replyOf` builds one without recording it, for measuring a reply that has not been sent yet.
   const replyOf = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
   const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return replyOf(content, stopReason); };
@@ -460,6 +466,13 @@ export async function harness(options: Options) {
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
    dir, manager, session, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
+   // Open the session's file again the way Pi does when a saved session is resumed, and report how many messages came back. The run's own session is
+   // left alone: this reads what reached the disk, which is all the operator has if the run ends where it stands.
+   reopenFile: () => {
+    const file = manager.getSessionFile();
+    if (!file) throw Error('Reading the saved session back needs a persisted one');
+    return nonSystemCount(SessionManager.open(file, dir).buildSessionProjection().messages);
+   },
    async run() {
     atRunEnd = undefined;
     await session!.prompt(promptText);

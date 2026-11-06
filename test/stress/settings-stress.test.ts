@@ -28,7 +28,7 @@
 import { afterAll, expect, test } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { est, harness, nonSystem, type Options } from '../budget-fixture';
+import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
@@ -59,7 +59,7 @@ const PROMPT_MS = 60_000;
 /** The fixture's model, which every cell that does not name another goes out on. */
 const DEFAULT_API = 'openai-codex-responses (openai-codex/gpt-6.1-sol)';
 
-type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'notice' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
+type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
 type Failure = { cell: string; rule: Rule; message: string; params: Record<string, unknown> };
 const failures: Failure[] = [];
 const ran: string[] = [];
@@ -181,6 +181,11 @@ interface Cell {
  results: number[];
  /** Why a refusal is legitimate here. Only a case named below may set it. */
  why?: string;
+ /** The provider refused the request of its own accord, in wording Pi does not class as a context overflow, so the turn ends in the provider's
+  * error and pi-tuck is never asked to refuse. `refusal` and `notice` hold pi-tuck to a room the provider never showed it, so for this cell they
+  * are replaced by the stated ones, named `provider`: the provider's error reaches the operator as a stop error; pi-tuck raises no refusal of its
+  * own; the next short prompt gets a request (the `no-recovery` rule, which stays); and the session file still reopens. */
+ providerRejection?: boolean;
  /** Which model API the run went out on. The fixture's model answers every sampled cell; a case that names another says which. */
  api?: string;
  /** The prompt whose run's last request never answers: the turn not ending is the state under test, and recovery is the rule. The cell names the
@@ -365,7 +370,17 @@ async function runCellInner(cell: Cell): Promise<Run> {
    if (!lastThrew.includes(cell.hostFault)) record(cell, 'harness', `the host was expected to refuse this state with "${cell.hostFault}", but the prompt ${lastThrew ? `said "${lastThrew.slice(0, 140)}"` : 'ended quietly'}`);
    if (h.faults.length > seen.faults) record(cell, 'refusal', `pi-tuck faulted in a state the host itself cannot carry: ${h.faults.at(-1)}`);
   }
-  if (!cell.hostFault && wasRefused && h.notices.length === seen.notices) record(cell, 'notice', `prompt ${i + 1} was refused (stop ${stopped.join(',') || 'none'}, ${requests} requests) with no notice to the operator`, { prompt: i + 1, tokens, requests });
+  if (!cell.hostFault && !cell.providerRejection && wasRefused && h.notices.length === seen.notices) record(cell, 'notice', `prompt ${i + 1} was refused (stop ${stopped.join(',') || 'none'}, ${requests} requests) with no notice to the operator`, { prompt: i + 1, tokens, requests });
+  // The stated rules for a provider that rejects a request in wording Pi does not class as an overflow. pi-tuck planned a request its own measure
+  // put inside the room; the provider counted it differently and said no, and the only account the operator gets is the provider's. So the test is
+  // not "did pi-tuck explain itself" but "did pi-tuck stay out of the way and leave the session whole": the error must arrive, pi-tuck must add no
+  // refusal of its own, and the file must still reopen (checked at the end of the run). That the next short prompt gets a request is `no-recovery`.
+  if (cell.providerRejection && wasRefused) {
+   const ours = [...h.notices.slice(seen.notices), ...h.faults.slice(seen.faults)];
+   if (ours.length) record(cell, 'provider', `prompt ${i + 1}: pi-tuck raised a refusal of its own over the provider's rejection: ${ours.join(' | ').slice(0, 160)}`, { prompt: i + 1 });
+   else if (requests === 0) record(cell, 'provider', `prompt ${i + 1} was refused before a request reached the provider, so the rejection is pi-tuck's own`, { prompt: i + 1, tokens });
+   else if (!stopped.includes('error')) record(cell, 'provider', `prompt ${i + 1} ended ${stopped.join(',') || 'nothing'} instead of carrying the provider's error to the operator`, { prompt: i + 1, stop: stopped.join(',') || 'none' });
+  }
   // A refusal is only the last resort when nothing that fits the room can answer the prompt. The bound is the smallest request that could:
   // the mandatory part, the prompt, a summary that quotes the prompt verbatim as its contract requires with room for its headings, and the fresh
   // messages the turn has produced. A mid-run cut carries the prompt once, as that quote, so the prompt is counted once and not twice. A fresh
@@ -390,7 +405,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
   const assistantOverRoom = freeRoom > 0 && freshAssistant > 0 && freshAssistant > freeRoom && freshAssistant < room - floor;
   if (!cell.hostFault && wasRefused && !cell.why && assistantOverRoom) record(cell, 'fresh-room', `prompt ${i + 1} was refused on a fresh assistant body of ${freshAssistant} tokens, above the free room as pi-tuck estimates it (${freeRoom}) and below what the room holds at the provider's count (${room - floor}): nothing clips or cuts a fresh assistant message, so the run stopped where the model's own reply overflowed`, { prompt: i + 1, tokens, freshAssistant, freeRoom, floor });
   else if (!cell.hostFault && wasRefused && !cell.why && fitsAlone && clipWouldFit) record(cell, h.state.clips > seen.clips ? 'clip-room' : 'no-clip', `prompt ${i + 1} of ${tokens} tokens was refused although a clip sized to the room the provider leaves would fit (${afterClip} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), floor ${floor}, clip budget ${Math.max(0, clipAware)} against pi-tuck's own ${Math.floor((room - floor) / 2)}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, floor, afterClip, clipAware, room, factor });
-  else if (!cell.hostFault && wasRefused && fitsAlone) record(cell, 'refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
+  else if (!cell.hostFault && !cell.providerRejection && wasRefused && fitsAlone) record(cell, 'refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
    if (!cell.hostFault && (wasRefused || outcome === 'hung')) {
     // Nothing may leave a session unable to take the next prompt: a short one has to get through, when the room can hold it at all — which
     // means beside the conversation the failure left behind, not only beside the prompt.
@@ -408,6 +423,18 @@ async function runCellInner(cell: Cell): Promise<Run> {
    }
    cuts = h.compactions().length;
    if (TRACE && cell.name.includes(TRACE)) report(`trace p${i + 1}: tokens=${tokens} requests=${requests} stop=${stopped.join(',') || 'none'} peak=${peak} floor=${floor} room=${room} cuts=${savedCuts()} notice=${h.notices.length} counts=${JSON.stringify(charged)} probes=${JSON.stringify(h.probes.slice(Math.max(probeStart, h.probes.length - 6)))} threw=${lastThrew.slice(0, 900)} ${(h.faults.at(-1) ?? 'no fault').slice(0, 500)}`);
+  }
+  // The last stated rule for a provider that rejects a request in wording Pi does not class as an overflow: whatever the provider did to the
+  // request, the session's own state must survive. The file is all the operator has if the run ends here, so it must reopen with the conversation
+  // the session holds in memory.
+  if (cell.providerRejection) {
+   const left = nonSystemCount(h.saved());
+   try {
+    const back = h.reopenFile();
+    if (back < left) record(cell, 'provider', `the session file reopened with ${back} messages against the ${left} the session holds`);
+   } catch (error) {
+    record(cell, 'provider', `the session file no longer reopens: ${error instanceof Error ? error.message : String(error)}`);
+   }
   }
   // Thrash: cuts against rounds, counted from the run's first cut. A cut that lands under the band and is followed by another cut on the very next
   // request freed less than the round it answered, so the session pays a summary for every round of work. Nothing is exempt: a setup at or above the
@@ -763,10 +790,13 @@ function namedCells(): Cell[] {
   providerCell('OpenAI rejects the prompt', { rejectWith: 'Your input exceeds the context window of this model. Please adjust your input.' }),
   providerCell('Google rejects the prompt', { rejectWith: 'The input token count (21000) exceeds the maximum number of tokens allowed (20000).' }),
   providerCell('llama.cpp rejects the prompt', { rejectWith: 'the request exceeds the available context size, try increasing it' }),
-  providerCell('HTTP 413 with no body', { rejectWith: '', rejectStatus: 413 }, { reached: { state: 'a bodyless HTTP 413, which pi-ai classes as an overflow only for a Cerebras request', check: e => e.overflows >= 1 && e.piOverflow === 0 } }),
+  // `providerRejection` on the two cells below: pi-ai does not class either wording as a context overflow, so Pi ends the turn on the provider's
+  // error and never asks pi-tuck to reduce the request. A refusal or a notice finding would hold pi-tuck to a room the provider never showed it,
+  // so the cell states the `provider` rules instead — see the Cell field. `persist` gives those rules a session file to reopen.
+  providerCell('HTTP 413 with no body', { rejectWith: '', rejectStatus: 413, persist: true }, { providerRejection: true, reached: { state: 'a bodyless HTTP 413, which pi-ai classes as an overflow only for a Cerebras request', check: e => e.overflows >= 1 && e.piOverflow === 0 } }),
   // A wording Pi does not recognise arrives as a plain provider error. The session must still take the next prompt, and pi-tuck must not fault on its
   // own: an unrecognised refusal is the host's business, and pi-tuck's job is to leave the session able to answer it.
-  providerCell('a wording Pi does not recognise', { rejectWith: 'upstream refused: too many bytes for this deployment' }, { reached: { state: 'a refusal in wording pi-ai does not class as an overflow', check: e => e.overflows >= 1 && e.piOverflow === 0 } }),
+  providerCell('a wording Pi does not recognise', { rejectWith: 'upstream refused: too many bytes for this deployment', persist: true }, { providerRejection: true, reached: { state: 'a refusal in wording pi-ai does not class as an overflow', check: e => e.overflows >= 1 && e.piOverflow === 0 } }),
   // A server that keeps the end of an oversize request answers it anyway and reports usage equal to the window, so the session's own count comes back
   // smaller than the context it believes it sent. The Xiaomi variant Pi lists reports a stop for length with no output at all. The density has to be
   // the one that puts the provider's count over its window while pi-tuck's measure of the same request is still inside the room (14,336): 1.35x does it.
