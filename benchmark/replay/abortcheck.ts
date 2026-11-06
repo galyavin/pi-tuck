@@ -56,6 +56,11 @@ async function ask(cut: number, set: any[]) {
 	const usesTuck = variant.startsWith("tuck");
 	const refusals: any[] = [];
 	const compactionEvents: any[] = [];
+	const cutLog: any[] = []; // every compaction entry that appears in the session while it runs (pi-tuck's in-run cuts emit no Pi events), with the session size before and after, in characters
+	let cutsSeen = 0, entryCount = 0, lastCtxChars = 0;
+	const watchCuts = (atMs: number) => { try { const sm = liveSession.sessionManager, n = sm.getEntryCount(), ctxChars = JSON.stringify(liveSession.messages).length;
+		if (n !== entryCount) { entryCount = n; const comps = sm.getEntries().filter((e: any) => e.type === "compaction"); while (cutsSeen < comps.length) { const c: any = comps[cutsSeen++]; cutLog.push({ atMs, n: cutsSeen, tokensBefore: c.tokensBefore, summaryChars: String(c.summary ?? "").length, ctxCharsBefore: lastCtxChars, ctxCharsAfter: ctxChars }); } }
+		lastCtxChars = ctxChars; return ctxChars; } catch { return undefined; } };
 	const trace: any[] = []; // from message_end events, so a compaction that rebuilds the message list cannot hide a request
 	let liveSession: any;
 	let handle: any;
@@ -78,9 +83,10 @@ async function ask(cut: number, set: any[]) {
 		sessionManager: SessionManager.inMemory(rec.cwd, undefined, [rec.header, ...entries] as any) });
 	await session.bindExtensions?.({});
 	liveSession = session;
+	try { cutsSeen = session.sessionManager.getEntries().filter((e: any) => e.type === "compaction").length; entryCount = session.sessionManager.getEntryCount(); lastCtxChars = JSON.stringify(session.messages).length; } catch {}
 	session.subscribe((e: any) => {
-		if (e.type === "message_end" && e.message?.role === "assistant") trace.push({ atMs: Date.now() - started, role: "assistant", stopReason: e.message.stopReason, errorMessage: e.message.errorMessage, usage: e.message.usage, calls: (e.message.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => b.name) });
-		if (e.type === "message_end" && e.message?.role === "toolResult") trace.push({ atMs: Date.now() - started, role: "toolResult", tool: e.message.toolName, chars: JSON.stringify(e.message.content).length, isError: e.message.isError });
+		if (e.type === "message_end" && e.message?.role === "assistant") trace.push({ atMs: Date.now() - started, role: "assistant", stopReason: e.message.stopReason, errorMessage: e.message.errorMessage, usage: e.message.usage, calls: (e.message.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => b.name), callArgs: (e.message.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => JSON.stringify(b.arguments ?? {}).slice(0, 400)), ctxChars: watchCuts(Date.now() - started) });
+		if (e.type === "message_end" && e.message?.role === "toolResult") trace.push({ atMs: Date.now() - started, role: "toolResult", tool: e.message.toolName, chars: JSON.stringify(e.message.content).length, isError: e.message.isError, toolCallId: e.message.toolCallId, ctxChars: watchCuts(Date.now() - started) });
 		if (e.type === "compaction_start" || e.type === "compaction_end") compactionEvents.push({ atMs: Date.now() - started, type: e.type, reason: e.reason, aborted: e.aborted, errorMessage: e.errorMessage }); });
 	const before = session.messages.length;
 	const started = Date.now();
@@ -105,7 +111,7 @@ async function ask(cut: number, set: any[]) {
 	session.dispose();
 	rmSync(work, { recursive: true, force: true });
 	await handle?.close?.().catch(() => {});
-	return { answer, ms: Date.now() - started, usage, tools, toolResultChars, error, activeTools, compactionSetting: compactionOn ? "on" : "off", tuckDir, refusals, compactionEvents, trace, semantic: semantic ? { state: semantic.state, coveredUnits: semantic.coveredUnits, totalUnits: semantic.totalUnits } : undefined, messages: added.length };
+	return { answer, ms: Date.now() - started, usage, tools, toolResultChars, error, activeTools, compactionSetting: compactionOn ? "on" : "off", tuckDir, refusals, compactionEvents, cutLog, trace, semantic: semantic ? { state: semantic.state, coveredUnits: semantic.coveredUnits, totalUnits: semantic.totalUnits } : undefined, messages: added.length };
 }
 
 mkdirSync(join(outPath, ".."), { recursive: true });
