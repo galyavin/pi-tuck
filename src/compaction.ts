@@ -238,7 +238,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const counts = [usage.input, usage.cacheRead, usage.cacheWrite];
         if (!counts.every(n => Number.isSafeInteger(n) && n >= 0)) return;
         const input = counts.reduce((a, b) => a + b, 0), ratio = input / paired.tokens;
-        if (input > 0 && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
+        // A request that was answered cannot have held more than the model's window, so a report above it describes something that never happened.
+        // Learning from one sets the factor for the requests after it: a 60,000-token cache read reported in a 32,768-token window made a
+        // 6,000-token prompt refuse. The overflow branch above learns from a refusal, where the count is a lower bound, and the ceiling is unchanged.
+        if (input > 0 && input <= ctx.model.contextWindow && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
     pi.on("agent_start", () => { admittedRun = true; pending = undefined; phase = "idle"; });
     pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); clips.clear(); promptCut = undefined; });

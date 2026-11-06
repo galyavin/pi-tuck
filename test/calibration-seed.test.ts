@@ -157,6 +157,17 @@ test('a higher ratio raises the factor on that very reply, whatever the window h
  await expectFactor(1.8, noSeed(), 'a reply may rise past the ceiling', ratio(1.8));
 });
 
+// A reply reporting more tokens than the model's window cannot describe the request it answers: nothing above the window gets an answer. It is a
+// wrong report rather than an observation, and learning from it refuses the prompts after it - recorded as a 60,000-token cache read reported in a
+// 32,768-token window, after which a 6,000-token prompt was refused. A report at or under the window is learned however far above its request it sits.
+test('a report above the window is not learned; one at the window is, far above the request it answers', async () => {
+ const reported = (tokens: number, offered: number) => async (d: Rig) => { await d.offer(offered); await d.reply(reporting(tokens)); };
+ await expectFactor(1, noSeed(), 'one token above the window', reported(WINDOW + 1, 6000));
+ await expectFactor(1, noSeed(), 'twice the window for a request that fits', reported(WINDOW * 2, WINDOW / 2));
+ await expectFactor(2, noSeed(), 'exactly the window for a request half that', reported(WINDOW, WINDOW / 2));
+ await expectFactor(1.3, noSeed(), 'a later report is learned as usual', then(reported(WINDOW + 1, 6000), ratio(1.3)));
+});
+
 test('an overflow bound is in the window: it protects the next cuts and ages out after K replies', async () => {
  const E = 230000, c = bound(E);
  expect(c).toBeGreaterThan(1.18);
