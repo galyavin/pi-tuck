@@ -21,12 +21,11 @@ function physicalPath(path:string):string {
   const next=dirname(parent);if(next===parent)throw error;parts.unshift(basename(parent));parent=next;
  }}
 }
+const inside=(base:string,target:string)=>{const rel=relative(base,target);return rel!=='..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);};
 function outsideProject(project:string,path:string,kind:'configuration'|'index'|'runtime'|'scratch'){
- const inside=(base:string,target:string)=>{const rel=relative(base,target);return rel!=='..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);};
  if(inside(resolve(project),resolve(path))||inside(physicalPath(project),physicalPath(path)))throw new Error('Semantic '+kind+' must be outside project');
 }
 function outsideRuntime(runtime:string,path:string,kind:'index'|'scratch'){
- const inside=(base:string,target:string)=>{const rel=relative(base,target);return rel!=='..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel);};
  if(inside(resolve(runtime),resolve(path))||inside(physicalPath(runtime),physicalPath(path)))throw new Error('Semantic '+kind+' must be outside immutable runtime');
 }
 function scratchParent(config:SemanticRecallConfig){return config.scratchDirectory??dirname(config.indexDirectory);}

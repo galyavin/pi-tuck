@@ -3,10 +3,10 @@ import {test,expect,vi} from 'vitest';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {ModelRuntime,SessionManager,SettingsManager,DefaultResourceLoader,createAgentSession,type AgentSession} from '@earendil-works/pi-coding-agent';
+import {SessionManager,SettingsManager,DefaultResourceLoader,createAgentSession,type AgentSession} from '@earendil-works/pi-coding-agent';
 import {createAssistantMessageEventStream,type AssistantMessage,type UserMessage} from '@earendil-works/pi-ai';
 import {installCompaction} from '../src/compaction';
-import {parseRecords,TRANSCRIPT_HEADER,splitSummary} from '../src/tuck/core/transcript';
+import {parseRecords,splitSummary} from '../src/tuck/core/transcript';
 import {Type} from 'typebox';
 for(const kind of ['repeated-text','active-auto','unobserved-text','image','omitted','superseded','capacity-conflict'] as const)
 test(`current input source remains complete or explicitly fails: ${kind}`,async()=>{

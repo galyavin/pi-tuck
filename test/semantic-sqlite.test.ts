@@ -1,4 +1,4 @@
-import { pythonFlags, testPython, testNativeOwner } from './python-fixture';
+import { pythonFlags, testPython } from './python-fixture';
 import {expect,test} from 'vitest';
 import {execFileSync} from 'node:child_process';
 import {mkdtempSync,mkdirSync,realpathSync,writeFileSync,rmSync} from 'node:fs';

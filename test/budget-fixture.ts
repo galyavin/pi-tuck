@@ -324,8 +324,8 @@ export async function harness(options: Options) {
    expect(rest).toBeGreaterThanOrEqual(0);
    promptText = 'Continue' + 'q'.repeat(rest * 4);
    expect(historyComplete()).toBe(options.complete);
-  } else if (options.at === 'prompt' && options.history !== undefined) {
-   for (let left = options.history; left > 0; left -= sizeFor) cycle(Math.min(sizeFor, left));
+  } else if (options.at === 'prompt' && (options.history !== undefined || options.summaryOnly)) {
+   if (options.history !== undefined) for (let left = options.history; left > 0; left -= sizeFor) cycle(Math.min(sizeFor, left));
    if (options.incoming !== undefined) {
     // The prompt and the system part together make `incoming` tokens.
     const system = referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson()), words = options.incoming - system - 2;
@@ -334,20 +334,6 @@ export async function harness(options: Options) {
     expect(promptTokens() + system).toBe(options.incoming);
    } else {
     // The prompt carries the rest of the request; it is protected from every cut.
-    const rest = options.complete - historyComplete();
-    expect(rest).toBeGreaterThan(0);
-    promptText = 'Continue' + 'q'.repeat(rest * 4);
-    expect(historyComplete()).toBe(options.complete);
-   }
-  } else if (options.at === 'prompt' && options.summaryOnly) {
-   // The summary alone is the conversation, so nothing but the prompt can carry the request.
-   const system = referenceSystemPart(saved(), session!.systemPrompt, activeToolsJson());
-   if (options.incoming !== undefined) {
-    const words = options.incoming - system - 2;
-    expect(words).toBeGreaterThan(0);
-    promptText = 'Continue' + 'q'.repeat(words * 4);
-    expect(promptTokens() + system).toBe(options.incoming);
-   } else {
     const rest = options.complete - historyComplete();
     expect(rest).toBeGreaterThan(0);
     promptText = 'Continue' + 'q'.repeat(rest * 4);

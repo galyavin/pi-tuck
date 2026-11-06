@@ -16,7 +16,7 @@ export { ensureSemanticRuntime } from "./src/setup";
 
 /** pi-tuck as a Pi extension: compaction and history recall always; semantic recall too, unless `pi-tuck.json` in Pi's agent folder
  * says `{"semanticRecall": false}`. Its runtime is set up in the background the first time a session starts. The same file's `"cutAt"`
- * (a number above 0 and at most 1) is the fraction of the input room a cut is triggered at, 1 by default. */
+ * (a number above 0 and at most 1) is the fraction of the input room a cut is triggered at, 0.6 by default. */
 /** The oldest Pi with every hook and API pi-tuck uses, and the oldest its tests pass on (Pi 1.2 added the custom message that starts a
  * run to before_agent_start, which the prompt's cut counts). */
 export const PI_FLOOR = "1.2.0";

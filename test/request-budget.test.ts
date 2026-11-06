@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { test, expect, vi } from 'vitest';
 import { Type } from 'typebox';
 import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai';
-import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, type AgentSession } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type AgentSession } from '@earendil-works/pi-coding-agent';
 import { installCompaction } from '../src/compaction';
 
 for (const kind of ['fit', 'conversation', 'tools', 'effective-override'] as const)

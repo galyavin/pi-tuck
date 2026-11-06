@@ -7,7 +7,7 @@ import { measurableConversationTokens } from '../src/budget';
 import { projectedMessages } from '../src/omissions';
 import { tuck, tuckObservedDraft, tuckRecall } from '../src/tuck';
 import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
-import { TRANSCRIPT_HEADER, parseRecords, serializeTranscript, splitSummary } from '../src/tuck/core/transcript';
+import { parseRecords, serializeTranscript, splitSummary } from '../src/tuck/core/transcript';
 import { ACTIONS_HEADING, LEDGER_HEADING, MAX_ACTION_CHARACTERS, MAX_ACTION_LINES, MAX_LEDGER_LINES, MAX_TASK_CONTRACT_CHARACTERS, actionRecords, ledgerItems, ledgerRecords } from '../src/ledger';
 import { buildGlobalIndexById } from '../src/tuck/core/global-indices';
 

@@ -75,22 +75,13 @@ const collectLiveMessages = (branchEntries: any[]): EntryWithMessage[] => {
 
   // Collect live messages
   const liveMessages: EntryWithMessage[] = [];
-  if (orphanRecovery) {
-    for (let i = lastCompactionIdx + 1; i < branchEntries.length; i++) {
-      const e = branchEntries[i];
-      if (e.type === "compaction") continue;
-      const m = toLiveMessage(e);
-      if (m) liveMessages.push({ entry: e, message: m });
-    }
-  } else {
-    let foundKept = !lastKeptId; // if no prior compaction, start collecting immediately
-    for (const e of branchEntries) {
-      if (!foundKept && e.id === lastKeptId) foundKept = true;
-      if (!foundKept) continue;
-      if (e.type === "compaction") continue;
-      const m = toLiveMessage(e);
-      if (m) liveMessages.push({ entry: e, message: m });
-    }
+  let foundKept = orphanRecovery || !lastKeptId;
+  for (let i = orphanRecovery ? lastCompactionIdx + 1 : 0; i < branchEntries.length; i++) {
+    const e = branchEntries[i];
+    if (!foundKept && e.id === lastKeptId) foundKept = true;
+    if (!foundKept || e.type === "compaction") continue;
+    const m = toLiveMessage(e);
+    if (m) liveMessages.push({ entry: e, message: m });
   }
   return liveMessages;
 };

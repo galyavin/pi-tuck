@@ -5,12 +5,12 @@ import { createRecall, type RecallPolicy } from './recall';
 /** Native branch edits supply exclusion; original global indices supply provenance. */
 export function omittedSourceIndices(entries: readonly SessionEntry[], branch: readonly SessionEntry[]): ReadonlySet<number> {
  const indices = buildGlobalIndexById(entries);
- const edits = new Map<string, boolean>();
+ const edits = new Set<string>();
  for (const entry of branch) if (entry.type === 'context_edit') {
   if (entry.replacement !== null) throw new Error('pi-tuck does not support replacement context edits');
-  edits.set(entry.targetId, true);
+  edits.add(entry.targetId);
  }
- return new Set([...edits].flatMap(([id, omitted]) => omitted && indices.has(id) ? [indices.get(id)!] : []));
+ return new Set([...edits].flatMap(id => indices.has(id) ? [indices.get(id)!] : []));
 }
 /** Preserve surviving record bytes/order, and the summary's format (a v1 summary stays v1). No text matching or semantic inference. */
 export function filterOmittedSummary(summary: string, omitted: ReadonlySet<number>): string {
@@ -49,22 +49,20 @@ export function filterCustomQuotes(summary: string, entries: readonly SessionEnt
 }
 type ProjectedMessages = ReturnType<ExtensionContext['sessionManager']['buildSessionProjection']>['messages'];
 /** The saved conversation as this compactor delivers it: native omissions and ineligible custom quotes removed from summaries. */
-export function projectedMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy?: RecallPolicy): ProjectedMessages {
+function projectMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy: RecallPolicy | undefined, allowForeign: boolean): ProjectedMessages {
  const entries = ctx.sessionManager.getEntries(), branch = ctx.sessionManager.getBranch();
  const omitted = omittedSourceIndices(entries, branch);
- return messages.map(message => message.role === 'compactionSummary'
+ return messages.map(message => message.role === 'compactionSummary' && (!allowForeign || splitSummary(message.summary) !== undefined)
   ? { ...message, summary: filterCustomQuotes(filterOmittedSummary(message.summary, omitted), entries, branch, policy) } : message);
 }
-/** Whether a compaction summary is in this compactor's own format. */
-const isTranscriptSummary = (summary: string) => splitSummary(summary) !== undefined;
+export function projectedMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy?: RecallPolicy): ProjectedMessages {
+ return projectMessages(messages, ctx, policy, false);
+}
 /**
  * The same as `projectedMessages` for every summary in this compactor's format, and it never throws for any other: a summary of another
  * format (a Pi default summary, an empty draft) cannot be filtered and is left as it is. For counting a conversation that a cut is about
  * to replace, such as an operator's /compact on a session whose saved summary is foreign. The context hook and the triggers stay strict.
  */
 export function measurableMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy?: RecallPolicy): ProjectedMessages {
- const entries = ctx.sessionManager.getEntries(), branch = ctx.sessionManager.getBranch();
- const omitted = omittedSourceIndices(entries, branch);
- return messages.map(message => message.role === 'compactionSummary' && isTranscriptSummary(message.summary)
-  ? { ...message, summary: filterCustomQuotes(filterOmittedSummary(message.summary, omitted), entries, branch, policy) } : message);
+ return projectMessages(messages, ctx, policy, true);
 }

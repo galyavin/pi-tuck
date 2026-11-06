@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BAND, HOST, ROOM, harness, nonSystem, scenario } from './budget-fixture';
+import { BAND, HOST, ROOM, harness, scenario } from './budget-fixture';
 
 const GUARD = 'Complete Pi context and response reserve exceed the estimated request budget';
 
