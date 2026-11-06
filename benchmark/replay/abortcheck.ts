@@ -1,7 +1,7 @@
 // PREREG-ABORTCHECK.md: answer.ts, unchanged in what it asks and scores, with three additions that only observe. (1) --compaction on|off picks Pi's
 // compaction setting (off is the main replay's own); (2) the pi-tuck `fail` option records every refusal the extension raises (the main replay has no
 // UI, so its notice is lost); (3) each answer record lists the requests of the session (stop reason, error text, token usage) and the compactions Pi ran.
-//   jiti benchmark/replay/abortcheck.ts RECORDING CUTS_DIR PROBES.json OUT.jsonl --agent mac-studio/main:xhigh --variant tuck-lexical --cuts 5 --tuck-dir DIR --compaction on|off [--wall-minutes 15]
+//   jiti benchmark/replay/abortcheck.ts RECORDING CUTS_DIR PROBES.json OUT.jsonl --agent mac-studio/main:xhigh --variant tuck-lexical --cuts 5 --tuck-dir DIR --compaction on|off [--wall-minutes 15] [--reserve 32768]
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -52,7 +52,7 @@ async function ask(cut: number, set: any[]) {
 	const entries = stateEntries(rec, compactions, compactions[cut - 1].position);
 	const work = mkdtempSync(join(tmpdir(), "tuck-replay-"));
 	workDirs.push(work);
-	const settings = SettingsManager.inMemory({ compaction: compactionOn ? { enabled: true, reserveTokens: RESERVE, keepRecentTokens: KEEP_RECENT } : { enabled: false }, retry: { enabled: true, maxRetries: 40, baseDelayMs: 5000, maxAgentDelayMs: 60000 } } as any);
+	const settings = SettingsManager.inMemory({ compaction: compactionOn ? { enabled: true, reserveTokens: Number(option("--reserve", String(RESERVE))), keepRecentTokens: KEEP_RECENT } : { enabled: false }, retry: { enabled: true, maxRetries: 40, baseDelayMs: 5000, maxAgentDelayMs: 60000 } } as any);
 	const usesTuck = variant.startsWith("tuck");
 	const refusals: any[] = [];
 	const compactionEvents: any[] = [];

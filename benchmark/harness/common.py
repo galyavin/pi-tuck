@@ -35,10 +35,14 @@ W32 = {"model": f"openrouter/{DEEPSEEK_ID}", "thinking": "high", "window": 32768
 W32M = {"window": 32768, "max_tokens": 16384, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 20000}}
 # The mac-studio gates and the thinking-level pilot (suite w32g): the same model entry and window, with the 32k suite's own compaction settings (keepRecentTokens 3,333).
 W32G = {**W32M, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 3333}}
+# The gate of the adaptive candidate (PREREG-ADAPTIVE.md), on the new model setup: the same model entry with the window forced to its 81,920 tokens, Pi's default compaction settings
+# (reserveTokens 16,384, keepRecentTokens 20,000) and the 16,384-token output cap.
+W81 = {"window": 81920, "max_tokens": 16384, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 20000}}
 SUITES = {"main": {"root": "live", "model": MODEL, "thinking": THINKING, "health": None},
           "w32": {"root": "live32", "model": W32["model"], "thinking": W32["thinking"], "health": "https://openrouter.ai/api/v1/models"},
           "w32m": {"root": "live32m", "model": MODEL, "thinking": THINKING, "health": None},
-          "w32g": {"root": "live32g", "model": MODEL, "thinking": THINKING, "health": None}}
+          "w32g": {"root": "live32g", "model": MODEL, "thinking": THINKING, "health": None},
+          "w81": {"root": "live81", "model": MODEL, "thinking": THINKING, "health": None}}
 
 
 def refuse_openrouter(what: str):
@@ -66,7 +70,7 @@ def sh(args, input=None, check=True, timeout=None):
     return subprocess.run(args, input=input, capture_output=True, text=True, check=check, timeout=timeout)
 
 
-TUCK_ARMS = ("B", "C", "D", "E", "F", "G", "H", "J", "K", "N", "P", "Q", "T", "V", "W", "X", "Y", "Z", "S", "U")  # arms that load a pi-tuck build (D, E: clip gate, not run; F, G: PREREG-V108.md; H, J: PREREG-CUTLATER.md; K: PREREG-DEFAULTS.md; N: its rerun on the fix build; P, Q: PREREG-V110.md; V, W: PREREG-CUTLATER2.md; X: the Pi-defaults check on 1.0.11; Y, Z: PREREG-V111.md; S, U: PREREG-PILOT.md)
+TUCK_ARMS = ("B", "C", "D", "E", "F", "G", "H", "J", "K", "N", "P", "Q", "T", "V", "W", "X", "Y", "Z", "S", "U", "L", "O")  # arms that load a pi-tuck build (D, E: clip gate, not run; F, G: PREREG-V108.md; H, J: PREREG-CUTLATER.md; K: PREREG-DEFAULTS.md; N: its rerun on the fix build; P, Q: PREREG-V110.md; V, W: PREREG-CUTLATER2.md; X: the Pi-defaults check on 1.0.11; Y, Z: PREREG-V111.md; S, U: PREREG-PILOT.md)
 
 
 def agent_dir(arm: str, suite: str = "main") -> Path:
@@ -78,6 +82,8 @@ def agent_dir(arm: str, suite: str = "main") -> Path:
         return agent_dir_w32m(arm)
     if suite == "w32g":
         return agent_dir_w32m(arm, W32G, "w32g")
+    if suite == "w81":
+        return agent_dir_w32m(arm, W81, "w81")
     path = RUNS / "agent" / arm
     path.mkdir(parents=True, exist_ok=True)
     if arm == "C" and not (path / "pi-tuck").exists():  # arm C is pi-tuck 1.0.3 with the semantic runtime arm B provisioned, cloned
