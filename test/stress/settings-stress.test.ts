@@ -47,9 +47,9 @@ const TRACE = process.env.STRESS_TRACE;
 const ONLY = process.env.STRESS_ONLY;
 /** Run only the cells whose name contains this, and for the sampled grid any cell that carries a sampled setup: STRESS_SETUP=setup, STRESS_SETUP=provider. */
 const SETUP_ONLY = process.env.STRESS_SETUP;
-/** A cut is thrash when the run takes more than one per this many tool rounds. A cut that frees less than a round's worth of context leaves the
- * session cutting again on the next request, and a replay that cuts 21-37 times per 100 turns spends its whole budget on summaries. */
-const THRASH_ROUNDS = 3;
+/** More than one cut per five tool rounds means a session repeatedly spends a substantial share of its work on compaction. This is a workload
+ * rate, not a claim that every fifth cut is intrinsically bad; short runs are excluded below. */
+const THRASH_ROUNDS = 5;
 /** No single prompt or tool result is bigger than this: a 1M-token string would spend the run on text generation rather than on settings. */
 const CAP = 120_000;
 /** A prompt that has not ended by now is stuck: the turn is aborted, the cell records it, and the session is asked to carry on. A cell whose
@@ -59,7 +59,7 @@ const PROMPT_MS = 60_000;
 /** The fixture's model, which every cell that does not name another goes out on. */
 const DEFAULT_API = 'openai-codex-responses (openai-codex/gpt-6.1-sol)';
 
-type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
+type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
 type Failure = { cell: string; rule: Rule; message: string; params: Record<string, unknown> };
 const failures: Failure[] = [];
 const ran: string[] = [];
@@ -71,7 +71,7 @@ const covCounted = new Set<string>();
 /** Every model API the run went out on, so the summary says which ones the numbers came from. */
 const apis = new Set<string>();
 /** One row per named setup cell: the point is to see a run that is near the limit and still under it, which a pass/fail table cannot show. */
-interface SetupRow { name: string; window: number; setup: number; floor: number; room: number; band: number; rounds: number; cuts: number; perRound: number; nextShare: number; meanFreed: number; thrashes: boolean }
+interface SetupRow { name: string; window: number; setup: number; floor: number; room: number; band: number; postCut: number | undefined; rounds: number; cuts: number; perRound: number; nextShare: number; meanFreed: number; thrashes: boolean }
 // ---- setup size ----
 // A Scoops replay at 131k spends about 24k of a 53k post-cut context on setup, and each cut frees only about 16k, so the setup and the band together
 // decide what a session has left to work with. The sampled grid ties setup to the window, so it never shows that; the setup cells cross five setup
@@ -130,6 +130,8 @@ interface Evidence {
  requests: number[];
  /** Compactions this cell saved, run-end cuts included. */
  cuts: number;
+ /** Guard measurements of requests after observable cuts. */
+ postCuts: number[];
  answered: number;
  refused: number;
  /** Prompts the run had to abort, and aborts an extension asked for. */
@@ -296,6 +298,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
   // The setup the cell carries: the system message, and the host's view of the conversation, which together stand in for a real system prompt and
   // its tool schemas. A cell that names a setup gets exactly that much setup; the sampled grid scales it with the window.
   at: 'prompt', complete: cell.setup ?? Math.max(2_000, cell.window), host: cell.host, noHistory: true, oneTurn: true, systemTokens: cell.system,
+  cutAtDefault: cell.setup !== undefined,
   limits: { contextWindow: cell.window, maxTokens: cell.maxTokens },
   reserveTokens: cell.reserve, keepRecent: cell.keepRecent, usageRatio: cell.usageRatio,
   // The provider counts by its own tokenizer and holds its window: a request whose count passes it comes back as an overflow, not an answer.
@@ -446,38 +449,54 @@ async function runCellInner(cell: Cell): Promise<Run> {
   const builds = h.state.cutCounts;
   const cutBuilds: number[] = [];
   for (let j = 0; j < builds.length; j++) if (builds[j] > (j === 0 ? cutStart : builds[j - 1])) cutBuilds.push(j);
-  // What lands in the conversation as build j is built: the reply to the request before it and the result of the round that reply asked for. Putting
-  // them back on the earlier side is what makes two neighbouring builds a like-for-like comparison.
-  const freshInto = (j: number) => h.state.results.reduce((sum, size, k) => sum + (h.state.resultAt[k] === j ? size : 0), 0) + (h.state.assistantSizes[j - 1] ?? 0);
-  // A cut shows in the guard as a request smaller than the one before it, which the session alone cannot do: between two builds the conversation only
-  // grows. The manager records a saved summary a build after the request it produced, so the shrink, not the count, marks the build a cut first
-  // reached. Only a shrink next to a recorded cut counts, since clipping a fresh result makes a request smaller too.
-  const shrinks = new Set<number>();
-  for (const c of cutBuilds) {
-    if (c - 1 > 0 && h.guard[c - 1] < h.guard[c - 2]) shrinks.add(c - 1);
-    else if (c > 0 && h.guard[c] !== undefined && h.guard[c - 1] !== undefined && h.guard[c] < h.guard[c - 1]) shrinks.add(c);
+  // A prompt cut is previewed on the first request and saved at its first boundary; tool-loop cuts are saved before the next request. Use the
+  // receipt to identify that request even when new content makes it larger than the preceding one. Run-end cuts have no comparable pre-cut probe.
+  const entries = h.manager.getEntries().filter(e => e.type === 'compaction').slice(cutStart);
+  const cutRequests: { at: number; reason: string }[] = [];
+  let observed = 0;
+  for (let j = 0; j < builds.length; j++) {
+   const count = builds[j]! - cutStart;
+   while (observed < count) {
+    const entry = entries[observed++];
+    if (!entry || entry.type !== 'compaction') continue;
+    const reason = (entry.details as { diagnosticReceipt?: { reason?: string } } | undefined)?.diagnosticReceipt?.reason;
+    if (!reason) continue; // A native or foreign compaction does not carry pi-tuck's boundary receipt.
+    const at = reason === 'prompt' ? j - 1 : j;
+    if (at >= 0 && h.guard[at] !== undefined) cutRequests.push({ at, reason });
+   }
   }
-  const freed = [...shrinks].sort((a, b) => a - b).map(j => h.guard[j - 1] + freshInto(j) - h.guard[j]);
+  const postCuts = cutRequests.map(({ at }) => h.guard[at]!);
+  // Compare the guard to the pre-cut boundary on the same request, not to the preceding request (which lacks the newly produced tool result).
+  const freed = cutRequests.flatMap(({ at, reason }) => {
+   if (reason === 'run-end') return [];
+   const probe = h.probes.findLast(p => p.after === at && p.at === (reason === 'prompt' ? 'prompt' : 'tool'));
+   return probe && probe.complete >= h.guard[at]! ? [probe.complete - h.guard[at]!] : [];
+  });
   const meanFreed = freed.length ? Math.round(freed.reduce((a, b) => a + b, 0) / freed.length) : 0;
   const nextShare = cutBuilds.length ? cutBuilds.filter(j => cutBuilds.includes(j + 1)).length / cutBuilds.length : 0;
   // The rate needs a run long enough to be a rate: one cut in three rounds says nothing, so the rule reaches runs of at least 12 tool rounds, named or
   // sampled, and exempts nothing else. A setup at or above the band is exactly the case under test.
   const thrashApplies = rounds >= 12;
-  const cutsAt = builds.length ? Math.max(cutBuilds.length, builds[builds.length - 1] - cutStart) : 0;
+  const cutsAt = savedCuts();
   const thrashes = thrashApplies && cutsAt * THRASH_ROUNDS > rounds;
   if (thrashApplies && thrashes) record(cell, 'thrash', `${cutsAt} cuts in ${rounds} tool rounds is more than one per ${THRASH_ROUNDS}: the mean cut freed ${meanFreed} tokens against a band of ${band} and a setup of ${cell.setup ?? floor}, and ${Math.round(nextShare * 100)}% of cuts were followed by another cut on the very next request`, { window: cell.window, setup: cell.setup ?? floor, band, rounds, cuts: cutsAt, meanFreed, nextShare });
+  // A slow-growing session can cut infrequently while every cut buys almost no room. On a long run, require the mean of at least three comparable
+  // cuts to free one tenth of the room: ten such gains together equal the whole usable room, a scale independent of the chosen round size.
+  if (rounds >= 12 && room > 0 && freed.length >= 3 && meanFreed < room / 10)
+   record(cell, 'useful-cut', `${freed.length} measured cuts freed a mean of ${meanFreed} tokens, less than one tenth of the ${room}-token room`, { room, measuredCuts: freed.length, meanFreed });
   // The table covers the named setup cells and any sampled run long enough for the thrash rule to reach it; a sampled cell of six rounds is a rate
   // measured over nothing, and the sampled grid is reported by the coverage line.
   if (cell.setup !== undefined && !cell.probe && (cell.name.startsWith('setup ') || rounds >= 12) && !setupSeen.has(cell.name)) {
    setupSeen.add(cell.name);
-   setupRows.push({ name: cell.name, window: cell.window, setup: cell.setup, floor, room, band, rounds, cuts: cutsAt, perRound: rounds ? cutsAt / rounds : 0, nextShare, meanFreed, thrashes });
+   const orderedPostCuts = [...postCuts].sort((a, b) => a - b);
+   setupRows.push({ name: cell.name, window: cell.window, setup: cell.setup, floor, room, band, postCut: orderedPostCuts[Math.floor(orderedPostCuts.length / 2)], rounds, cuts: cutsAt, perRound: rounds ? cutsAt / rounds : 0, nextShare, meanFreed, thrashes });
   }
   // The cell's own claim, read off what happened rather than what was asked for. A cell that never reached its state tested nothing, and that is
   // a finding about the test: it is recorded so it cannot hide behind a clean table.
   if (cell.reached) {
    const e: Evidence = {
     window: cell.window, reserve, room, factor, floor, savedStart, savedRoles, guard, counts,
-    probes: h.probes.slice(probeStart), prompts: promptSizes, results: resultSizes, requests: promptRequests, cuts: savedCuts(),
+    probes: h.probes.slice(probeStart), prompts: promptSizes, results: resultSizes, requests: promptRequests, cuts: savedCuts(), postCuts,
     answered, refused, hung, aborts: h.state.aborts, overflows: h.state.overflows, vetoes: h.state.vetoes,
     truncations: h.state.truncations, clips: h.state.clips, piOverflow: piOver, maxFresh: Math.max(0, ...h.state.results), maxAssistant: Math.max(0, ...h.state.assistantSizes),
     maxFactor: Math.max(1, ...h.state.counts.map((c, k) => c.known ? c.count / Math.max(1, h.guard[k]) : 1)),
@@ -705,12 +724,11 @@ function namedCells(): Cell[] {
   ...grow(roomOf({ window: 32_768, reserve: 4_096, maxTokens: 4_096 }), 1.05), extra: { turnEndEntries: 3 },
   reached: cutAtLeast('boundary entries appended at turn_end'),
  });
- /** Enough tool rounds to run the trigger four times over where the setup leaves room. Each round adds a prompt and a result of 2% of the room, and a
-  * cut lands the context back on the band at 60% of the room, so a cycle is about ten rounds: 60 rounds is six cycles, past the three the brief asks
-  * for. Where the setup leaves no room the same run is arithmetic, and the cell says so in its own `reached`. */
+ /** A sustained user turn with tool results, following a seeded summary and complete user/tool turns. The guard reports the actual post-cut size;
+  * the tail is not assumed to survive a cut. */
  const longRun = (window: number) => {
-  const step = Math.max(200, Math.round(Math.max(0, window - SETUP_RESERVE) * 0.02));
-  return { prompts: Array.from({ length: 60 }, () => step), rounds: Array.from({ length: 60 }, () => 1), results: [step] };
+  const step = Math.max(200, Math.min(20_000, Math.round(Math.max(0, window - SETUP_RESERVE) * 0.08)));
+  return { prompts: [11_000], rounds: [60], results: [step, Math.round(step / 2)] };
  };
  const setupReached = (setup: number, band: number, room: number): Reached => ({
   state: `at least one cut with the setup of ${setup} below the band of ${band}, or a noticed refusal where the setup leaves no room of ${room}`,
@@ -722,6 +740,7 @@ function namedCells(): Cell[] {
    window, reserve: SETUP_RESERVE, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup,
    system: Math.max(200, setup - 500 - SETUP_SCHEMA), host: 500, // the host's view is 500 tokens and the schemas cost SETUP_SCHEMA, so the request's setup part measures the setup the cell names
    ...longRun(window),
+   extra: { cutAtDefault: true, seededTail: { summary: 4_000, tail: 20_000, cycle: 2_000 } },
    reached: setupReached(setup, bandOf(Math.max(0, room), DEFAULT_CUT_AT), room),
    // A setup at or above the room is arithmetic, like a cell whose reserve leaves no room: the request has no conversation left to cut.
    why: setup >= room ? 'the setup alone leaves no room for a conversation' : undefined,
@@ -731,6 +750,15 @@ function namedCells(): Cell[] {
  // R&D's replay on real recordings: the same settings at the windows those sessions actually ran at, where 1.0.10 cut 21-37 times per 100 turns and
  // 17-33% of cuts were followed by another cut on the very next request. Those windows answer to the same rules as every other cell.
  const replayWindows = [57_344, 61_440, 73_728, 81_920].map(window => setupCell(window, SETUP_SIZE, 'replay window'));
+ const realPostCut = setupCell(81_920, SETUP_SIZE, 'real post-cut 49k');
+ realPostCut.reached = {
+  state: 'a seeded summary and tool tail, with a median measured post-cut request between 47k and 51k',
+  check: e => {
+   const measured = [...e.postCuts].sort((a, b) => a - b);
+   const median = measured[Math.floor(measured.length / 2)];
+   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && median !== undefined && median >= 47_000 && median <= 51_000;
+  },
+ };
  const replaySetups = [55_000, 62_000, 68_000].map(setup => setupCell(131_072, setup, 'replay setup'));
  // The replay's second prompt: at 131,072 with a 68k setup the second prompt is refused with "Complete Pi context and response reserve exceed", which
  // is Pi's own check rather than pi-tuck's. The cell asks only that the session says so, in words, and takes the prompt after it.
@@ -865,7 +893,7 @@ function namedCells(): Cell[] {
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
-  ...setupGrid, ...replayWindows, ...replaySetups, replaySecond,
+  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond,
   ...providerCells, ...oddUsageCells,
  ];
 }
@@ -928,16 +956,16 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  report(`\nstress: cells run ${ran.length}, failures ${failures.length}, top failure class ${sorted[0]?.[0] ?? 'none'}`);
  // What the grid actually reached. A run that cut nothing tested nothing, and this line is where that shows.
  report(`stress: coverage: cells with room ${cov.room}/${cov.cells}, cells with a cut ${cov.cut}/${cov.cells}, total cuts ${cov.cuts}, prompts answered ${cov.answered}, prompts refused ${cov.refused}, prompts planned above the room ${cov.aboveRoom}, provider overflows ${cov.overflows}, provider truncations ${cov.truncations}, clips ${cov.clips}`);
- report('class           failures  cells');
- for (const [rule, row] of sorted) report(`${rule.padEnd(15)}  ${String(row.count).padStart(6)}  ${[...row.cells].slice(0, 2).join(' | ')}${row.cells.size > 2 ? ` | +${row.cells.size - 2} more` : ''}`);
+ report('class           failures  cells  examples');
+ for (const [rule, row] of sorted) report(`${rule.padEnd(15)}  ${String(row.count).padStart(8)}  ${String(row.cells.size).padStart(5)}  ${[...row.cells].slice(0, 2).join(' | ')}${row.cells.size > 2 ? ` | +${row.cells.size - 2} more` : ''}`);
  // One row per named setup cell. A pass/fail table cannot show a run that is near the limit and still under it, and that is where a session spends
  // its life: `near` marks the cells whose cuts per round are within a third of the thrash limit without crossing it.
  if (setupRows.length) {
-  report('window    setup   floor   band    rounds  cuts  cuts/round  next%  mean-freed  verdict');
+  report('window    setup   floor   band  post-cut  rounds  cuts  cuts/round  next%  mean-freed  verdict  cell');
   for (const r of setupRows) {
    const over = r.setup >= r.band;
    const verdict = r.setup >= r.room ? 'no room' : r.rounds < 12 ? `${r.cuts ? 'cut' : 'no cut'}, short run` : r.thrashes ? 'thrash' : r.perRound * THRASH_ROUNDS >= 0.67 ? 'near limit' : r.cuts === 0 ? over ? 'no cut, setup over band' : 'no cut' : over ? 'ok, setup over band' : 'ok';
-   report(`${String(r.window).padStart(7)}  ${String(r.setup).padStart(6)}  ${String(r.floor).padStart(6)}  ${String(r.band).padStart(6)}  ${String(r.rounds).padStart(6)}  ${String(r.cuts).padStart(4)}  ${r.perRound.toFixed(3).padStart(10)}  ${String(Math.round(r.nextShare * 100)).padStart(5)}  ${String(r.meanFreed).padStart(10)}  ${verdict}`);
+   report(`${String(r.window).padStart(7)}  ${String(r.setup).padStart(6)}  ${String(r.floor).padStart(6)}  ${String(r.band).padStart(6)}  ${String(r.postCut ?? '-').padStart(8)}  ${String(r.rounds).padStart(6)}  ${String(r.cuts).padStart(4)}  ${r.perRound.toFixed(3).padStart(10)}  ${String(Math.round(r.nextShare * 100)).padStart(5)}  ${String(r.meanFreed).padStart(10)}  ${verdict}  ${r.name}`);
   }
   report(`stress: setup cells ${setupRows.length}, thrashing ${setupRows.filter(r => r.thrashes).length}, cutting nothing ${setupRows.filter(r => r.cuts === 0).length}`);
  }

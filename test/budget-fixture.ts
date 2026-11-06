@@ -78,6 +78,8 @@ export interface Options {
  persist?: boolean;
  /** Tokens of the fixture summary's own text (default 800). */
  summaryTokens?: number;
+ /** Seed a previous summary and a tail of complete user/tool turns for long-running session tests. */
+ seededTail?: { summary: number; tail: number; cycle: number };
  /** Tokens of a steering message queued during the tool call, so it is in the next request but not in the saved conversation. */
  queued?: number;
  keepRecent?: number;
@@ -306,6 +308,11 @@ export async function harness(options: Options) {
    if (options.omitted) records.unshift({ kind: 'excerpt', role: 'user', sourceIndex: 0, text: 'o'.repeat(options.omitted) });
    manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + DIALOGUE_SUFFIX, options.summaryOnly ? '' : opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    if (options.omitted) manager.appendContextEdit(opening, null);
+  }
+  if (options.seededTail) {
+   const { summary, tail, cycle: cycleTokens } = options.seededTail;
+   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized. ' + sized(summary) }]) + DIALOGUE_SUFFIX, '', 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   for (let left = tail; left > 0; left -= cycleTokens) cycle(Math.min(left, cycleTokens));
   }
   // History up to the request the case asks for. At the tool boundary the last tool result is sized when the tool runs.
   let promptText = 'Continue';
