@@ -27,6 +27,57 @@ Details, from the answer logs:
 - **Recall calls by pi-tuck.** Over all 95 asks (one ask per cut, all of a cut's probes in one prompt; 1,961 probes): 1.04 `tuck_recall` and 0.11 `tuck_search` calls per probe, 1.14 together; every ask made at least one call. The variant with meaning search off made 1.25 per probe.
 - **Probe types.** The 783 probes behind test 1a and the 728 behind 1b-Terra are all mechanical: files changed (194 and 180), test-runner summary (172 and 162), required tag (202 and 187), error class (172 and 159), result-line rule (43 and 40). The judge-scored next-step probes (95 in the replay probe set, scored for every variant) are not in them: their evidence is the step the agent took at the cut, which lies at or after the first entry kept, so they fail the registered rule that a probe counts only if the compactor did not keep its evidence. The size of what each compactor writes also differs: median summary 85,561 characters for pi-tuck, 23,598 for the local compactor and 11,200 for Terra, while the context carried after a cut is similar (27,656, 25,790 and 22,784 tokens).
 
+## Answer sets lost to aborts in the recall arms (read before tests 1a and 1b-Terra)
+
+In the replay (one agent session per cut, Pi's compaction off, as registered), the two arms with recall tools lost many answer sets. A lost set ended with the error "This operation was aborted" before the agent had answered, 1.4 to 8.7 minutes after it started, so not at the replay's 15-minute wall.
+
+| Arm | Answer sets lost |
+|---|---|
+| pi-tuck | **52 of 95** |
+| pi-tuck with semantic search off | **47 of 95** |
+| Pi's compaction prompts on mac-studio/main:xhigh | 0 of 95 |
+| Pi's compaction prompts on GPT-6.1 Terra | 1 of 87 |
+
+The one lost set of Pi's compaction prompts on GPT-6.1 Terra (`s04-A`, cut 5) ended at the 15-minute wall (15.0 minutes), so it is not an early abort of the kind the two recall arms show.
+
+| Cut | Answer sets | pi-tuck lost | pi-tuck, semantic search off, lost | pi-tuck probes scored |
+|---|---|---|---|---|
+| 1 | 20 | 1 | 0 | 294 |
+| 2 | 20 | 6 | 5 | 279 |
+| 3 | 20 | 13 | 12 | 147 |
+| 4 | 15 | 12 | 11 | 63 |
+| 5 | 8 | 8 | 7 | 0 |
+| 6 | 5 | 5 | 5 | 0 |
+| 7 | 5 | 5 | 5 | 0 |
+| 8 | 2 | 2 | 2 | 0 |
+
+**Effect on tests 1a and 1b-Terra.** The registered statistics drop every answer set that ended in an error, for every arm. The 783 probes of test 1a and the 728 shared probes of test 1b-Terra therefore come only from the 43 pi-tuck answer sets that finished, at cuts 1 to 4. No pi-tuck probe at cut 5 or later was scored, and even within cuts 1 to 4 only the answer sets that did not abort are scored. **The registered results of tests 1a and 1b-Terra stand as registered.**
+
+**Worst case, not an estimate.** The same pairing, bootstrap and seed with every lost answer set kept and each of its probes scored as wrong, in every arm (`analysis/summaryonly_extras.py --sut tuck`, registered in `DEVIATIONS.md` before it was computed). This counts a lost set as a certain miss, which it need not have been; it shows how much the registered result depends on the lost sets.
+
+| Arm against | pi-tuck registered D (lower bound) | pi-tuck worst case | semantic search off, registered | semantic search off, worst case |
+|---|---|---|---|---|
+| Pi's compaction prompts on mac-studio/main:xhigh | +25.7 (+22.0) | **−19.9 (−28.9)**, 1,677 probes | +24.6 (+19.2) | −18.6 (−28.6) |
+| Pi's compaction prompts on GPT-6.1 Terra | +33.7 (+30.4) | **−18.6 (−26.7)**, 1,706 probes | +29.5 (+24.0) | −17.2 (−25.8) |
+
+(Lower bounds for the worst case and for the semantic-search-off arm are those of the one-comparator command; the registered two-comparator command prints +22.0 for test 1a where the one-comparator command prints +21.9. The chain-clustered bounds are −30.8 and −28.1 for pi-tuck.)
+
+**Cause, as far as a check establishes it.** The replay had no UI, so the reason for an abort was never logged. pi-tuck 1.0.1 (`d71234a`) ends a run (`ctx.abort()`) when its complete-request guard (`src/compaction.ts`, line 541) finds the estimated request larger than the room (window 128,000 minus the 32,768-token reserve is 95,232 tokens), and shows the reason as a UI notice. With Pi's compaction off, the build's two in-run cut paths return early (lines 403 and 455) while the guard still runs, so a long recall session is ended instead of being cut. The abort check (`PREREG-ABORTCHECK.md`) asked three of the lost `tuck-lexical` sets again, in the measured build with compaction off (setup A) and in `v1.0.10` with compaction on (setup B), with the extension's refusal recorded; the four pending runs went side by side, one lane each, with 4 to 5 open connections from this machine to the server while all four ran.
+
+| Setup | Set (cut 5) | Ended | Requests (median seconds) | Peak input tokens | Outcome |
+|---|---|---|---|---|---|
+| A, `d71234a`, compaction off | s01-A | wall, 900 s | 6 (118) | 51,998 | wall-bound; counts for neither reading |
+| A | s05-A | 427 s | 11 (34) | 109,963 | **refused for capacity**: "Complete Pi context and response reserve exceed the estimated request budget"; 57 messages, 427,934 characters; the last batch held two `tuck_recall` results of 15,523 and 16,889 characters |
+| A | s09-B | 364 s | 17 (16) | 83,389 | answered |
+| B, `v1.0.10`, compaction on | s01-A | wall, 900 s | 10 (16) | 56,346 | wall-bound; counts for neither reading |
+| B | s05-A | wall, 900 s | 65 (8) | 57,495 | wall-bound; no refusal; the context fell by more than 5,000 tokens 10 times |
+| B | s09-B | 751 s | 32 (14) | 57,652 | answered; the context fell by more than 5,000 tokens 5 times |
+
+- The check shows that the refusal exists and ends a run the way the lost sets ended: one run of the measured build was refused for capacity once its context grew past the room (the server counted 99,593, 100,317 and 109,963 input tokens in its last three requests; the room is 95,232). It does not show that every one of the 52 lost sets was such a refusal: the reasons of those sets were not logged and cannot be recovered. The failures rise with the cut number; why was not tested.
+- No run of `v1.0.10` with compaction on was refused, and its context never exceeded 57,700 tokens in any of the three. In setup A one of three runs aborted early (the refusal), one answered and one was wall-bound; in setup B none aborted early: one answered and two were wall-bound. Six runs cannot give a failure rate. The two `s01-A` runs hit the wall after a first request of 431 s (A) and 379 s (B); `s05-A` in setup B hit it after 65 requests (median 8 s) and 105 tool results, a long session rather than a slow server. Runs that end at the wall count as evidence for neither reading (a rule set after the two `s01-A` runs were read; `DEVIATIONS.md`).
+
+**What is claimed.** **No retention claim is made for pi-tuck past cut 4**, because no pi-tuck answer past cut 4 was scored, and the cut 1 to 4 results cover only the answer sets that finished. A re-measure on the 1.0.11 build, with Pi's compaction on and the refusal reason logged, will report how many answer sets abort; until it reports, the numbers in this file are all the evidence there is.
+
 ## Test 1a: retention against Pi's compaction prompts on mac-studio/main:xhigh (all 20 recordings)
 
 | | pi-tuck | Pi's compaction prompts on mac-studio/main:xhigh |
@@ -91,6 +142,7 @@ Asked of the existing answer logs after the results were read; nothing was run f
 
 ## Limits (the registered "not claimed", and what this run adds)
 
+- 52 of pi-tuck's 95 answer sets and 47 of 95 with semantic search off ended in an abort and are outside tests 1a and 1b-Terra (section "Answer sets lost to aborts in the recall arms"); the retention numbers cover cuts 1 to 4 only.
 - Tests 1a and 1b-Terra compare pi-tuck with its recall tools against summaries alone (section above); they do not show how much of pi-tuck's result comes from the summary and how much from recall.
 - Fixed-size SWE-bench-style tasks, one local model, one build of each system. Nothing here is a statement about any other compactor, model, tier or window.
 - The probe set depends on the compactors: accuracies are over different probes, and D is over the shared ones.
