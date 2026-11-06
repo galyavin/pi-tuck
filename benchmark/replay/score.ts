@@ -8,6 +8,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 const [probesPath, answersPath, outPath, ...rest] = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : fallback; };
 const judgeSpec = option("--judge", "mac-studio/main:xhigh");
+if (/openrouter/i.test(judgeSpec)) throw new Error("OpenRouter is not used: mac-studio only: " + judgeSpec);
 const probes = new Map<string, any>(), byCut = new Map<number, any[]>();
 const loadProbes = (path: string) => { for (const p of JSON.parse(readFileSync(path, "utf8"))) probes.set(`${path}#${p.id}`, p); };
 loadProbes(probesPath);

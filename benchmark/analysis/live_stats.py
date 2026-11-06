@@ -86,8 +86,11 @@ def main():
                     if a and b and a[1] and b[1]:
                         per.append(get(b[1]) - get(a[1]))
                 if per:
+                    brng = random.Random(args.seed)
+                    draws = sorted(statistics.fmean(brng.choices(per, k=len(per))) for _ in range(args.boot))
+                    upper = draws[int(0.95 * args.boot)]  # PREREG claim 3(b): supported if the mean and this one-sided 95% upper bound are below zero (bootstrap over sessions, paired by chain)
                     print(f"  {label}: {arm} - A per session mean {statistics.fmean(per):+,.0f} over {len(per)} sessions "
-                          f"({sum(1 for p in per if p < 0)} sessions lower)")
+                          f"({sum(1 for p in per if p < 0)} sessions lower); one-sided 95% upper bound {upper:+,.0f}: {'below zero' if upper < 0 and statistics.fmean(per) < 0 else 'NOT below zero'}")
             wall = []
             for s in sessions:
                 a, b = data.get((s, "A")), data.get((s, arm))

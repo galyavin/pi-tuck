@@ -3,7 +3,7 @@
 // cut's questions in ONE wording; the last message is a JSON object of answers.
 //   jiti benchmark/recall/answer.ts RECORDING CUTS_FILE QUESTIONS.json OUT.jsonl --wording close|paraphrase --variant tuck|tuck-lexical|tuck-norecall|native-local
 //        [--agent SPEC] [--tuck-dir DIR] [--agent-dir DIR] [--cuts 1,2] [--warm 0|1]
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createJiti } from "jiti";
@@ -11,6 +11,7 @@ import { createJiti } from "jiti";
 const [recordingPath, cutsFile, probesPath, outPath, ...rest] = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : fallback; };
 const agentSpec = option("--agent", "openrouter/deepseek/deepseek-v4.1-flash-1017:high");
+if (/openrouter/i.test(agentSpec)) throw new Error("OpenRouter is not used: mac-studio only: pass --agent mac-studio/main:xhigh");
 const tuckDir = resolve(option("--tuck-dir", join(import.meta.dirname, "..", "..")));
 const agentDir = resolve(option("--agent-dir", join(import.meta.dirname, "..", "runs", "agent", "R")));
 process.env.PI_CODING_AGENT_DIR = agentDir; // set before Pi or pi-tuck read it
@@ -42,11 +43,16 @@ const promptFor = (set: any[]) => [
 	"", ...set.map(p => `${p.id} (task ${p.task}): ${p.question}`),
 ].join("\n");
 
+/** Work folders this run made; removed after each question and, for a crash or abort, at exit. */
+const workDirs: string[] = [];
+process.on("exit", () => { for (const d of workDirs) rmSync(d, { recursive: true, force: true }); });
+
 async function ask(cut: number, set: any[]) {
 	const compactions = cutsOf.cuts.slice(0, cut);
 	if (compactions.length < cut) return { skipped: `${variant} has no cut ${cut}` };
 	const entries = stateEntries(rec, compactions, compactions[cut - 1].position);
 	const work = mkdtempSync(join(tmpdir(), "tuck-replay-"));
+	workDirs.push(work);
 	const settings = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: true, maxRetries: 40, baseDelayMs: 5000, maxAgentDelayMs: 60000 } } as any);
 	const usesTuck = variant.startsWith("tuck");
 	let handle: any;
@@ -100,6 +106,7 @@ async function ask(cut: number, set: any[]) {
 	const answer = session.getLastAssistantText() ?? "";
 	const semantic = handle?.semanticStatus?.()?.local;
 	session.dispose();
+	rmSync(work, { recursive: true, force: true });
 	await handle?.close?.().catch(() => {});
 	return { answer, ms: Date.now() - started, usage, tools, toolResultChars, error, activeTools, index, semantic: semantic ? { state: semantic.state, coveredUnits: semantic.coveredUnits, totalUnits: semantic.totalUnits } : undefined, messages: added.length };
 }

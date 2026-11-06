@@ -16,6 +16,7 @@ const variants = option("--variants", "tuck").split(",");
 const tuckDir = resolve(option("--tuck-dir", join(import.meta.dirname, "..", "..")));
 const agentDir = resolve(option("--agent-dir", join(import.meta.dirname, "..", "runs", "agent", "R")));
 const nativeSpec = option("--native", "openrouter/deepseek/deepseek-v4.1-flash-1017"), nativeThinking = option("--native-thinking", "high");
+if (variants.some(v => v.startsWith("native"))) throw new Error("OpenRouter is not used: mac-studio only: lme/cuts.ts native variants are wired to OpenRouter");
 
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const { tuck, tuckObservedDraft } = await jiti.import(join(tuckDir, "src", "tuck.ts")) as any;

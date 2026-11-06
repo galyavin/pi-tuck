@@ -35,7 +35,7 @@ def load(root: Path):
 def usable(row, cuts, evidence, *variants):
     """A probe counts for a variant only if that variant did not keep its evidence in the tail it left after the cut."""
     for v in variants:
-        source = "tuck" if v == "tuck-lexical" else v
+        source = "tuck" if v in ("tuck-lexical", "tuck-norecall") else v
         log = cuts[row["rec"]].get(source, {}).get("log", [])
         if row["cut"] > len(log) or "firstKeptIndex" not in log[row["cut"] - 1]:
             return False
