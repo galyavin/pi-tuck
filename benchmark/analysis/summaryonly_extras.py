@@ -1,6 +1,7 @@
 """Descriptive checks for PREREG-SUMMARYONLY.md (registered in DEVIATIONS.md before they were computed); they do not change the registered D.
 
-Usage: summaryonly_extras.py SCORES_DIR --llms native-local|native-terra [--boot 10000] [--seed 1]
+Usage: summaryonly_extras.py SCORES_DIR --llms native-local|native-terra [--sut tuck-norecall] [--boot 10000] [--seed 1]
+(--sut tuck or tuck-lexical gives the same two checks for the main replay's recall arms; the default is the summary-only arm.)
 (a) D with the probes of every failed answer set (the 15-minute wall) kept and scored as wrong, in every arm;
 (b) D by probe age, on the registered pairing (failed sets dropped). Pairing, usable-probe rule, bootstrap and seed are replay_stats.py's own (one generator per line: the probe bootstrap, then the chain bootstrap, as in `replay_stats.py --llms X`)."""
 import argparse
@@ -15,10 +16,11 @@ import replay_stats as rs  # noqa: E402
 parser = argparse.ArgumentParser()
 parser.add_argument("root")
 parser.add_argument("--llms", required=True)
+parser.add_argument("--sut", default="tuck-norecall")
 parser.add_argument("--boot", type=int, default=10000)
 parser.add_argument("--seed", type=int, default=1)
 args = parser.parse_args()
-SUT, AGENT = "tuck-norecall", "mac-studio/main:xhigh"
+SUT, AGENT = args.sut, "mac-studio/main:xhigh"
 rows, cuts, evidence = rs.load(Path(args.root))
 rows = [r for r in rows if r["agent"] == AGENT]
 
