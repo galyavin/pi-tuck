@@ -39,8 +39,13 @@ def chain(session: str, tasks: list[str], tucks: dict[str, str], suite: str = "m
     out = {arm: RUNS / root / f"{session}-{arm}" for arm in arms}
     if all((o / "stats.json").exists() for o in out.values()):
         return session, "skipped"
-    for o in out.values():
-        shutil.rmtree(o, ignore_errors=True)
+    for o in out.values():  # a partial session folder is raw evidence: it moves aside under a name that is free, it is never deleted
+        if o.exists():
+            aside, n = RUNS / root / "attempts" / f"{o.name}-{time.strftime('%m%d-%H%M%S')}", 0
+            while aside.exists():
+                n += 1; aside = aside.with_name(f"{aside.name}.{n}")
+            aside.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(o), str(aside))
     procs = []
     for arm in arms:
         cmd = [sys.executable, str(HERE / "live.py"), "--arm", arm, "--session", session, "--tasks", ",".join(tasks), "--suite", suite, *EXTRA]

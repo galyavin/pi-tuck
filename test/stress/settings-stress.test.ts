@@ -59,7 +59,7 @@ const PROMPT_MS = 60_000;
 /** The fixture's model, which every cell that does not name another goes out on. */
 const DEFAULT_API = 'openai-codex-responses (openai-codex/gpt-6.1-sol)';
 
-type Rule = 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
+type Rule = 'lost-prompt' | 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
 type Failure = { cell: string; rule: Rule; message: string; params: Record<string, unknown> };
 const failures: Failure[] = [];
 const ran: string[] = [];
@@ -323,17 +323,29 @@ async function runCellInner(cell: Cell): Promise<Run> {
   const savedStart = nonSystem(h.saved());
   const savedRoles = h.saved().map(m => m.role);
   const probeStart = h.probes.length;
+  // One answer per context build, not its text: a grid's requests held in memory run the worker out of heap.
+  const carriedPrompt: boolean[] = [];
+  let carriedSeen = 0, opening = '';
+  h.extension().on('context_with_system', event => { carriedPrompt.push(JSON.stringify(event.messages).includes(opening)); });
   for (let i = 0; i < cell.prompts.length; i++) {
    // Exactly the size the cell names: a prompt that says 36,000 tokens is 36,000 tokens of what pi-tuck counts.
    const body = h.sized(Math.max(20, Math.min(CAP, cell.prompts[i] ?? 100)));
    const tokens = est({ role: 'user', content: body, timestamp: 0 });
    promptSizes.push(tokens);
+   opening = JSON.stringify(body.slice(0, 80)).slice(1, -1);
    const ms = cell.stallPrompt === i + 1 ? cell.abortAfter ?? 1_500 : PROMPT_MS;
    startReq = h.state.requests; roundEnd = startReq + (cell.rounds[i] ?? 0);
    const seen = { requests: h.state.requests, notices: h.notices.length, faults: h.faults.length, guard: h.guard.length, stops: h.state.stops.length, results: h.state.results.length, counts: h.state.counts.length, clips: h.state.clips, answers: h.state.answers.length };
    const outcome = await drive(h, body, ms);
    threw.push(lastThrew);
    const requests = h.state.requests - seen.requests;
+   // Every prompt reaches the model and stays in the session, whatever a cut did, or the operator is told. Long prompts may be quoted by a summary with a
+   // locator to the rest, so the check reads the prompt's opening. A prompt the model never saw looks like an ordinary answer to everything else.
+   const built = carriedPrompt.slice(carriedSeen, carriedSeen + requests);
+   carriedSeen = carriedPrompt.length;
+   const missing = built.filter(carried => !carried).length;
+   if (missing) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens was missing from ${missing} of its ${requests} requests`, { prompt: i + 1 });
+   else if (requests > 0 && !JSON.stringify(h.manager.buildSessionProjection().messages).includes(opening)) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens reached the model but is gone from the saved session`, { prompt: i + 1 });
    // Every request has exactly one context build before it, and both lists grow in order, so the first `requests` measures are the requests that
    // went out. A build that never became a request was refused before it was sent, and so cannot have exceeded the window.
    const sent = h.guard.slice(seen.guard, seen.guard + requests);

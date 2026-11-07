@@ -310,6 +310,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // before a boundary drops it, and the next prompt decides afresh.
     type CutEntry = { type: "compaction"; summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown };
     let promptCut: CutEntry | undefined;
+    // Where the branch ended when the prompt's cut was planned: the prompt is the entry Pi appends there. A cut that keeps nothing of the conversation
+    // before it names no entry to keep from, and read as it stands that drops the prompt too, so the model never sees it.
+    let promptCutAt = 0;
+    const keptFrom = (cut: CutEntry, ctx: ExtensionContext) => cut.firstKeptEntryId || ctx.sessionManager.getBranch()[promptCutAt]?.id || "";
     let failure: Error | undefined;
     let pendingBoundaryCommit = false;
     // Fresh tool results the room cannot hold, by call id: each request of the run carries the clip in their place; the session keeps them
@@ -467,7 +471,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const header = ctx.sessionManager.getHeader();
         if (!header) throw new Error("Missing native session header for the prompt's cut");
         const preview = SessionManager.inMemory(ctx.cwd, undefined, [header, ...ctx.sessionManager.getBranch()]);
-        preview.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);
+        preview.appendCompaction(cut.summary, keptFrom(cut, ctx), 0, cut.details, true);
         return preview;
     };
     const withCut = (ctx: ExtensionContext, cut: CutEntry) => cutSession(ctx, cut).buildSessionProjection().messages;
@@ -477,6 +481,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // Pi's defaults on a 32k window). Each request of the run carries the cut, and the run's first boundary saves it.
     const preflight = async (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[]) => {
         promptCut = undefined;
+        promptCutAt = ctx.sessionManager.getBranch().length;
         if (!active()) return;
         access();
         if (!settingsFor().getCompactionSettings(ctx.model).enabled) return;
@@ -620,7 +625,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const preview = cutSession(ctx, entry), view: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
         const more = decide && !event.entries.length
             ? boundaryCut({ ...event, context: { ...event.context, contextMessages: preview.buildSessionProjection().messages } }, view, reason) : undefined;
-        const { tokensBefore: _, ...saved } = entry;
+        const { tokensBefore: _, ...cut } = entry;
+        const saved = { ...cut, firstKeptEntryId: keptFrom(entry, ctx) };
         // As for a cut Pi makes (session_compact): the history the cut leaves behind is indexed, once Pi has committed the entries.
         setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
         return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
