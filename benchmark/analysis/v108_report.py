@@ -83,7 +83,7 @@ for arm in arms:
     summary[arm] = {"dead": sum(map(len, dead.values())), "mid": sum(map(len, mid.values())), "n": n, "res": res}
     print(f"  arm {arm}: tasks {n}, resolved {res}, dead tasks {summary[arm]['dead']} {dead}, mid-run refusals {summary[arm]['mid']} {mid}")
 b, g = summary[args.base], summary[args.cand]
-complete = b["n"] == g["n"] == 30 * len(chains)
+complete = b["n"] == g["n"] == 30 * len(chains) and all(set(data[(c, args.base)]["tasks"]) == set(data[(c, args.cand)]["tasks"]) for c in chains)  # the same tasks in both arms, not only the same counts
 cost_of = lambda arm: sum((data[(c, arm)]["stats"] or {}).get("cost") or 0 for c in chains if data[(c, arm)]["stats"] and not isinstance(data[(c, arm)]["stats"].get("cost"), dict))
 print(f"  paired tasks complete in both arms: {complete} ({b['n']} and {g['n']} of {30 * len(chains)})")
 print(f"  candidate dead tasks = 0: {g['dead'] == 0}; candidate resolved {g['res']} >= base resolved {b['res']}: {g['res'] >= b['res']}; GATE: {'PASS' if complete and g['dead'] == 0 and g['res'] >= b['res'] else 'FAIL or incomplete'}")
