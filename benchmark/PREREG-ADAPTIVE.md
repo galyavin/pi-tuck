@@ -53,3 +53,7 @@ The first run of this gate (arms L = 1.0.11 and O = `21fa1a4`) was stopped by ha
 **Audit (c).** `analysis/prompt_evidence.py` lists, for both arms, every task whose session has a cut with reason `prompt` and whose first four assistant messages show a sign that the prompt is missing: confusion or missing-task wording, another task number named as the current one, or the previous task's tag or issue named instead of this one's. I read each listed task's first four messages and count it lost when they show the model without this task's prompt. The same signs are counted on the tasks with no cut at a prompt, as the base rate (7% of such tasks in the 1.0.10 and 1.0.11 sessions read for the dropped-prompt notes). Each arm's listing, my reading of each listed task and the controls are published with the result.
 
 **Reported with no pass line, added.** Prompt cuts per arm and the tasks of each with signs; the lanes in use, the requests completed per minute by lanes in use, and the server's connections every 60 s (`harness/gate_load_sampler.sh`, `analysis/gate_throughput.py`).
+
+## Later gates
+
+One line per later gate is appended below before the gate starts (base, candidate, tier, suite, chains), and lane counts and start commands are not registered terms of any gate in this file from here on.
