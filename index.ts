@@ -45,7 +45,7 @@ export default async function (pi: ExtensionAPI) {
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
 	// Semantic recall runs on Metal, so only on Apple silicon; elsewhere the model is not offered tuck_search at all.
 	const appleSilicon = process.platform === "darwin" && process.arch === "arm64";
-	const handle = await installCompaction(pi, { semanticRecall, search: appleSilicon, cutAt: settings.cutAt, onSemanticSetting: async enabled => { off = !enabled; } });
+	const handle = await installCompaction(pi, { semanticRecall, search: appleSilicon, cutAt: settings.cutAt, fixedContextPruning: settings.fixedContextPruning, onSemanticSetting: async enabled => { off = !enabled; } });
 	if (settings.semanticRecall === false) return;
 	let session = 0, said = "", setup: Promise<unknown> | undefined;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
@@ -80,13 +80,13 @@ export default async function (pi: ExtensionAPI) {
 	});
 }
 
-function readSettings(path: string): { semanticRecall?: boolean; cutAt?: number; error?: string } {
+function readSettings(path: string): { semanticRecall?: boolean; cutAt?: number; fixedContextPruning?: boolean; error?: string } {
 	let text: string;
 	try { text = readFileSync(path, "utf8"); } catch { return {}; }
 	try {
 		const value = JSON.parse(text);
 		if (value && typeof value === "object" && (value.semanticRecall === undefined || typeof value.semanticRecall === "boolean") &&
-			(value.cutAt === undefined || validCutAt(value.cutAt))) return value;
+			(value.cutAt === undefined || validCutAt(value.cutAt)) && (value.fixedContextPruning === undefined || typeof value.fixedContextPruning === "boolean")) return value;
 	} catch { /* reported below */ }
 	return { error: `${path} should be a JSON object like {"semanticRecall": false, "cutAt": 0.8}, with cutAt a number above 0 and at most 1` };
 }
