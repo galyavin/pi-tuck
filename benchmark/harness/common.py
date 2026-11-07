@@ -70,6 +70,15 @@ def sh(args, input=None, check=True, timeout=None):
     return subprocess.run(args, input=input, capture_output=True, text=True, check=check, timeout=timeout)
 
 
+def write_config(path: Path, text: str):
+    """Write a shared agent-folder file without a window in which a reader sees it empty: arms that start together write the same files, and `write_text` truncates first (a second arm read an empty models.json and died at start on 2026-11-06). An unchanged file is left alone; a changed one is replaced in one step."""
+    if path.exists() and path.read_text() == text:
+        return
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 TUCK_ARMS = ("B", "C", "D", "E", "F", "G", "H", "J", "K", "N", "P", "Q", "T", "V", "W", "X", "Y", "Z", "S", "U", "L", "O")  # arms that load a pi-tuck build (D, E: clip gate, not run; F, G: PREREG-V108.md; H, J: PREREG-CUTLATER.md; K: PREREG-DEFAULTS.md; N: its rerun on the fix build; P, Q: PREREG-V110.md; V, W: PREREG-CUTLATER2.md; X: the Pi-defaults check on 1.0.11; Y, Z: PREREG-V111.md; S, U: PREREG-PILOT.md)
 
 
@@ -94,8 +103,8 @@ def agent_dir(arm: str, suite: str = "main") -> Path:
     models = json.loads((PI_AGENT / "models.json").read_text())["providers"]
     provider = models["mac-studio"]
     assert provider["apiKey"].startswith("${"), "the mac-studio key must be an environment reference, never a literal"
-    (path / "models.json").write_text(json.dumps({"providers": {"mac-studio": provider}}, indent=1))
-    (path / "settings.json").write_text(json.dumps({
+    write_config(path / "models.json", json.dumps({"providers": {"mac-studio": provider}}, indent=1))
+    write_config(path / "settings.json", json.dumps({
         "compaction": COMPACTION, "retry": RETRY, "defaultProvider": "mac-studio", "defaultModel": "main", "defaultThinkingLevel": THINKING,
         "quietStartup": True, "packages": [], "extensions": [],
     }, indent=1))
@@ -130,8 +139,8 @@ def agent_dir_w32m(arm: str, cfg: dict = W32M, suite: str = "w32m") -> Path:
     provider = json.loads((PI_AGENT / "models.json").read_text())["providers"]["mac-studio"]
     assert provider["apiKey"].startswith("${"), "the mac-studio key must be an environment reference, never a literal"
     provider["models"] = [{**m, "contextWindow": cfg["window"], "maxTokens": cfg["max_tokens"]} if m["id"] == "main" else m for m in provider["models"]]
-    (path / "models.json").write_text(json.dumps({"providers": {"mac-studio": provider}}, indent=1))
-    (path / "settings.json").write_text(json.dumps({
+    write_config(path / "models.json", json.dumps({"providers": {"mac-studio": provider}}, indent=1))
+    write_config(path / "settings.json", json.dumps({
         "compaction": cfg["compaction"], "retry": RETRY, "defaultProvider": "mac-studio", "defaultModel": "main", "defaultThinkingLevel": THINKING,
         "quietStartup": True, "packages": [], "extensions": [],
     }, indent=1))
