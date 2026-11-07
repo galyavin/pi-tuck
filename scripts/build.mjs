@@ -1,13 +1,10 @@
 import ts from 'typescript';
-import { createHash } from 'node:crypto';
+import { sourceId } from './source-id.mjs';
 import { mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve, extname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
-const hash = createHash('sha256');
-const fingerprint = dir => { for (const e of readdirSync(dir, { withFileTypes: true }).sort((a,b)=>a.name.localeCompare(b.name))) { const path = resolve(dir,e.name); if(e.isDirectory()) fingerprint(path); else if(e.name !== 'build-id.ts') { hash.update(relative(root, path).split(sep).join('/')); hash.update(readFileSync(path)); } } };
-fingerprint(resolve(root,'src'));
-writeFileSync(resolve(root,'src/build-id.ts'), `export const BUILD_ID = ${JSON.stringify(hash.digest('hex'))};\n`);
+writeFileSync(resolve(root,'src/build-id.ts'), `export const BUILD_ID = ${JSON.stringify(sourceId(root))};\n`);
 const config = ts.readConfigFile(resolve(root, 'tsconfig.json'), ts.sys.readFile);
 if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
 const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root, {
