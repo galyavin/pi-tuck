@@ -49,3 +49,7 @@ Registered in `PREREG-CUTLATER.md` before any run (hashes amended and dated on 2
 - One model, one window and one `keepRecentTokens` (3,333); one run per arm; five chains. Nothing here tests Pi's default `keepRecentTokens` of 20,000, which is the Pi-defaults check (arm N).
 - Conditions 1, 3 and 4 are point comparisons. Condition 1 is a ratio of means on 112 tasks; condition 4 uses Pi's own cost estimate, not the provider invoice.
 - Condition 2 is a count of one. The registered rule is exact and is applied as registered.
+
+## Dropped prompts at a cut (added 2026-11-06)
+
+The session files show cuts at the prompt that kept no turn (receipt: reason `prompt`, `keptUserTurns` 0, empty `firstKeptEntryId`) in both arms: 13 of the 150 tasks of the base arm H (`a67ec30`; 52 cuts at a prompt) and 6 of the 150 tasks of the cut-later arm J (`16de3a9`; 25 cuts at a prompt). In all 19 the model's first messages after the cut show it did not have the task's prompt; 9 of the 13 and 5 of the 6 were resolved after the prompt reached the model again (the task's tag appears in the model's later messages). The registered comparison stands as registered. These tasks are not a fair measure of either build. J made fewer cuts at a prompt (25 against 52), which is why it has fewer such tasks. This is a different failure from the large-prompt drop described above (t03 task 24), which raised no cut receipt of this kind. 1.0.12 fixes the cause.

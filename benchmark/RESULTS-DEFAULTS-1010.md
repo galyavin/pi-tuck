@@ -54,3 +54,7 @@ The counter was refined on 2026-11-05, after the results were seen, so that a no
 - One session per arm on one chain, one model, one build each. The arms ran at different times and under different server load, so their resolved counts, turns and tokens are not comparable with each other; with most tasks ended at the wall cap they mostly measure how slow the server was.
 - A pass shows no lost task and no stuck session in these 30 tasks, not that none can occur.
 - The three stalled tasks decide arm X's verdict under the registered counter; both readings are given above.
+
+## Dropped prompts at a cut (added 2026-11-06)
+
+"0 dead tasks and 0 stuck sessions" is the registered condition and it stands as registered, but the counter behind it counts refusals and cannot see this failure. The session files show a cut at the prompt that kept no turn (reason `prompt`, `keptUserTurns` 0, empty `firstKeptEntryId`) in **8 of arm N's 30 tasks** (4, 8, 9, 10, 13, 14, 17, 21) and **7 of arm X's 30 tasks** (3, 8, 10, 17, 20, 22, 25). In 12 of those 15 the model's first messages show it did not have the task's prompt (the other 3 are not clear from the records); 1 of the 15 resolved (X task 25, after 60 turns) and 12 ended with an empty patch. So a pass on this test shows no refusal, not that every task began with its prompt: about a quarter of the tasks did not. 1.0.12 fixes the cause.
