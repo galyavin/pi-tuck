@@ -3,6 +3,17 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.14] - 2026-11-07
+
+### Changed
+
+- Internal cleanup across the code, tests and benchmark scripts, with no change to any request.
+- The build id in a cut's receipt now follows all the source a build ships.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.13:** 13,946 requests on 29 recordings, 0 differ, 0 dead tasks, the same 28 clips. A build that changes no request gives a live test nothing to measure. Tests; CI; the stress test on Pi 1.2.0 and the newest Pi, with the same 3 of 274 cells as 1.0.13.
+
 ## [1.0.13] - 2026-11-07
 
 ### Changed
