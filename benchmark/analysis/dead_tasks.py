@@ -2,12 +2,14 @@
 Usage: dead_tasks.py LIVE32_DIR ARM [CHAIN ...]
 A task is dead when pi-tuck refused it before any request carried tokens, or when it was refused right after a refused task (a failure carried
 forward). Every other refused task is a mid-run refusal; its prompt size and largest tool result are printed so that it can be audited by hand
-against its own fresh tool round."""
+against its own fresh tool round.
+Added 2026-11-06: a task whose prompt was dropped at a cut (no refusal, so nothing above counts it) is listed on its own line and in its own total; see prompt_drops.py. The dead and mid-run counts are unchanged."""
 import json
 import re
 import sys
 from pathlib import Path
 
+from prompt_drops import dropped_prompt_tasks
 from w32_stats import TASK, text_of, scan_events
 
 
@@ -31,7 +33,7 @@ def biggest_result(folder: Path) -> dict:
 
 
 root, arm, *chains = sys.argv[1:]
-dead_total = mid_total = 0
+dead_total = mid_total = dropped_total = 0
 for folder in sorted(Path(root).glob(f"t[0-9][0-9]-{arm}")):
     if chains and folder.name.split("-")[0] not in chains:
         continue
@@ -51,4 +53,7 @@ for folder in sorted(Path(root).glob(f"t[0-9][0-9]-{arm}")):
     print(f"{folder.name}: {len(tasks)} tasks done; refused {len(refused)}: dead {sorted(dead)}; mid-run {sorted(mid)}")
     for k in sorted(mid):
         print(f"    mid-run task {k}: largest prompt {largest.get(k, 0)} tokens, largest tool result {big.get(k, 0)} characters")
-print(f"TOTAL arm {arm}: dead {dead_total}, mid-run {mid_total}")
+    dropped = dropped_prompt_tasks(folder)
+    dropped_total += len(dropped)
+    print(f"    prompt dropped at a cut (receipt) in tasks {sorted(dropped)}")
+print(f"TOTAL arm {arm}: dead {dead_total}, mid-run {mid_total}, prompt dropped at a cut {dropped_total}")

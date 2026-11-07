@@ -10,6 +10,7 @@ import random
 import statistics
 from pathlib import Path
 
+from prompt_drops import dropped_prompt_tasks
 from w32_stats import compare, load
 
 parser = argparse.ArgumentParser()
@@ -21,6 +22,7 @@ parser.add_argument("--boot", type=int, default=10000)
 parser.add_argument("--seed", type=int, default=1)
 parser.add_argument("--tier", type=int, choices=(1, 2), help="PREREG tier: 1 = at least 60 paired tasks and lower bound above -10 points; 2 = at least 150 and above -5")
 parser.add_argument("--exclude", action="append", default=[], metavar="CHAIN:INDEX", help="readout with no pass line: the paired resolved difference and its lower bound without these tasks, e.g. t03:24")
+parser.add_argument("--count-dropped-prompts", action="store_true", help="2026-11-06: a task whose prompt was dropped at a cut (receipt, prompt_drops.py) counts as a dead task; off by default so that registered readouts reproduce unchanged")
 parser.add_argument("--cutlater", action="store_true", help="PREREG-CUTLATER.md: add the turns and spend conditions and the four-condition verdict")
 args = parser.parse_args()
 chains, arms = args.sessions.split(","), [args.base, args.cand]
@@ -30,8 +32,10 @@ resolved = lambda d, k: int(bool(d["tasks"][k]["grade"].get("resolved")))
 sent = lambda t: sum((t.get("usage") or {}).get(u, 0) for u in ("input", "output", "cacheRead")) > 0
 
 
-def dead_and_mid(d):
+def dead_and_mid(d, folder=None):
     dead = {k for k in d["refused"] if k in d["tasks"] and (not sent(d["tasks"][k]) or (k - 1) in d["refused"])} | {k for k, t in d["tasks"].items() if not sent(t) and t.get("aborted_for") != "wall"}  # a task that ended by itself with no tokens is lost whatever the notice (2026-11-01); one that sat on an unanswered request to the wall cap is a stall, reported apart (2026-11-05)
+    if args.count_dropped_prompts and folder is not None:
+        dead = dead | (dropped_prompt_tasks(folder) & set(d["tasks"]))
     return dead, d["refused"] - dead
 
 
@@ -72,8 +76,8 @@ def recall_calls(folder: Path):
 print(f"GATE  chains {','.join(chains)}; base arm {args.base}, candidate arm {args.cand}")
 summary = {}
 for arm in arms:
-    dead = {c: sorted(dead_and_mid(data[(c, arm)])[0]) for c in chains}
-    mid = {c: sorted(dead_and_mid(data[(c, arm)])[1]) for c in chains}
+    dead = {c: sorted(dead_and_mid(data[(c, arm)], root / f"{c}-{arm}")[0]) for c in chains}
+    mid = {c: sorted(dead_and_mid(data[(c, arm)], root / f"{c}-{arm}")[1]) for c in chains}
     n = sum(len(data[(c, arm)]["tasks"]) for c in chains)
     res = sum(resolved(data[(c, arm)], k) for c in chains for k in data[(c, arm)]["tasks"])
     summary[arm] = {"dead": sum(map(len, dead.values())), "mid": sum(map(len, mid.values())), "n": n, "res": res}
