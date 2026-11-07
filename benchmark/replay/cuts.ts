@@ -37,7 +37,7 @@ const runtime = variants.some(v => v.startsWith("native")) ? await ModelRuntime.
 const retry = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 40, baseDelayMs: 5000, maxAgentDelayMs: 60000 } } as any).getRetrySettings();
 const settings = { enabled: true, reserveTokens: RESERVE, keepRecentTokens: Number(option("--keep-recent", String(KEEP_RECENT))) };
 
-async function nativeCut(entries: any[], spec: string, thinking: string, previous: Compaction[]) {
+async function nativeCut(entries: any[], spec: string, thinking: string) {
 	const [provider, id] = [spec.slice(0, spec.indexOf("/")), spec.slice(spec.indexOf("/") + 1)];
 	const model = runtime!.getModel(provider, id);
 	if (!model) throw new Error(`no model ${spec}`);
@@ -88,7 +88,7 @@ for (const variant of variants) {
 			if (variant.startsWith("tuck")) result = tuckCut(entries);
 			else {
 				const attempt = await untilNotCapped<any>(`${variant} cut ${k + 1}`, async () => ({
-					value: variant === "native-terra" ? await nativeCut(entries, terra, terraThinking, cuts) : await nativeCut(entries, localModel, localThinking, cuts) }));
+					value: variant === "native-terra" ? await nativeCut(entries, terra, terraThinking) : await nativeCut(entries, localModel, localThinking) }));
 				result = attempt.value ?? { refused: `error: ${attempt.error}` };
 			}
 		} catch (error) { result = { refused: `error: ${(error as Error).message}` }; }

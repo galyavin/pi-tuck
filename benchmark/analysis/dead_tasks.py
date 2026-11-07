@@ -5,7 +5,6 @@ forward). Every other refused task is a mid-run refusal; its prompt size and lar
 against its own fresh tool round.
 Added 2026-11-06: a task whose prompt was dropped at a cut (no refusal, so nothing above counts it) is listed on its own line and in its own total; see prompt_drops.py. The dead and mid-run counts are unchanged."""
 import json
-import re
 import sys
 from pathlib import Path
 

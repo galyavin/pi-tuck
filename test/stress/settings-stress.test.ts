@@ -25,8 +25,8 @@
  * STRESS_SETUP="a piece of a cell name" runs only the cells that carry a setup size — the sampled ones and the named grid — which is the part that
  * answers whether setup size and thrash are the real bottleneck; the rest of the grid is skipped, so one command finishes inside a minute or two.
  */
+import { mulberry32 } from '../random-sessions';
 import { afterAll, expect, test } from 'vitest';
-import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
@@ -228,8 +228,7 @@ const base = (name: string, over: Partial<Cell>): Cell => {
 
 /** A fixed generator, so the grid is the same grid on every machine and every run. */
 function rng(seed: number) {
- let s = seed >>> 0;
- const next = () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+ const next = mulberry32(seed);
  const log = (lo: number, hi: number) => Math.exp(Math.log(Math.max(1, lo)) + next() * (Math.log(Math.max(1, hi)) - Math.log(Math.max(1, lo))));
  return { next, log, uniform: (lo: number, hi: number) => lo + next() * (hi - lo), int: (lo: number, hi: number) => lo + Math.floor(next() * (hi - lo + 1)) };
 }
@@ -544,8 +543,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
  const summary = { cells: 1, room: room > 0 ? 1 : 0, cut: cuts > 0 ? 1 : 0, cuts, answered, refused, aboveRoom: h.probes.filter(p => p.at === 'prompt' && p.complete > room).length, overflows: h.state.overflows };
  if (!cell.probe && !covCounted.has(cell.name)) { covCounted.add(cell.name); cov.cells++; cov.room += summary.room; cov.cut += summary.cut; cov.cuts += summary.cuts; cov.answered += answered; cov.refused += refused; cov.aboveRoom += summary.aboveRoom; cov.overflows += summary.overflows; cov.truncations += h.state.truncations; cov.clips += h.state.clips; }
  const summariesText = summaries.map(stripTimes).join('\n');
- const payload = JSON.stringify({ guard, stops, summariesText, faults: h.faults, notices: h.notices });
- return { digest: createHash('sha256').update(payload).digest('hex').slice(0, 16), guard, stops, summariesText, faults: [...h.faults], notices: [...h.notices], prompts: promptSizes };
+ return { guard, stops, summariesText, faults: [...h.faults], notices: [...h.notices], prompts: promptSizes };
 }
 
 /** What a request at this setup costs before any conversation: the guard's own measure of the smallest request that carried a prompt, less that
@@ -557,7 +555,7 @@ function measuredFloor(run: Run) {
 }
 
 /** What one run of a cell is held to: the sizes it asked the model with, the answers it got, what it saved and what it said. */
-interface Run { digest: string; guard: number[]; stops: string[]; summariesText: string; faults: string[]; notices: string[]; prompts: number[] }
+interface Run { guard: number[]; stops: string[]; summariesText: string; faults: string[]; notices: string[]; prompts: number[] }
 
 /** Two runs of one cell match when every quantity agrees. A saved summary quotes entry ids, and those are fresh every run, so a count may move
  * by a few tokens; anything larger is the same input giving a different answer. */

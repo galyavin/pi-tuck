@@ -228,16 +228,16 @@ def main():
                 if attempt == 5:
                     raise
                 time.sleep(60 * (attempt + 1))
-    pulling = {tasks[0]: prefetch.submit(pull, tasks[0])}
+    pulling = prefetch.submit(pull, tasks[0])
     pending = []
     records = open(out / "tasks.jsonl", "a")
     try:
         for index, instance in enumerate(tasks, 1):
             row = rows[instance]
             name = f"tuck-{args.session}-{args.arm}-{index}"
-            pulling.pop(instance).result()
+            pulling.result()
             if index < len(tasks):
-                pulling[tasks[index]] = prefetch.submit(pull, tasks[index])  # the next task's image downloads while this one runs
+                pulling = prefetch.submit(pull, tasks[index])  # the next task's image downloads while this one runs
             start_container(name, instance, cwd)
             container_file.write_text(name)
             wait_for_space()

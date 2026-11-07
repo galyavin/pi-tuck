@@ -84,7 +84,7 @@ if __name__ == "__main__":
     for arg in sys.argv[1:]:
         folder = Path(arg)
         tasks, msgs, tag, cut = read(folder)
-        listed, c_all, c_signs = [], 0, 0
+        listed = []
         for n in sorted(msgs):
             if n < 2 or n > len(tasks):
                 continue  # task 1 shares its message with the session's opening text

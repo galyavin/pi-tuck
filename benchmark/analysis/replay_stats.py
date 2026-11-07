@@ -112,7 +112,7 @@ def report(rows, cuts, evidence, margin, boot, seed):
             n = sum(len(v) for v in by_rec.values())
             d = diff(by_rec, list(by_rec))
             draws = bootstrap(by_rec, boot, rng)
-            lower, upper = draws[int(0.05 * boot)], draws[int(0.95 * boot)]
+            lower = draws[int(0.05 * boot)]
             lower_c = chain_bootstrap(by_rec, boot, rng)[int(0.05 * boot)]
             discord = sum(1 for v in by_rec.values() for x, y, _ in v if x != y) / n
             se = statistics.pstdev(draws) / 100
@@ -125,17 +125,10 @@ def report(rows, cuts, evidence, margin, boot, seed):
                 verdicts[agent] = lower > -margin
                 robust[agent] = lower_c > -margin
         mech = [r for r in rows if r["agent"] == agent and r["type"] != "next_step"]
-        for llm in [best]:
-            by_rec = defaultdict(list)
-            idx = defaultdict(dict)
-            for r in mech:
-                idx[(r["rec"], r["cut"], r["probe"])][r["variant"]] = r
-            for (rec, _, _), by in idx.items():
-                if SUT in by and llm in by:
-                    by_rec[rec].append((by[SUT]["correct"], by[llm]["correct"], by[SUT]))
-            if by_rec:
-                draws = bootstrap(by_rec, boot, rng)
-                print(f"  mechanical probes only, {SUT} - {llm}: {diff(by_rec, list(by_rec)):+.1f} pts, lower bound {draws[int(0.05 * boot)]:+.1f}")
+        by_rec = paired(mech, agent, SUT, best, cuts, evidence)
+        if by_rec:
+            draws = bootstrap(by_rec, boot, rng)
+            print(f"  mechanical probes only, {SUT} - {best}: {diff(by_rec, list(by_rec)):+.1f} pts, lower bound {draws[int(0.05 * boot)]:+.1f}")
         print("  by probe type (accuracy %, tuck / " + "/".join(LLMS) + "):")
         for t in sorted({r["type"] for r in rows}):
             cells = []

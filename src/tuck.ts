@@ -101,6 +101,11 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     else if (input.reRenderSummary && cut.reason === "no_live_messages" && entries.some(entry => entry.type === "compaction"))
         cut = { ok: true, messages: [], selectedIds: [], firstKeptEntryId: "", compactAll: true, keptUserTurns: 0, keepFallbackToCompactAll: false };
 	if (!cut.ok) return { unavailable: `pi-tuck cannot select a cut: ${cut.reason}` };
+    const cutBefore = (cut: Extract<Cut, { ok: true }>, boundary: number, prefix: Extract<Cut, { ok: true }>): Extract<Cut, { ok: true }> => ({
+        ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
+        firstKeptEntryId: entries[boundary]?.id ?? "", compactAll: boundary === entries.length, keepFallbackToCompactAll: false,
+        keptUserTurns: entries.slice(boundary).filter(entry => entry.type === "message" && entry.message.role === "user").length,
+    });
     // The latest call's trailing receipts have not reached a subsequent response.
     // A preferred tail size must not erase this first exposure when the whole
     // fresh round fits. Existing full-draft admission rejects an impossible round.
@@ -122,9 +127,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (freshRound && lastResponse < chosenBoundary) {
             const prefix = tuck.buildOwnCut(entries.slice(0, lastResponse), 0);
             if (!prefix.ok) return { unavailable: "No reducible history before the fresh tool round" };
-            cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
-                firstKeptEntryId: response.id, compactAll: false, keepFallbackToCompactAll: false,
-                keptUserTurns: entries.slice(lastResponse).filter(entry => entry.type === "message" && entry.message.role === "user").length };
+            cut = cutBefore(cut, lastResponse, prefix);
         }
     }
     // Direct shell output after the last response has not reached the model.
@@ -136,9 +139,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (freshBash >= 0 && freshBash < shellBoundary) {
         const prefix = tuck.buildOwnCut(entries.slice(0, freshBash), 0);
         if (!prefix.ok) return { unavailable: "No reducible history before the fresh shell output" };
-        cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
-            firstKeptEntryId: entries[freshBash]!.id, compactAll: false, keepFallbackToCompactAll: false,
-            keptUserTurns: entries.slice(freshBash).filter(entry => entry.type === "message" && entry.message.role === "user").length };
+        cut = cutBefore(cut, freshBash, prefix);
     }
     // Preserve the actual latest user source, never an inferred task/decision.
     // Explicit omission of it must not promote an earlier user source instead.
@@ -158,9 +159,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (userPosition >= 0 && userPosition < selectedBoundary && (!textOnly || userPosition > lastResponse)) {
         const prefix = tuck.buildOwnCut(entries.slice(0, userPosition), 0);
         if (!prefix.ok) return { unavailable: "No reducible history before the current user input" };
-        cut = { ...cut, messages: prefix.messages, selectedIds: prefix.selectedIds,
-            firstKeptEntryId: current!.id, compactAll: false, keepFallbackToCompactAll: false,
-            keptUserTurns: entries.slice(userPosition).filter(entry => entry.type === "message" && entry.message.role === "user").length };
+        cut = cutBefore(cut, userPosition, prefix);
     }
 
 	if (cut.messages.length !== cut.selectedIds.length || (!cut.compactAll && !entries.some((e) => e.id === cut.firstKeptEntryId)))
@@ -282,10 +281,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (floorBoundary <= preferredBoundary) return preferred;
     const prefix = tuck.buildOwnCut(entries.slice(0, floorBoundary), 0);
     if (!prefix.ok) return preferred;
-    const retried = compileAtCut({ ...cut, budgetCut: undefined, messages: prefix.messages, selectedIds: prefix.selectedIds,
-        firstKeptEntryId: entries[floorBoundary]?.id ?? "", compactAll: floorBoundary === entries.length,
-        keepFallbackToCompactAll: false,
-        keptUserTurns: entries.slice(floorBoundary).filter(entry => entry.type === "message" && entry.message.role === "user").length });
+    const retried = compileAtCut({ ...cutBefore(cut, floorBoundary, prefix), budgetCut: undefined });
     return preferred.compaction && retried.mode !== "dialogue" ? preferred : retried;
 
 }

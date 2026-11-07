@@ -71,23 +71,21 @@ export const normalize = (
   if (sourceEntryIds && sourceEntryIds.length !== messages.length) throw new Error("Original entry IDs must align with compiler messages");
   if (sourceTimes && sourceTimes.length !== messages.length) throw new Error("Original times must align with compiler messages");
   const timeByIndex = Object.fromEntries((sourceIndices ?? messages.map((_, i) => i)).flatMap((index, i) => index === undefined || !sourceTimes ? [] : [[index, sourceTimes[i]]]));
-  const context = receiptContext ?? { messages, sourceIndices: sourceIndices ?? messages.map((_, i) => i) };
-  const pairs = new Map<string, { calls: { name: string; order: number; index: number | undefined; args: Record<string, unknown> }[];
-    receipts: { name: string; order: number; index: number | undefined; isError: boolean; content: Extract<CompilerMessage, { role: "toolResult" }>["content"] }[] }>();
+  const pairs = new Map<string, { calls: { name: string; order: number; args: Record<string, unknown> }[];
+    receipts: { name: string; order: number }[] }>();
   const group = (id: string) => {
     if (typeof id !== "string" || !id) throw new Error("Tool history lacks a recorded call identity");
     let pair = pairs.get(id);
     if (!pair) { pair = { calls: [], receipts: [] }; pairs.set(id, pair); }
     return pair;
   };
-  context.messages.forEach((msg, order) => {
+  (receiptContext?.messages ?? messages).forEach((msg, order) => {
     if (msg.role === "assistant" && Array.isArray(msg.content)) for (const part of msg.content) {
-      if (part.type === "toolCall") group(part.id).calls.push({ name: part.name, order, index: context.sourceIndices[order], args: part.arguments });
+      if (part.type === "toolCall") group(part.id).calls.push({ name: part.name, order, args: part.arguments });
     }
     if (msg.role === "toolResult") {
       if (typeof msg.isError !== "boolean") throw new Error("Tool receipt lacks a recorded error status");
-      group(msg.toolCallId).receipts.push({ name: msg.toolName,
-        order, index: context.sourceIndices[order], isError: msg.isError, content: msg.content });
+      group(msg.toolCallId).receipts.push({ name: msg.toolName, order });
     }
   });
   // A call paired with exactly one later receipt of the same tool has a recorded outcome. An export through recall keeps its outcome block.

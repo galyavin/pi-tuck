@@ -55,31 +55,16 @@ export type OwnCutResult =
   | { ok: false; reason: OwnCutCancelReason };
 
 const collectLiveMessages = (branchEntries: any[]): EntryWithMessage[] => {
-  // Find the last compaction entry and its firstKeptEntryId
-  let lastCompactionIdx = -1;
-  let lastKeptId: string | undefined;
-  for (let i = branchEntries.length - 1; i >= 0; i--) {
-    if (branchEntries[i].type === "compaction") {
-      lastCompactionIdx = i;
-      lastKeptId = branchEntries[i].firstKeptEntryId;
-      break;
-    }
-  }
-
-  // Orphan recovery: triggers when lastKeptId is set to "" (sentinel from prior
-  // compact-all) OR set to an id that no longer exists in the branch. In both cases,
-  // start collecting from right after the last compaction entry.
-  const hasPriorCompaction = lastCompactionIdx >= 0;
-  const hasValidKeptId = !!lastKeptId && branchEntries.some((e: any) => e.id === lastKeptId);
-  const orphanRecovery = hasPriorCompaction && !hasValidKeptId;
-
-  // Collect live messages
+  const lastCompactionIdx = branchEntries.findLastIndex(e => e.type === "compaction");
+  const lastKeptId = branchEntries[lastCompactionIdx]?.firstKeptEntryId;
+  const kept = lastKeptId ? branchEntries.findIndex(e => e.id === lastKeptId) : -1;
+  // An empty compact-all sentinel or a missing anchor resumes after the last
+  // compaction. With no prior compaction, collection starts at the beginning.
+  const start = kept >= 0 ? kept : lastCompactionIdx + 1;
   const liveMessages: EntryWithMessage[] = [];
-  let foundKept = orphanRecovery || !lastKeptId;
-  for (let i = orphanRecovery ? lastCompactionIdx + 1 : 0; i < branchEntries.length; i++) {
+  for (let i = start; i < branchEntries.length; i++) {
     const e = branchEntries[i];
-    if (!foundKept && e.id === lastKeptId) foundKept = true;
-    if (!foundKept || e.type === "compaction") continue;
+    if (e.type === "compaction") continue;
     const m = toLiveMessage(e);
     if (m) liveMessages.push({ entry: e, message: m });
   }

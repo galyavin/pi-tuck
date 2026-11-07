@@ -1,6 +1,6 @@
 // Shared by the recall benchmark (PREREG-RECALL.md): one place that calls the models, keeps the spend, and judges an answer against a reference.
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { recordedCompletion } from "../replay/lib";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const DEEPSEEK = "openrouter/deepseek/deepseek-v4.1-flash-1017"; // the dated snapshot, on the one upstream set in agent dir R (harness/common.py)
@@ -9,18 +9,7 @@ const SPEND = join(import.meta.dirname, "..", "runs", "recall", "spend.jsonl");
 
 /** One completion; `spec` is provider/model:thinking. Every call's cost is appended to runs/recall/spend.jsonl. */
 export async function complete(spec: string, text: string, label: string): Promise<string> {
-	if (/openrouter/i.test(spec)) throw new Error("OpenRouter is not used: mac-studio only: " + spec);
-	const [id, thinking] = spec.split(":");
-	const provider = id.slice(0, id.indexOf("/")), modelId = id.slice(id.indexOf("/") + 1);
-	const model = runtime.getModel(provider, modelId);
-	if (!model) throw new Error(`no model ${spec}`);
-	for (let attempt = 0; ; attempt++) {
-		const response: any = await runtime.completeSimple(model, { messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }] }, { reasoning: thinking as any } as any);
-		if (response.stopReason === "error" && attempt < 5) { await new Promise(r => setTimeout(r, 5000 * (attempt + 1))); continue; }
-		mkdirSync(dirname(SPEND), { recursive: true });
-		appendFileSync(SPEND, JSON.stringify({ label, spec, responseId: response.responseId, cost: response.usage?.cost?.total ?? 0, input: response.usage?.input, output: response.usage?.output, at: new Date().toISOString() }) + "\n");
-		return response.content.map((b: any) => b.type === "text" ? b.text : "").join("");
-	}
+	return recordedCompletion(runtime, SPEND, spec, text, label);
 }
 
 export const parseJson = (out: string): any => { const m = /[\[{][\s\S]*[\]}]/.exec(out.replace(/```(?:json)?/g, "")); if (!m) return undefined; try { return JSON.parse(m[0]); } catch { return undefined; } };

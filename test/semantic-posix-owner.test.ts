@@ -11,8 +11,8 @@ vi.mock('node:child_process',()=>({spawn:vi.fn()}));
 const platform=Object.getOwnPropertyDescriptor(process,'platform')!;
 const roots:string[]=[];
 afterEach(()=>{Object.defineProperty(process,'platform',platform);vi.restoreAllMocks();vi.mocked(spawn).mockReset();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
-test.each([false,true])('POSIX leader exit is insufficient; only exact group absence releases resources (group refuses kill %s)',async stubborn=>{
- const root=mkdtempSync(join(tmpdir(),'pi-semantic-group-'));roots.push(root);
+function fixture(prefix:string){
+ const root=mkdtempSync(join(tmpdir(),prefix));roots.push(root);
  const project=join(root,'project');mkdirSync(project);
  const config={pythonPath:join(root,'python'),runtimeRoot:join(root,'runtime'),indexDirectory:join(root,'cache'),queryWaitMs:2000};
  const child=new EventEmitter(),stdout=new PassThrough(),stderr=new PassThrough();
@@ -25,6 +25,10 @@ test.each([false,true])('POSIX leader exit is insufficient; only exact group abs
  }});
  Object.assign(child,{stdin,stdout,stderr,pid:4321});vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
  Object.defineProperty(process,'platform',{value:'linux'});
+ return{root,project,config,child};
+}
+test.each([false,true])('POSIX leader exit is insufficient; only exact group absence releases resources (group refuses kill %s)',async stubborn=>{
+ const {root,project,config,child}=fixture('pi-semantic-group-');
  let exists=true,leaderExited=false;
  const kill=vi.spyOn(process,'kill').mockImplementation((pid,value)=>{
   expect(pid).toBe(-4321); // Never signal/probe just the leader.
@@ -52,19 +56,7 @@ test.each([false,true])('POSIX leader exit is insufficient; only exact group abs
 // SIGTERM give EPERM for a zombie-only group, ESRCH once reaped). EPERM means the group is still present: the close keeps polling to its
 // bound and fails only if the group remains; any other errno still fails at once.
 test.each(['transient','persistent','other'] as const)('POSIX close: EPERM from a group that is going away (%s)',async mode=>{
- const root=mkdtempSync(join(tmpdir(),'pi-semantic-eperm-'));roots.push(root);
- const project=join(root,'project');mkdirSync(project);
- const config={pythonPath:join(root,'python'),runtimeRoot:join(root,'runtime'),indexDirectory:join(root,'cache'),queryWaitMs:2000};
- const child=new EventEmitter(),stdout=new PassThrough(),stderr=new PassThrough();
- const stdin=new Writable({write(chunk:Buffer,_encoding,done){
-  const rpc=JSON.parse(chunk.toString()) as {id:number;op:string;path?:string};let result:unknown={};
-  if(rpc.op==='ready')result={identity:'group-fixture',dimensions:768,maxTokens:8192,offline:true};
-  if(rpc.op==='tokenize')result={ranges:[[]]};
-  if(rpc.op==='index'){if(rpc.path){mkdirSync(dirname(rpc.path),{recursive:true});writeFileSync(rpc.path,'derived');}result={coveredKeys:[]};}
-  setImmediate(()=>stdout.write(JSON.stringify({id:rpc.id,ok:true,result})+'\n'));done();
- }});
- Object.assign(child,{stdin,stdout,stderr,pid:4321});vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
- Object.defineProperty(process,'platform',{value:'linux'});
+ const {project,config,child}=fixture('pi-semantic-eperm-');
  let leaderExited=false,zombieProbes=0,gone=false;
  const kill=vi.spyOn(process,'kill').mockImplementation((pid,value)=>{
   expect(pid).toBe(-4321);

@@ -1,6 +1,6 @@
 // Shared by the LongMemEval runs (PREREG-LME.md): one place that calls the judge model, keeps the spend, and holds the official judge prompts.
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { recordedCompletion } from "../replay/lib";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const DEEPSEEK = "openrouter/deepseek/deepseek-v4.1-flash-1017"; // the dated snapshot, on the one upstream set in agent dir R (harness/common.py)
@@ -9,17 +9,7 @@ const SPEND = join(import.meta.dirname, "..", "runs", "lme", "spend.jsonl");
 
 /** One completion; `spec` is provider/model:thinking. Every call's cost is appended to runs/lme/spend.jsonl. */
 export async function complete(spec: string, text: string, label: string): Promise<string> {
-	if (/openrouter/i.test(spec)) throw new Error("OpenRouter is not used: mac-studio only: " + spec);
-	const [id, thinking] = spec.split(":");
-	const model = runtime.getModel(id.slice(0, id.indexOf("/")), id.slice(id.indexOf("/") + 1));
-	if (!model) throw new Error(`no model ${spec}`);
-	for (let attempt = 0; ; attempt++) {
-		const response: any = await runtime.completeSimple(model, { messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }] }, { reasoning: thinking as any } as any);
-		if (response.stopReason === "error" && attempt < 5) { await new Promise(r => setTimeout(r, 5000 * (attempt + 1))); continue; }
-		mkdirSync(dirname(SPEND), { recursive: true });
-		appendFileSync(SPEND, JSON.stringify({ label, spec, responseId: response.responseId, cost: response.usage?.cost?.total ?? 0, input: response.usage?.input, output: response.usage?.output, at: new Date().toISOString() }) + "\n");
-		return response.content.map((b: any) => b.type === "text" ? b.text : "").join("");
-	}
+	return recordedCompletion(runtime, SPEND, spec, text, label);
 }
 
 /** The official LongMemEval answer-check prompts (src/evaluation/evaluate_qa.py, get_anscheck_prompt), unchanged. */

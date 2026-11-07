@@ -6,8 +6,7 @@ RECORDINGS_DIR holds <name>.jsonl session files. With --collect, finished live s
 running until --expected recordings are done. Slots (parallel jobs) come from --slots-file (JSON {"local": n, "plan": n, "cpu": n}), re-read
 every cycle, so the load on mac-studio can follow the live runs.
 
-Priorities: plan-billed summaries (cuts:native-terra, GPT-6.1 Terra; the astra variant was withdrawn, PREREG-TERRA.md) come first, in recording-name order, because the claim is about the best summarizer; frontier
-*agent* sessions (resource "plan-agent") start only once every expected frontier summary exists, spending whatever quota is left."""
+Plan-billed summaries (cuts:native-terra, GPT-6.1 Terra; the astra variant was withdrawn, PREREG-TERRA.md) start in recording-name order."""
 import argparse
 import json
 import shlex
@@ -45,7 +44,7 @@ def jobs_for(rec: Path, out: Path, tuck: str, agents: list[str], extra: str):
             ans, sc = shlex.quote(str(d / f"answers-{tag(agent)}-{variant}.jsonl")), d / f"scores-{tag(agent)}-{variant}.jsonl"
             cmd = (f"rm -f {ans}; {jit}/answer.ts {r} {o} {o}/probes.json {ans} --agent {shlex.quote(agent)} --variant {variant} --tuck-dir {t} {extra}"
                    f" && {jit}/score.ts {o}/probes.json {ans} {shlex.quote(str(sc))}")
-            jobs.append((f"{rec.stem}:ans:{tag(agent)}:{variant}", "plan-agent" if agent == PLAN_AGENT else "local", cmd, sc,
+            jobs.append((f"{rec.stem}:ans:{tag(agent)}:{variant}", "local", cmd, sc,
                          [f"{rec.stem}:probes", f"{rec.stem}:cuts:{source}"]))
     return jobs
 
@@ -101,22 +100,18 @@ def main():
                     jobs[job[0]] = job
                     if job[3].exists():
                         done.add(job[0])
-        slots = {"cpu": 2, "local": args.local, "plan": args.plan, "plan-agent": args.plan}
+        slots = {"cpu": 2, "local": args.local, "plan": args.plan}
         if args.slots_file and Path(args.slots_file).exists():
             slots.update(json.loads(Path(args.slots_file).read_text()))
         for name, (future, _) in list(running.items()):
             if future.done():
                 (done if future.result() else failed).add(name)
                 del running[name]
-        frontier = [n for n in jobs if n.endswith(":cuts:native-terra")]
-        frontier_all_done = len(frontier) >= args.expected and all(n in done for n in frontier)
         busy: dict[str, int] = {}
         for _, (_, res) in running.items():
             busy[res] = busy.get(res, 0) + 1
         pending = [j for n, j in sorted(jobs.items()) if n not in done and n not in failed and n not in running]
         for name, resource, _, _, needs in pending:
-            if resource == "plan-agent" and not frontier_all_done:
-                continue
             if busy.get(resource, 0) < slots.get(resource, 1) and all(n in done for n in needs):
                 running[name] = (pool.submit(run, jobs[name]), resource)
                 busy[resource] = busy.get(resource, 0) + 1

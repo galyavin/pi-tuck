@@ -1,5 +1,7 @@
 // Shared pieces of the paired replay: loading a recording, the cut schedule, and rebuilding the session state a compactor leaves.
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { SessionManager, estimateTokens, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
 /** The replayed model's window and the reply reserve the live arms ran with (the larger of Pi's reserveTokens and the model's maxTokens). */
@@ -118,5 +120,66 @@ export async function untilNotCapped<T>(label: string, attempt: () => Promise<{ 
 		if (!outcome.error || !isUsageLimit(outcome.error) || Date.now() - started > maxHours * 3_600_000) return { ...outcome, waitedMs: Date.now() - started };
 		console.error(`${new Date().toISOString()} ${label}: usage cap, retrying in 10 min`);
 		await sleep(10 * 60_000);
+	}
+}
+
+/** Usage and tool activity in the messages a benchmark prompt added, retaining the first prompt or assistant error. */
+export function messageStats(messages: any[], error?: string) {
+	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0 };
+	const tools: Record<string, number> = {};
+	const responseIds: string[] = [];
+	let toolResultChars = 0;
+	for (const m of messages) {
+		if (m.role === "assistant") {
+			usage.requests++;
+			if (m.responseId) responseIds.push(m.responseId);
+			for (const k of ["input", "output", "cacheRead", "cacheWrite"] as const) usage[k] += m.usage?.[k] ?? 0;
+			for (const b of m.content) if (b.type === "toolCall") tools[b.name] = (tools[b.name] ?? 0) + 1;
+			if (m.stopReason === "error" || m.stopReason === "aborted") error ??= `${m.stopReason}: ${m.errorMessage ?? ""}`;
+		} else if (m.role === "toolResult") toolResultChars += JSON.stringify(m.content).length;
+	}
+	return { usage, tools, toolResultChars, responseIds, error };
+}
+
+/** Answer envelope shared by replay and recall scoring, with the same literal line fallback. */
+export function parseAnswers(text: string, ids: string[]): Record<string, string> {
+	const out: Record<string, string> = {};
+	const body = text.replace(/```(?:json)?/g, "");
+	const start = body.indexOf("{"), end = body.lastIndexOf("}");
+	if (start >= 0 && end > start) {
+		try {
+			const value = JSON.parse(body.slice(start, end + 1));
+			for (const id of ids) if (id in value) out[id] = typeof value[id] === "string" ? value[id] : JSON.stringify(value[id]);
+			return out;
+		} catch { /* fall through to line parsing */ }
+	}
+	for (const id of ids) { const m = new RegExp(`${id}\\W+([^\\n]+)`).exec(body); if (m) out[id] = m[1]; }
+	return out;
+}
+
+/** Wait for a finished index so warm questions measure recall rather than cold indexing (PREREG-RECALL.md amendment). */
+export async function waitForIndex(h: any, timeout: number) {
+	const t0 = Date.now();
+	for (;;) {
+		const s = h.semanticStatus?.()?.local;
+		if (!s || s.indexingComplete || s.state === "unavailable" || Date.now() - t0 > timeout) break;
+		await new Promise(r => setTimeout(r, 1000));
+	}
+	return { waitedMs: Date.now() - t0, ...(h.semanticStatus?.()?.local ? { state: h.semanticStatus().local.state, coveredUnits: h.semanticStatus().local.coveredUnits, totalUnits: h.semanticStatus().local.totalUnits } : {}) };
+}
+
+/** One benchmark completion with the existing retry schedule and per-run spend ledger. */
+export async function recordedCompletion(runtime: ModelRuntime, spendPath: string, spec: string, text: string, label: string): Promise<string> {
+	if (/openrouter/i.test(spec)) throw new Error("OpenRouter is not used: mac-studio only: " + spec);
+	const [id, thinking] = spec.split(":");
+	const provider = id.slice(0, id.indexOf("/")), modelId = id.slice(id.indexOf("/") + 1);
+	const model = runtime.getModel(provider, modelId);
+	if (!model) throw new Error(`no model ${spec}`);
+	for (let attempt = 0; ; attempt++) {
+		const response: any = await runtime.completeSimple(model, { messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }] }, { reasoning: thinking as any } as any);
+		if (response.stopReason === "error" && attempt < 5) { await new Promise(r => setTimeout(r, 5000 * (attempt + 1))); continue; }
+		mkdirSync(dirname(spendPath), { recursive: true });
+		appendFileSync(spendPath, JSON.stringify({ label, spec, responseId: response.responseId, cost: response.usage?.cost?.total ?? 0, input: response.usage?.input, output: response.usage?.output, at: new Date().toISOString() }) + "\n");
+		return response.content.map((b: any) => b.type === "text" ? b.text : "").join("");
 	}
 }

@@ -115,21 +115,6 @@ def agent_dir_w32(arm: str, cfg: dict = W32, suite: str = "w32") -> Path:
     """Same shape as the main run's agent dirs, with the forced 32k model entry. The pi-tuck arms (TUCK_ARMS) get the semantic runtime the main run's
     arm B already provisioned, cloned (copy-on-write) so the two suites never share files that change."""
     refuse_openrouter("agent_dir_w32 builds the DeepSeek-on-OpenRouter agent dir")
-    path = RUNS / "agent" / f"{arm}-{suite}"
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "models.json").write_text(json.dumps({"providers": {"openrouter": {"modelOverrides": {
-        cfg["model"].split("/", 1)[1]: {"contextWindow": cfg["window"], "maxTokens": cfg["max_tokens"], "compat": {"openRouterRouting": ROUTING}}}}}}, indent=1))
-    (path / "settings.json").write_text(json.dumps({
-        "compaction": cfg["compaction"], "retry": RETRY, "defaultProvider": "openrouter", "defaultModel": cfg["model"].split("/", 1)[1],
-        "defaultThinkingLevel": cfg["thinking"], "quietStartup": True, "packages": [], "extensions": [],
-    }, indent=1))
-    runtime = path / "pi-tuck"
-    if arm in TUCK_ARMS and not runtime.exists():
-        runtime.mkdir()
-        for part in ("python", "runtime"):  # the encoder and its environment; the per-session index and sockets start empty
-            subprocess.run(["cp", "-c", "-R", str(RUNS / "agent" / "B" / "pi-tuck" / part), str(runtime / part)], check=True)
-        (runtime / "index").mkdir()
-    return path
 
 
 def agent_dir_w32m(arm: str, cfg: dict = W32M, suite: str = "w32m") -> Path:
@@ -157,11 +142,3 @@ def agent_dir_recall() -> Path:
     """Agent dir for the recall and LongMemEval benchmarks (PREREG-RECALL.md, PREREG-LME.md): the same pinned DeepSeek snapshot and upstream, the
     window left at the model's own, and the semantic runtime cloned from arm B's."""
     refuse_openrouter("agent_dir_recall builds the DeepSeek-on-OpenRouter agent dir")
-    path = RUNS / "agent" / "R"
-    (path / "pi-tuck" / "index").mkdir(parents=True, exist_ok=True)
-    (path / "models.json").write_text(json.dumps({"providers": {"openrouter": {"modelOverrides": {DEEPSEEK_ID: {"compat": {"openRouterRouting": ROUTING}}}}}}, indent=1))
-    (path / "settings.json").write_text((RUNS / "agent" / "B" / "settings.json").read_text())
-    for part in ("python", "runtime"):
-        if not (path / "pi-tuck" / part).exists():
-            subprocess.run(["cp", "-c", "-R", str(RUNS / "agent" / "B" / "pi-tuck" / part), str(path / "pi-tuck" / part)], check=True)
-    return path

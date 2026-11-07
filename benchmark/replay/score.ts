@@ -3,31 +3,16 @@
 //   jiti benchmark/replay/score.ts PROBES.json ANSWERS.jsonl OUT.jsonl [--judge mac-studio/main:xhigh]
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseAnswers } from "./lib";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 const [probesPath, answersPath, outPath, ...rest] = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : fallback; };
 const judgeSpec = option("--judge", "mac-studio/main:xhigh");
 if (/openrouter/i.test(judgeSpec)) throw new Error("OpenRouter is not used: mac-studio only: " + judgeSpec);
-const probes = new Map<string, any>(), byCut = new Map<number, any[]>();
-const loadProbes = (path: string) => { for (const p of JSON.parse(readFileSync(path, "utf8"))) probes.set(`${path}#${p.id}`, p); };
-loadProbes(probesPath);
-const probeOf = (id: string) => probes.get(`${probesPath}#${id}`);
+const probes = new Map<string, any>();
+for (const p of JSON.parse(readFileSync(probesPath, "utf8"))) probes.set(String(p.id), p);
 
-function parseAnswers(text: string, ids: string[]): Record<string, string> {
-	const out: Record<string, string> = {};
-	const body = text.replace(/```(?:json)?/g, "");
-	const start = body.indexOf("{"), end = body.lastIndexOf("}");
-	if (start >= 0 && end > start) {
-		try {
-			const value = JSON.parse(body.slice(start, end + 1));
-			for (const id of ids) if (id in value) out[id] = typeof value[id] === "string" ? value[id] : JSON.stringify(value[id]);
-			return out;
-		} catch { /* fall through to line parsing */ }
-	}
-	for (const id of ids) { const m = new RegExp(`${id}\\W+([^\\n]+)`).exec(body); if (m) out[id] = m[1]; }
-	return out;
-}
 
 const norm = (path: string) => path.trim().replace(/^[`'"]+|[`'"]+$/g, "").replace(/^\.\//, "").replace(/^.*\/testbed\//, "").replace(/\/+$/, "");
 function parseList(answer: string): string[] {
@@ -88,7 +73,7 @@ for (const line of readFileSync(answersPath, "utf8").split("\n").filter(Boolean)
 	if (run.skipped) continue;
 	const answers = parseAnswers(run.answer ?? "", run.probes);
 	for (const id of run.probes) {
-		const p = probeOf(id);
+		const p = probes.get(String(id));
 		const answer = answers[id] ?? "";
 		const scored = p.type === "next_step" ? await judge(p, answer) : mechanical(p, answer);
 		appendFileSync(outPath, JSON.stringify({ recording: run.recording, variant: run.variant, cut: run.cut, agent: run.agent, probe: id, type: p.type, age: p.age, task: p.task,

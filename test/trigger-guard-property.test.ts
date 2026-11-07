@@ -1,3 +1,4 @@
+import { mulberry32 as prng } from './random-sessions';
 import { test, expect } from 'vitest';
 import { HOST, ROOM, scenario, type Options } from './budget-fixture';
 import { bandOf } from '../src/budget';
@@ -9,10 +10,6 @@ import { bandOf } from '../src/budget';
 // the margin could add. Fail-closed requests must still fail closed.
 // The properties run at the default cut point and at 0.6 (a band 40% under the room). Nothing in them needs the band close to the room:
 // the fixture's unseen growth stays under the band-to-room margin at either, and the exact room alone decides every guard rejection.
-function prng(seed: number) {
-	let a = seed >>> 0;
-	return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 const GUARD = 'Complete Pi context and response reserve exceed the estimated request budget';
 
 /** Unseen growth per decision: host input up to 1,200 tokens, a tool of 1,000 tokens switched on or off, a steer of up to 500: at most 2,700. */

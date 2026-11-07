@@ -1,3 +1,4 @@
+import { mulberry32 as random } from './random-sessions';
 import { afterEach, expect, test, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -256,10 +257,6 @@ test('a session that cannot be built throws every time and caches nothing', () =
 // Soundness over random append sequences. A fixed seed; the property is stated about the stamp (the key), not about the cache.
 
 const SEED = 20261018;
-function random(seed: number) { // mulberry32
-	let a = seed >>> 0;
-	return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 
 test(`soundness, seed ${SEED}: stamp-equal never coexists with a different full id, every append changes the stamp, and the memoized id is the full id`, () => {
 	const next = random(SEED), policy: RecallPolicy = { privateCustomTypes: ['host.input', 'host.attempt'] };

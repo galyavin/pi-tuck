@@ -41,7 +41,8 @@ for (let k = 0; k < cuts.length; k++) {
 	const cut = k + 1, position = cuts[k].position;
 	const limit = rec.cum[position] - PROBE_CUTOFF_TOKENS;
 	const eligible = rec.segments.filter(s => rec.cum[s.end] <= limit);
-	const pool = eligible.filter(s => !used.has(s.index)).length >= TASKS_PER_CUT ? eligible.filter(s => !used.has(s.index)) : eligible;
+	const unused = eligible.filter(s => !used.has(s.index));
+	const pool = unused.length >= TASKS_PER_CUT ? unused : eligible;
 	const random = rng(`${recordingPath}#${cut}`);
 	const chosen: typeof pool = [];
 	while (chosen.length < Math.min(TASKS_PER_CUT, pool.length)) { const s = pool[Math.floor(random() * pool.length)]; if (!chosen.includes(s)) chosen.push(s); }

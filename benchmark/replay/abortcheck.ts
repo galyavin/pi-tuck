@@ -16,7 +16,7 @@ const agentDir = resolve(option("--agent-dir", join(import.meta.dirname, "..", "
 process.env.PI_CODING_AGENT_DIR = agentDir; // set before Pi or pi-tuck read it
 
 const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-const { KEEP_RECENT, RESERVE, loadRecording, stateEntries, untilNotCapped } = await import("./lib");
+const { KEEP_RECENT, RESERVE, loadRecording, stateEntries, untilNotCapped, messageStats } = await import("./lib");
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const tuckIndex = await jiti.import(join(tuckDir, "index.ts")) as any;
 const { memoizedEligibleSources } = await jiti.import(join(tuckDir, "src", "eligibility-cache.ts")) as any;
@@ -91,21 +91,11 @@ async function ask(cut: number, set: any[]) {
 	const before = session.messages.length;
 	const started = Date.now();
 	const timer = setTimeout(() => session.abort(), WALL_MS);
-	let error: string | undefined;
-	try { await session.prompt(promptFor(set)); } catch (e) { error = (e as Error).message; }
+	let promptError: string | undefined;
+	try { await session.prompt(promptFor(set)); } catch (e) { promptError = (e as Error).message; }
 	clearTimeout(timer);
 	const added = session.messages.slice(before);
-	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0 };
-	const tools: Record<string, number> = {};
-	let toolResultChars = 0;
-	for (const m of added as any[]) {
-		if (m.role === "assistant") {
-			usage.requests++;
-			for (const k of ["input", "output", "cacheRead", "cacheWrite"] as const) usage[k] += m.usage?.[k] ?? 0;
-			for (const b of m.content) if (b.type === "toolCall") tools[b.name] = (tools[b.name] ?? 0) + 1;
-			if (m.stopReason === "error" || m.stopReason === "aborted") error ??= `${m.stopReason}: ${m.errorMessage ?? ""}`;
-		} else if (m.role === "toolResult") toolResultChars += JSON.stringify(m.content).length;
-	}
+	const { usage, tools, toolResultChars, error } = messageStats(added, promptError);
 	const answer = session.getLastAssistantText() ?? "";
 	const semantic = handle?.semanticStatus?.()?.local;
 	session.dispose();

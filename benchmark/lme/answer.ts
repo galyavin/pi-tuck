@@ -18,7 +18,7 @@ const agentDir = resolve(option("--agent-dir", join(import.meta.dirname, "..", "
 process.env.PI_CODING_AGENT_DIR = agentDir; // set before Pi or pi-tuck read it
 
 const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-const { loadRecording, stateEntries, untilNotCapped } = await import("../replay/lib");
+const { loadRecording, stateEntries, untilNotCapped, messageStats, waitForIndex } = await import("../replay/lib");
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const variant = option("--variant", "tuck");
 const usesTuck = variant.startsWith("tuck");
@@ -67,17 +67,7 @@ async function ask(qid: string) {
 			if (variant === "tuck") pi.on("session_start", async (_e: any, ctx: any) => {
 				await h.setSemanticEnabled(true, ctx);
 				if (warm) await semanticRecall.search("conversation", () => memoizedEligibleSources(ctx, undefined, () => {}), undefined, [], undefined).catch(() => {});
-				if (warm) {
-					// Wait for the index to be complete (PREREG-RECALL.md amendment): in a long session pi-tuck indexes in the background as history grows, so a
-					// question is asked against a finished index; a cold start measures the indexer's speed on a shared machine instead.
-					const t0 = Date.now();
-					for (;;) {
-						const s = h.semanticStatus?.()?.local;
-						if (!s || s.indexingComplete || s.state === "unavailable" || Date.now() - t0 > INDEX_WAIT_MS) break;
-						await new Promise(r => setTimeout(r, 1000));
-					}
-					index = { waitedMs: Date.now() - t0, ...(h.semanticStatus?.()?.local ? { state: h.semanticStatus().local.state, coveredUnits: h.semanticStatus().local.coveredUnits, totalUnits: h.semanticStatus().local.totalUnits } : {}) };
-				}
+				if (warm) index = await waitForIndex(h, INDEX_WAIT_MS);
 			});
 		});
 	}] : [];
@@ -89,23 +79,11 @@ async function ask(qid: string) {
 	const before = session.messages.length;
 	const started = Date.now();
 	const timer = setTimeout(() => session.abort(), WALL_MS);
-	let error: string | undefined;
-	try { await session.prompt(promptFor(q)); } catch (e) { error = (e as Error).message; }
+	let promptError: string | undefined;
+	try { await session.prompt(promptFor(q)); } catch (e) { promptError = (e as Error).message; }
 	clearTimeout(timer);
 	const added = session.messages.slice(before);
-	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0 };
-	const tools: Record<string, number> = {};
-	const responseIds: string[] = [];
-	let toolResultChars = 0;
-	for (const m of added as any[]) {
-		if (m.role === "assistant") {
-			usage.requests++;
-			if (m.responseId) responseIds.push(m.responseId);
-			for (const k of ["input", "output", "cacheRead", "cacheWrite"] as const) usage[k] += m.usage?.[k] ?? 0;
-			for (const b of m.content) if (b.type === "toolCall") tools[b.name] = (tools[b.name] ?? 0) + 1;
-			if (m.stopReason === "error" || m.stopReason === "aborted") error ??= `${m.stopReason}: ${m.errorMessage ?? ""}`;
-		} else if (m.role === "toolResult") toolResultChars += JSON.stringify(m.content).length;
-	}
+	const { usage, tools, toolResultChars, responseIds, error } = messageStats(added, promptError);
 	const answer = session.getLastAssistantText() ?? "";
 	const semantic = handle?.semanticStatus?.()?.local;
 	session.dispose();

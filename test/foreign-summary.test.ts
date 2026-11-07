@@ -1,3 +1,4 @@
+import { mulberry32 as prng } from './random-sessions';
 import { test, expect } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,10 +34,6 @@ test('the triggers and the context hook stay strict: a foreign summary fails a r
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The two projections are the same function for this compactor's own summaries.
-function prng(seed: number) {
-	let a = seed >>> 0;
-	return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } };
 function session(seed: number) {
 	const rng = prng(seed), int = (n: number) => Math.floor(rng() * n);

@@ -1,3 +1,4 @@
+import { mulberry32 as prng } from './random-sessions';
 import { test, expect } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, expectParity, harness, nonSystem, receiptOf, scenario } from './budget-fixture';
@@ -13,10 +14,6 @@ const PROMPT = 2; // 'Continue'
 const AROUND = [-30, -20, -10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10, 20, 30];
 const legacy = (room: number) => room - Math.ceil(Math.max(0, room) * 0.02);
 
-function prng(seed: number) {
-	let a = seed >>> 0;
-	return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 
 test('the band: F = 1, the default, is the room less the margin exactly as before, for every room', () => {
 	expect(TRIGGER_MARGIN_FRACTION).toBe(0.02);

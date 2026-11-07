@@ -39,12 +39,10 @@ print(f"PART 2  d_B = {d_b:+.2f} pts over {len(b_rows)} tasks before B's first r
 
 print("\nREADOUTS WITH NO PASS LINE")
 rng = random.Random(args.seed)
-sessions = chains
-flat = {(c, a): data[(c, a)] for c in chains for a in "ABCM"}
-compare(flat, sessions, "A", "C", args.boot, rng)
-compare(flat, sessions, "M", "C", args.boot, rng)
+compare(data, chains, "A", "C", args.boot, rng)
+compare(data, chains, "M", "C", args.boot, rng)
 for arm in "ABCM":
-    mine = [flat[(c, arm)] for c in chains]
+    mine = [data[(c, arm)] for c in chains]
     tasks = [t for d in mine for t in d["tasks"].values()]
     tokens = [d["stats"]["tokens"]["total"] for d in mine if d["stats"]]
     cost = sum((d["stats"] or {}).get("cost") or 0 for d in mine if d["stats"] and not isinstance(d["stats"].get("cost"), dict))

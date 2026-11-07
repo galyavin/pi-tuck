@@ -203,18 +203,16 @@ export async function harness(options: Options) {
   const sized = (n: number) => { const want = Math.max(0, Math.round(n) * 4); let s = ''; while (s.length < want) s += `item ${(++uniq).toString(36)} data; `; return s.slice(0, want); };
   const resultTokens = (t: string) => estimateTokens({ role: 'toolResult', toolCallId: 'x', toolName: 'effect', isError: false, timestamp: 0, content: [{ type: 'text', text: t }] });
   let turns = 0;
-  const cycle = (n: number) => {
-   const id = `history-${++turns}`;
-   manager.appendMessage({ role: 'user', content: `Earlier request ${turns}`, timestamp: 0 });
-   manager.appendMessage(answer([{ type: 'toolCall', id, name: 'effect', arguments: {} }], 'toolUse'));
-   manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: 'effect', isError: false, timestamp: 0, content: [{ type: 'text', text: fit(n) }] });
-   manager.appendMessage(answer([{ type: 'text', text: 'Observed prior result' }]));
-  };
   // One long user turn: only tool rounds after the opening request, so a cut has no earlier turn to drop and must cut inside the turn.
   const round = (n: number) => {
    const id = `history-${++turns}`;
    manager.appendMessage(answer([{ type: 'toolCall', id, name: 'effect', arguments: {} }], 'toolUse'));
    manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: 'effect', isError: false, timestamp: 0, content: [{ type: 'text', text: fit(n) }] });
+  };
+  const cycle = (n: number) => {
+   manager.appendMessage({ role: 'user', content: `Earlier request ${turns + 1}`, timestamp: 0 });
+   round(n);
+   manager.appendMessage(answer([{ type: 'text', text: 'Observed prior result' }]));
   };
   const saved = () => manager.buildSessionProjection().messages;
   const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: options.compactionEnabled ?? true, reserveTokens: options.reserveTokens ?? 32768, keepRecentTokens: options.keepRecent ?? 0 } });
