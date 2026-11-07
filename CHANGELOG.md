@@ -3,6 +3,33 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.12] - 2026-11-06
+
+### Fixed
+
+- **A prompt could be lost, with no notice (1.0.10 and 1.0.11).** When a new prompt arrived over the cut point and pi-tuck's cut kept nothing of the
+  conversation before it, which happens when everything since the last cut is one long turn, the prompt was dropped from the request and from the
+  saved session. The model never saw it and usually went on with the previous task, so work you asked for could be lost, and could look answered.
+  The next prompt ran normally. A fresh one-prompt `pi -p` run could not hit it; a run that resumed a long session could. If you used 1.0.10 or 1.0.11
+  and a reply ignored what you had just asked, this is the likely cause. Now the prompt always reaches the model and stays in the session.
+
+### Added
+
+- The settings stress test now fails any prompt missing from a request it opened, or from the session after it: 13 such findings on 1.0.11, none here.
+
+### Known issues
+
+- Correction to the 1.0.11 notes: their count of 4 failing stress cells of 272 understated cut rhythm. With setups that leave a real summary and tail
+  after a cut, 1.0.11 cuts too often at small windows, freeing little each time: about 99 cuts in 200 tool rounds at an 81,920 window with a 24k setup.
+  It costs time and extra work. An automatic cut point that fixes it is being tested and is not in this release.
+- The known issues listed under 1.0.11 still apply.
+
+### Release gates
+
+- **Shipped without a live gate, as a defect that loses work.** Tests and CI passed, and the stress test passed on Pi 1.2.0 and the newest Pi.
+- Replay differs from 1.0.11, as it has to: 1,124 of 13,946 requests on 29 recordings, each change starting at the first request of a run, with 0 dead
+  tasks, 0 refused requests and the same 9 clips.
+
 ## [1.0.11] - 2026-11-06
 
 ### Fixed
