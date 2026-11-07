@@ -3,6 +3,39 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.13] - 2026-11-07
+
+### Changed
+
+- **The cut point adapts by itself.** With no `cutAt` set, the band now follows the session: what the setup and the last cut left, plus half a tail of room to
+  grow, never below 60% of the room and capped just under the room. Sessions at small windows, or with a large setup, no longer cut every round or two for
+  little gain. Larger windows with ordinary setups, such as 131,072 with a 24k setup, stay on 60% and behave almost exactly as before. An explicit `cutAt` keeps today's formula,
+  so remove it if you set one by hand for this reason.
+- With no `cutAt` set, a cut that isn't due yet must free at least a tenth of the room.
+- Internal cleanup: single-use helpers inlined and duplicate paths merged, with no change to any request.
+
+### The trade
+
+On windows that cut too often today, each request carries more context. Cuts, re-processing and request time fall, and billed tokens rise on paid models. On
+replay of real sessions at an 81,920 window: 22.3 to 9.3 cuts per 100 requests, request time about 16-20% lower, billed tokens 16-19% higher. At a 65,536 window
+it is the worst of these, with billed tokens up by as much as 35%.
+
+### Known issues
+
+- A very large setup at a small window, such as 40k at 65,536, leaves too little free room for any good rhythm: cuts stay frequent and free little.
+- A fresh assistant message larger than the free room is refused: nothing can clip it yet. A short next prompt recovers. In an unattended `pi -p` run, a
+  refusal ends the run.
+- A reply that reports more than the window reads to Pi as a silent overflow; when nothing can be cut, pi-tuck refuses the next prompt, and the prompt after that runs.
+- If a provider keeps rejecting requests in a wording Pi does not class as a context overflow, or with a bare HTTP 413, pi-tuck does not recover on its own. Try
+  `/compact`.
+
+### Release gates
+
+- Passed: the paired live gate against 1.0.12 on `mac-studio/main` at an 81,920 window, 150 tasks on five chains: resolved 131 against 131, lower bound of the
+  difference -1.3 points against a bar of -5, 0 lost tasks ([`benchmark/RESULTS-ADAPTIVE.md`](benchmark/RESULTS-ADAPTIVE.md)). Tests; CI; the stress test on Pi 1.2.0
+  and the newest Pi, with 3 of 274 cells reporting the known issues above; frozen replay with 0 dead tasks and every clip read back.
+- This release is the exact code the gate measured. Only the version and these notes changed.
+
 ## [1.0.12] - 2026-11-06
 
 ### Fixed
