@@ -36,3 +36,20 @@ Turns per task (ratio of means over the tasks both arms resolve, with a paired b
 ## Not claimed
 
 Only this pair of builds, on this model setup, window and these chains. Turns and spend are reported, not claimed: an effectiveness claim needs its own bar, set before its results. Nothing about other windows, models or builds.
+
+## Restart of 2026-11-07, registered before any result of the restarted run
+
+The first run of this gate (arms L = 1.0.11 and O = `21fa1a4`) was stopped by hand on 2026-11-06 at 22:58 with no result read, on word of a defect in the pi-tuck build that arm L ran: a prompt could be dropped when a cut kept nothing of the conversation before it (`DEVIATIONS.md`, 22:58, and the dropped-prompt sections of the result notes). Its folders are kept, unmoved in content, under `runs/live81-stopped-1`; its tasks are never pooled with this run. Everything above stands for the restarted run except what is replaced here.
+
+**Builds, replacing the section "Builds".**
+- **Arm L (base)**: pi-tuck 1.0.12, commit `e8ffa4c` (tag `v1.0.12`), exported to `runs/tuck-1.0.12`.
+- **Arm O (candidate)**: commit `882f6f6` (branch `claude/adaptive-cut-half-tail`), exported to `runs/tuck-adaptive-882f6f6`. It descends from `v1.0.12` (checked with `git merge-base --is-ancestor`); against `v1.0.12` its `src/` differs in ten files (`index.ts`, `src/budget.ts`, `src/build-id.ts`, `src/compaction.ts`, `src/omissions.ts`, `src/semantic-recall.ts`, `src/tuck.ts`, `src/tuck/core/global-indices.ts`, `src/tuck/core/normalize.ts`, `src/tuck/cut.ts`); `src/assets.ts` is identical, so both arms use the cloned semantic runtime. It still reports version 1.0.12 until its release commit, which changes only the version and the notes, so the two arms are told apart by path and by the build hash in each cut's receipt (both read at the start). Its replay differs from the release's, so it keeps its live gate.
+- The explicit cut point (`cutAt`) is unset on both sides.
+
+**Lanes.** Four mac-studio lanes in all, two chains' worth of arms each: chains `t06`, `t08`, `t10` in one run and `t07`, `t09` in another, started by `SESSIONS=… LANES=2 harness/run_adaptive_gate.sh`; the two runs never share a chain.
+
+**Bar (Tier 2), condition 3 replaced.** Conditions 1 and 2 stand as written. **Lost tasks: 0 on O**, counted as the sum of (a) dead tasks by `analysis/dead_tasks.py`, (b) tasks whose prompt was dropped at a cut: a compaction entry with reason `prompt`, `keptUserTurns` 0 and an empty `firstKeptEntryId` (`analysis/prompt_drops.py`, and `analysis/v108_report.py --count-dropped-prompts` for the bar), and (c) tasks the audit below finds started without their prompt. On these builds (b) reads zero by construction, because 1.0.12 names the prompt as the first entry a cut keeps; (c) is the check that can still find a loss. The base arm's count is printed beside it.
+
+**Audit (c).** `analysis/prompt_evidence.py` lists, for both arms, every task whose session has a cut with reason `prompt` and whose first four assistant messages show a sign that the prompt is missing: confusion or missing-task wording, another task number named as the current one, or the previous task's tag or issue named instead of this one's. I read each listed task's first four messages and count it lost when they show the model without this task's prompt. The same signs are counted on the tasks with no cut at a prompt, as the base rate (7% of such tasks in the 1.0.10 and 1.0.11 sessions read for the dropped-prompt notes). Each arm's listing, my reading of each listed task and the controls are published with the result.
+
+**Reported with no pass line, added.** Prompt cuts per arm and the tasks of each with signs; the lanes in use, the requests completed per minute by lanes in use, and the server's connections every 60 s (`harness/gate_load_sampler.sh`, `analysis/gate_throughput.py`).
