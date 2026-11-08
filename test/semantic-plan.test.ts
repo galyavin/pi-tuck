@@ -335,3 +335,16 @@ test('an empty history with nothing out of view: once indexed, the search answer
  expect(page.status).toBe('no_matches');expect(page.notice).toBe('No eligible original source units in this snapshot.');expect(f.queryEmbeddings).toBe(0);
  expect((f.internal as unknown as {worker?:unknown}).worker).toBeUndefined();
 });
+test('a priorResults entry that does not match this history is ignored, not a failed search',async()=>{
+ const f=fixture({queryWaitMs:60000});mixed(f);
+ await f.internal.prepare(f.provider);expect(f.c.status().indexingComplete).toBe(true);
+ const sha=f.provider().sources[0].sha,entryId=f.provider().sources[0].entry.id,other=f.provider().sources[1].entry.id;
+ // A word hit's read with another source's hash, an id the history lacks, a wrong hash, a range past the source's end.
+ for(const bad of [{entryId:other,sourceSha:sha,start:0,end:1},{entryId:'no-such-entry',sourceSha:sha,start:0,end:1},{entryId,sourceSha:'0'.repeat(64),start:0,end:1},{entryId,sourceSha:sha,start:0,end:1e6}]){
+  const page=await f.c.search('source',f.provider,undefined,[bad]);
+  expect(page.status).toBe('ok');expect(page.notice).toContain('1 of the priorResults did not match this history');
+ }
+ const clean=await f.c.search('source',f.provider,undefined,[{entryId,sourceSha:sha,start:0,end:1}]);
+ expect(clean.status).toBe('ok');expect(clean.notice).not.toContain('priorResults');
+});
+
