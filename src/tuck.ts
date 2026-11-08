@@ -7,6 +7,7 @@ import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
+import { fileObservations } from "./content-observations";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -363,15 +364,45 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const sourceRows = rows.filter(row => row.position < boundary);
         const lists = listsAt(boundary);
         let ledger: TranscriptRecord[] = lists.records;
+        let listedKeep = Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES);
         // List caps are existing ranking policy; only the carried target is a
         // spending limit. Candidate list sizes have fixed, cached line prices.
         if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
           ledger = [];
+          listedKeep = 0;
           for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
             const candidate = [...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)];
-            if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) ledger = candidate;
+            if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) {
+                ledger = candidate; listedKeep = keep;
+            }
         }
         }
+        // These optional observations follow the pointer lists and precede the
+        // recent assistant third. Price them only against the one carried target;
+        // they never change its base, the openings, or the selected native tail.
+        const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
+        const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
+        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
+        for (const item of shownFiles) item.definitions = observations.get(item.path);
+        const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
+        let listCost = lineCost(ledger);
+        const fitsObservation = (extra: number) => price(frameLength(protectedView.cost + listCost + extra,
+            protectedView.rows.length + ledger.length), boundary) <= target;
+        // Each kind gives way as whole items, oldest first; an oversized newest
+        // item cannot promote an older one. Pointer lines need no extra omission.
+        for (const item of shownActions) {
+            if (!item.outputTail) continue;
+            const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            outputs.add(item); listCost += extra;
+        }
+        for (const item of shownFiles) {
+            if (!item.definitions) continue;
+            const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            definitions.add(item); listCost += extra;
+        }
+        if (outputs.size || definitions.size) ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
         const mandatory = new Set([...protectedView.whole].filter(index => {
             const row = users.find(row => row.index === index);
             return row?.message.role === "user" && isTextOnly(row.message.content);

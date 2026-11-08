@@ -133,7 +133,7 @@ test('C and D: no view drops tool history; both views end with the closing instr
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		expect(['dialogue', 'shrunk']).toContain(draft.mode);
 		expect(ledgerText(draft.compaction.summary)).toContain('- wrote/edited out/x.csv');
-		expect(draft.compaction.summary.endsWith('\n\nOnly the dialogue and the actions and files listed above carry over. Files created by commands are not listed: before redoing a step, read its output with tuck_recall or list your output folders. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.')).toBe(true);
+		expect(draft.compaction.summary.endsWith('\n\nOnly the dialogue and the actions and files listed above carry over. Files created by commands are not listed: Before re-running a command listed above, read its output with tuck_recall instead. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.')).toBe(true);
 	} finally { s.dispose(); }
 });
 
@@ -198,7 +198,7 @@ test('A: an initiating prompt removed by a native edit is not quoted, and no lat
 
 /** The action trail as lines, heading first, locators kept. */
 const actionLines = (summary: string) => records(summary).filter(r => r.kind === 'section' && r.title === 'Actions').map(r => r.text!);
-const bare = (line: string) => line.replace(/ \(output: tuck_recall .*\)$/, '');
+const bare = (line: string) => line.replace(/ \(output tail\):\n[\s\S]*$/u, '').replace(/ \(output: tuck_recall .*\)$/, '');
 
 test('E: the action trail lists the other tool calls newest first, marks failed ones, and leaves out reads, writes, edits and lookups', () => {
 	const s = session('Start.', [
