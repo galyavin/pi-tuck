@@ -35,7 +35,7 @@ function session(rounds = 12) {
 
 // Force one view: for the shrunk view, the dialogue offer is too large to be admitted.
 const forcing = (target: DraftMode): Tuck => ({ ...tuck, compileDialogue: input =>
-	target === 'dialogue' ? tuck.compileDialogue(input) : 'z'.repeat(input.ranking.maxBriefChars + 1) });
+	target === 'dialogue' ? tuck.compileDialogue(input) : '' });
 
 test('the tail budget halves the room left after fixed input, capped at 25k', () => {
 	const s = session();
@@ -112,7 +112,9 @@ test('an empty compiler offer still yields the mandatory floor (initiating promp
 		expect(draft.mode).toBe('shrunk');
 		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 0$/m);
 		expect(draft.compaction.summary).toContain(LEDGER);
-		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 11$/m); // the newest eight answered turns keep their openings
+        const preview = SessionManager.inMemory(s.ctx.cwd, undefined, [s.manager.getHeader()!, ...s.manager.getBranch()]);
+        preview.appendCompaction(draft.compaction.summary, draft.compaction.firstKeptEntryId, draft.compaction.tokensBefore, draft.compaction.details, true);
+        expect(JSON.stringify(preview.buildSessionProjection().messages)).toContain('Earlier request 11'); // summary and tail share the fill
 	} finally { s.dispose(); }
 });
 

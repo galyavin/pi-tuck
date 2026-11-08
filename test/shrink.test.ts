@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { shrinkDialogue, wholeDialogue, omittedDialogue, type DialogueInput } from '../src/tuck/core/shrink';
+import { shrinkDialogue, wholeDialogue, type DialogueInput } from '../src/tuck/core/shrink';
 import { userPrefixRecords } from '../src/tuck/core/brief';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { parseRecords, serializeRecords, splitSummary, type TranscriptRecord } from '../src/tuck/core/transcript';
@@ -30,11 +30,7 @@ test('counted ranges account for tools and several assistant units sharing one o
     for (let part = 0; part < 3; part++) blocks.push({ kind: 'assistant', sourceIndex: at * 2, text: sentence(at * 3 + part, 400) });
     blocks.push({ kind: 'tool_result', sourceIndex: at * 2 + 1, name: 'read' });
   }
-  const input = inputOf(blocks), floor = recordsOf(omittedDialogue(input));
-  expect(floor.find(record => record.role === 'assistant')?.count).toBe(120);
-  expect(floor.find(record => record.role === 'assistant')?.sourceRange).toEqual({ start: 0, end: 78 });
-  expect(floor.find(record => record.role === 'toolResult')?.sourceRange).toEqual({ start: 1, end: 79 });
-  expect(floor.some(record => record.sourceIndices !== undefined)).toBe(false);
+  const input = inputOf(blocks);
   for (const limit of [4000, 8000, 16000]) {
     const records = recordsOf(shrinkDialogue(input, limit).text);
     const shown = records.filter(record => record.kind === 'excerpt' && record.role === 'assistant');
@@ -58,21 +54,9 @@ test('the recent assistant third survives before more user text, with the newest
   expect(characters).toBeGreaterThan(limit / 3 - 2 * prose(100, 6).length);
 });
 
-test('a mandatory source renders as nothing and is not counted; missing locators are stated', () => {
-  const input = dialogue(10);
-  input.mandatorySourceIndices = new Set([0, 1, 2]);
-  input.blocks.push({ kind: 'user', text: 'Unlocated input.' });
-  const records = recordsOf(omittedDialogue(input));
-  expect(records.map(record => record.count)).toEqual([10, 9, 9]);
-  expect(records.every(record => record.sourceRange!.start >= 3)).toBe(true);
-  expect(records[0]?.reason).toContain('no source locator');
-});
-
 test('an allowance smaller than counted omission metadata offers no misleading partial view', () => {
   const input = dialogue(30);
   for (const limit of [0, 1, 100]) expect(shrinkDialogue(input, limit)).toEqual({ text: '', step: 'none', size: 0 });
-  const floor = omittedDialogue(input);
-  expect(shrinkDialogue(input, floor.length).text.length).toBeLessThanOrEqual(floor.length);
 });
 
 test('random sessions stay within the allowance, round trip exactly, and retain exact passage spans', () => {

@@ -1,12 +1,10 @@
 import type { CompilerMessage } from "../types";
 import { normalize } from "./normalize";
 import { filterNoise } from "./filter-noise";
-import { shrinkDialogue, wholeDialogue, omittedDialogue, type DialogueInput } from "./shrink";
+import { shrinkDialogue, wholeDialogue, type DialogueInput } from "./shrink";
 
 export interface CompileInput {
   messages: CompilerMessage[];
-  /** Eligible original branch only: receipt identity and order. */
-  receiptContext?: { messages: CompilerMessage[]; sourceIndices: Array<number | undefined> };
   /** Native session-global source indices parallel to messages. */
   sourceIndices?: Array<number | undefined>;
   /** Actual native entry IDs parallel to originals, not inferred from text. */
@@ -25,17 +23,16 @@ export interface CompileInput {
 const inputs = new WeakMap<CompileInput, DialogueInput>();
 const normalized = new WeakMap<NonNullable<CompileInput["sourceIndices"]>, {
   messages: CompileInput["messages"]; sourceTimes: CompileInput["sourceTimes"]; sourceEntryIds: CompileInput["sourceEntryIds"];
-  receiptContext: CompileInput["receiptContext"]; blocks: DialogueInput["blocks"];
+  blocks: DialogueInput["blocks"];
 }>();
 const dialogueInput = (input: CompileInput): DialogueInput => {
   let prepared = inputs.get(input);
   if (!prepared) {
     const cached = input.sourceIndices && normalized.get(input.sourceIndices);
     const blocks = cached?.messages === input.messages && cached.sourceTimes === input.sourceTimes &&
-      cached.sourceEntryIds === input.sourceEntryIds && cached.receiptContext === input.receiptContext ? cached.blocks :
-      normalize(input.messages, input.sourceIndices, input.receiptContext, input.sourceEntryIds, input.sourceTimes).filter(block =>
-        block.kind === "tool_result" || filterNoise([block]).length > 0);
-    if (input.sourceIndices) normalized.set(input.sourceIndices, { messages: input.messages, sourceTimes: input.sourceTimes, sourceEntryIds: input.sourceEntryIds, receiptContext: input.receiptContext, blocks });
+      cached.sourceEntryIds === input.sourceEntryIds ? cached.blocks :
+      filterNoise(normalize(input.messages, input.sourceIndices, input.sourceEntryIds, input.sourceTimes));
+    if (input.sourceIndices) normalized.set(input.sourceIndices, { messages: input.messages, sourceTimes: input.sourceTimes, sourceEntryIds: input.sourceEntryIds, blocks });
     inputs.set(input, prepared = { blocks, mandatorySourceIndices: input.ranking?.mandatorySourceIndices,
       sourceIndices: input.sourceIndices ?? input.messages.map((_, index) => index), sourceEntryIds: input.sourceEntryIds });
   }
@@ -49,5 +46,3 @@ export const compileDialogue = (input: CompileInput): string => wholeDialogue(di
 /** The lower ranks within `ranking.maxBriefChars`; "" when the counted omission floor cannot fit. */
 export const compileShrunkDialogue = (input: CompileInput & { ranking: { maxBriefChars: number } }): string =>
   shrinkDialogue(dialogueInput(input), input.ranking.maxBriefChars).text;
-
-export const compileOmissions = (input: CompileInput): string => omittedDialogue(dialogueInput(input));

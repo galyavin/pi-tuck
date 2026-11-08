@@ -296,7 +296,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const measureFor = (ctx: ExtensionContext) => (messages: Messages) => projectedConversationTokens(applyClips(messages, clips), ctx, options.recallPolicy);
     // The planner counts with the same function, except that it does not fail on a summary in another format: a cut can replace one
     // (an operator's /compact repairs a session whose saved summary is foreign). Identical to the strict one for this compactor's summaries.
-    const plannerMeasureFor = (ctx: ExtensionContext) => (messages: Messages) => measurableConversationTokens(applyClips(messages, clips), ctx, options.recallPolicy);
+    const plannerMeasureFor = (ctx: ExtensionContext) => Object.assign(
+        (messages: Messages) => measurableConversationTokens(applyClips(messages, clips), ctx, options.recallPolicy),
+        { messageTokens: (message: Messages[number]) => conversationTokens(applyClips([message], clips)) });
     const hostTokens = (ctx: ExtensionContext) => options.hostMessages ? conversationTokens(options.hostMessages(ctx)) : 0;
     const toolShapes = (names: Iterable<string>): ToolShape[] => {
         const selected = new Set(names);

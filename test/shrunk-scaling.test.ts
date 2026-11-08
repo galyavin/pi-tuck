@@ -7,7 +7,7 @@ import { run } from './synthetic-sessions';
 const draft = (turns: number) => {
 	let fastest = Infinity, entries = 0;
 	for (let attempt = 0; attempt < 3; attempt++) {
-		const [cut] = run('prose', { window: 128000, reserve: 16384, turns, cutAt: turns });
+		const [cut] = run('low-prose', { window: 128000, reserve: 16384, turns, cutAt: turns });
 		expect(cut?.mode).toBe('shrunk');
 		fastest = Math.min(fastest, cut!.ms); entries = cut!.entries;
 	}

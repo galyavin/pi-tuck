@@ -59,7 +59,7 @@ const PROMPT_MS = 60_000;
 /** The fixture's model, which every cell that does not name another goes out on. */
 const DEFAULT_API = 'openai-codex-responses (openai-codex/gpt-6.1-sol)';
 
-type Rule = 'lost-prompt' | 'task-turn' | 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow';
+type Rule = 'lost-prompt' | 'task-turn' | 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow' | 'cut-target';
 type Failure = { cell: string; rule: Rule; message: string; params: Record<string, unknown> };
 const failures: Failure[] = [];
 const ran: string[] = [];
@@ -91,6 +91,7 @@ const SETUP_SCHEMA = 52;
 const SETUP_OVERHEAD = 1_500;
 
 
+let largestCutOvershoot = -Infinity, cappedCuts = 0;
 const setupRows: SetupRow[] = [];
 /** One row per provider cell: what the scripted provider really did, and whether pi-ai's own classifier called it a context overflow. That answer
  *  decides whether the host runs its one compact-and-retry at all, and it is pi-ai's fact rather than this test's, so the run prints it. */
@@ -311,6 +312,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
  const guard: number[] = [], summaries: string[] = [], stops: string[] = [], counts: { count: number; known: boolean }[] = [];
  const promptSizes: number[] = [], resultSizes: number[] = [], threw: string[] = [], promptRequests: number[] = [], resultCounts: number[] = [];
  // Compactions this cell saved, run-end cuts included: a cut that closes a run is still a cut the session keeps.
+ const initialCuts = new Set(h.compactions().map(entry => entry.id));
  const cutStart = h.manager.getEntries().filter(e => e.type === 'compaction').length;
  const savedCuts = () => h.manager.getEntries().filter(e => e.type === 'compaction').length - cutStart;
  let answered = 0, refused = 0, hung = 0, cuts = 0, piOver = 0;
@@ -447,6 +449,15 @@ async function runCellInner(cell: Cell): Promise<Run> {
     }
    }
    for (const cut of h.compactions().slice(cuts)) {
+    if (!initialCuts.has(cut.id)) {
+     const details = cut.details as { tokensAfter?: number; carriedTarget?: number };
+     if (typeof details.carriedTarget !== 'number' || typeof details.tokensAfter !== 'number') record(cell, 'cut-target', 'a generated cut has no measured after/target receipt');
+     else {
+      const overshoot = details.tokensAfter - details.carriedTarget;
+      largestCutOvershoot = Math.max(largestCutOvershoot, overshoot); cappedCuts++;
+      if (overshoot > 0) record(cell, 'cut-target', `cut carries ${details.tokensAfter}, exceeding its target ${details.carriedTarget} by ${overshoot}`);
+     }
+    }
     const tokens = est({ role: 'compactionSummary', summary: cut.summary, tokensBefore: 0, timestamp: 0 });
     if (tokens + reserve > cell.window) record(cell, 'summary-room', `a saved summary of ${tokens} tokens does not fit the room of ${room}`, { prompt: i + 1, summary: tokens, room });
     summaries.push(cut.summary);
@@ -1030,6 +1041,7 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  report(`\nstress: cells run ${ran.length}, failures ${failures.length}, top failure class ${sorted[0]?.[0] ?? 'none'}`);
  // What the grid actually reached. A run that cut nothing tested nothing, and this line is where that shows.
  report(`stress: coverage: cells with room ${cov.room}/${cov.cells}, cells with a cut ${cov.cut}/${cov.cells}, total cuts ${cov.cuts}, prompts answered ${cov.answered}, prompts refused ${cov.refused}, prompts planned above the room ${cov.aboveRoom}, provider overflows ${cov.overflows}, provider truncations ${cov.truncations}, clips ${cov.clips}`);
+ report(`stress: cut-target: ${cappedCuts} generated cuts checked, largest overshoot ${Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0}`);
  report('class           failures  cells  examples');
  for (const [rule, row] of sorted) report(`${rule.padEnd(15)}  ${String(row.count).padStart(8)}  ${String(row.cells.size).padStart(5)}  ${[...row.cells].slice(0, 2).join(' | ')}${row.cells.size > 2 ? ` | +${row.cells.size - 2} more` : ''}`);
  // One row per named setup cell. A pass/fail table cannot show a run that is near the limit and still under it, and that is where a session spends
@@ -1050,7 +1062,7 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
   for (const r of providerRows) report(`${r.name.padEnd(35)}  ${r.saw.padStart(12)}  ${r.pi ? `yes, ${r.pi} repl${r.pi > 1 ? 'ies' : 'y'}` : 'no'}`);
  }
  if (REPORT) {
-  writeFileSync('test/stress/failures.json', JSON.stringify({ seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, failures }, null, 1));
+  writeFileSync('test/stress/failures.json', JSON.stringify({ seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, failures }, null, 1));
   report(`stress: wrote ${failures.length} failures to test/stress/failures.json`);
  }
  report(`stress: ran ${ran.length} cells in ${((Date.now() - started) / 1000).toFixed(1)}s on ${[...apis].join(', ')}`);

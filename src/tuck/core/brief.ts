@@ -123,7 +123,7 @@ export const isDialogue = (block: NormalizedBlock): block is DialogueBlock => bl
 
 /** A user or assistant text block the omission notices count when it is unselected: non-empty, and not rendered in the mandatory base. */
 export const isOmittable = (block: NormalizedBlock, mandatorySources?: ReadonlySet<number>): boolean =>
-  (block.kind === "user" || block.kind === "assistant") && Boolean(block.text.trim()) &&
+  (block.kind === "assistant" || block.kind === "user" && !block.image) && Boolean(block.text.trim()) &&
   (block.sourceIndex === undefined || !mandatorySources?.has(block.sourceIndex));
 
 /** Count dropped units inside inclusive original-index bounds. The range may
@@ -162,7 +162,7 @@ export const blockRecords = (b: DialogueBlock, mandatory: ReadonlySet<number> | 
 export const userPrefixRecords = (block: DialogueBlock, mandatory: ReadonlySet<number> | undefined, take: number): TranscriptRecord[] => {
   if (block.kind !== "user" || block.sourceIndex !== undefined && mandatory?.has(block.sourceIndex)) return [];
   const text = block.originalText ?? block.text;
-  if (take <= 0 || !text.trim()) return [];
+  if (take <= 0 || !text.length) return [];
   let end = Math.min(text.length, Math.floor(take));
   // Charge the complete code point in the measured candidate, including the
   // low surrogate, so a protected 80-character opening never shrinks to 79.

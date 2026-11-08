@@ -1,11 +1,12 @@
 import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { orderByOriginalSource } from "./tuck/core/source-order";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
-import { parseRecords, serializeTranscript, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from "./tuck/core/transcript";
+import { parseRecords, serializeTranscript, serializeRecord, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from "./tuck/core/transcript";
 import { DIALOGUE_SUFFIX } from "./tuck/core/format";
+import { carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
-import { actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
+import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -15,7 +16,10 @@ import { ATTEMPT_NOTICE, createRecall, type RecallPolicy,
 type AgentMessage = Parameters<typeof convertToLlm>[0][number];
 type Cut = import("./tuck/cut").OwnCutResult;
 /** Counts a projection of the conversation exactly as the triggers, the post-cut checks and the guard do (budget.ts). */
-export type Measure = (messages: AgentMessage[]) => number;
+export type Measure = ((messages: AgentMessage[]) => number) & {
+    /** The same per-message estimate, including any temporary native result clip. */
+    messageTokens?: (message: AgentMessage) => number;
+};
 /** The summary view that produced a draft: the whole pre-cut dialogue, or the same dialogue shrunk to the allowance. Both carry the file ledger. */
 export type DraftMode = "dialogue" | "shrunk";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
@@ -33,9 +37,7 @@ export interface Tuck {
 	buildGlobalIndexById(entries: readonly SessionEntry[]): Map<string, number>;
 	/** The lower ranks within `ranking.maxBriefChars`: recent assistant third, more user text, then remaining dialogue. */
 	compileShrunkDialogue(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
-		receiptContext?: { messages: AgentMessage[]; sourceIndices: (number | undefined)[] };
 		ranking: { maxBriefChars: number; mandatorySourceIndices?: ReadonlySet<number> } }): string;
-	compileOmissions(input: Parameters<Tuck["compileShrunkDialogue"]>[0]): string;
 	/** The whole pre-cut dialogue view; "" offers none, and the shrunk view is used. */
 	compileDialogue(input: Parameters<Tuck["compileShrunkDialogue"]>[0]): string;
 	prepareKeywordQuery(query: string): PreparedKeywordQuery;
@@ -47,16 +49,10 @@ export interface Tuck {
 import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./tuck/cut";
 import { calibrateCharsPerToken, estimateSourceMessageChars } from "./tuck/core/token-estimate";
 import { buildGlobalIndexById } from "./tuck/core/global-indices";
-import { compileShrunkDialogue, compileDialogue, compileOmissions } from "./tuck/core/summarize";
+import { compileShrunkDialogue, compileDialogue } from "./tuck/core/summarize";
 import { prepareKeywordQuery } from "./tuck/core/keyword-query";
 import { searchEntriesDetailed } from "./tuck/core/search-entries";
-export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileShrunkDialogue, compileDialogue, compileOmissions, prepareKeywordQuery, searchEntriesDetailed };
-/** The existing quarter-free historical allowance, in Pi's four-character summary
- * estimate. The ranked fill spends it and the preferred tail's amount together. */
-export function historicalAllowance(window: number, reserve: number, base: number, before: number): number {
-    const free = Math.max(0, window - reserve - base - 1);
-    return Math.max(0, Math.min(Math.floor(free / 4), before - base - 1)) * 4;
-}
+export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileShrunkDialogue, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
 /** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation. */
 export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false, newPrompt = false) {
  return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual, newPrompt }, ctx, reserveTokens, measure, policy, retainCurrentInput);
@@ -84,6 +80,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	const chars = (calibration.ok ? calibration.messages.reduce((n, m) => n + estimateSourceMessageChars(m), 0) : 0)
 		+ (input.previousSummary?.length ?? 0);
 	const { charsPerToken } = tuck.calibrateCharsPerToken(chars, input.tokensBefore);
+    // A rank boundary, not another spending limit: the preferred tail keeps
+    // its existing half-room/25k position inside the single carried grant.
     // The planner's reserve includes mandatory input (system, host and incoming prompt), so this is half of the target room *after* that
     // fixed input, not half of the whole room. Current/fresh-source floors below may still require an explicit rejection.
     const inputRoom = Math.floor(Math.max(0, (ctx.model?.contextWindow ?? 0) - reserveTokens - 1) / 2);
@@ -177,199 +175,306 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
         const header = ctx.sessionManager.getHeader();
         if (!header) throw new Error("Missing native session header");
-        const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
-        const before = measure(projected.messages);
-        const room = Math.max(0, model.contextWindow - reserveTokens - 1);
-        // A sublinear opening grows with this cut's room, without a task budget or a
-        // privileged first-prompt cap. All nine anchors get the same prefix length.
-        // The existing preservation contract watches the first 80 characters.
-        // This is a minimum, not a task/head cap: spare room grows each opening.
-        const minimumOpeningLength = 80;
-        const openingLength = Math.max(minimumOpeningLength, Math.floor(Math.sqrt(room * 4)));
-        const answered: SessionEntry[] = [];
+        const before = measure(projected.messages), room = Math.max(0, model.contextWindow - reserveTokens - 1);
+        const minimumOpeningLength = 80, openingLength = Math.max(80, Math.floor(Math.sqrt(room * 4)));
+        const positions = new Map(entries.map((entry, at) => [entry.id, at]));
+        const originals = tuck.buildOwnCut(entries.filter(entry => entry.type !== "compaction"), 0);
+        if (!originals.ok) return { unavailable: "No eligible original prefix to compile" };
+        const byId = new Map(entries.map(entry => [entry.id, entry]));
+        const sourceIndices = originals.selectedIds.map(id => indices.get(id));
+        const rows = originals.selectedIds.map((id, at) => ({ id, position: positions.get(id)!, index: sourceIndices[at], message: originals.messages[at] as AgentMessage }));
+        const users = rows.filter(row => row.message.role === "user");
+        const userTexts = new Map(users.map(row => [row.index, textOf((row.message as Extract<AgentMessage, { role: "user" }>).content)]));
         let replied = false;
+        const answered: SessionEntry[] = [];
         for (let at = entries.length - 1; at >= 0; at--) {
             const entry = entries[at]!;
             if (entry.type !== "message") continue;
             if (entry.message.role === "assistant" && !isDiscardedResponse(entry.message) && entry.message.content.length) { replied = true; continue; }
             if (entry.message.role !== "user") continue;
-            if (replied && isTextOnly(entry.message.content)) answered.push(entry);
+            if (replied && textOf(entry.message.content).length) answered.push(entry);
             replied = false;
         }
         const anchors = [...new Map([...answered.slice(0, 8), ...(firstUserPosition >= 0 ? [entries[firstUserPosition]!] : [])].map(entry => [entry.id, entry])).values()];
+        const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
         const detailsAt = (boundary: number) => ({ compactor: "pi-tuck", version: 2, adapter: "standalone",
-            keptUserTurns: entries.slice(boundary).filter(entry => entry.type === "message" && entry.message.role === "user").length,
+            keptUserTurns: users.reduce((n, row) => n + Number(row.position >= boundary), 0),
             ...(boundary === preferredBoundary && budgetCut ? { budgetCut } : {}) });
         const preview = (summary: string, boundary: number) => {
             const manager = SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch]);
             manager.appendCompaction(summary, entries[boundary]?.id ?? "", input.tokensBefore, detailsAt(boundary), true);
             return manager.buildSessionProjection().messages;
         };
-        const quoted = (entry: SessionEntry, take: number): TranscriptRecord[] => {
-            if (entry.type !== "message" || entry.message.role !== "user" || !isTextOnly(entry.message.content)) return [];
-            const text = textOf(entry.message.content), index = indices.get(entry.id);
-            if (index === undefined || !text.trim() || take <= 0) return [];
-            const sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(entry) }];
-            return userPrefixRecords({ kind: "user", text, originalText: text, startsSource: true, sourceIndex: index }, undefined, take)
-                .map(record => ({ ...record, sourceTimes }));
+        // Price the native suffix once. The measure's additive offset and Pi's
+        // summary envelope are calibrated once, rather than replaying a session
+        // for each opening, ledger line or tail boundary considered by the fill.
+        const rawPositions = new Map(branch.map((entry, at) => [entry.id, at]));
+        const native = new Float64Array(branch.length + 1);
+        for (const entry of projected.entries) {
+            if (entry.sourceEntry.type === "compaction") continue;
+            const at = rawPositions.get(entry.sourceEntry.id);
+            if (at !== undefined) for (const message of entry.messages)
+                native[at] += measure.messageTokens ? measure.messageTokens(message) : conversationTokens([message]);
+        }
+        for (let at = branch.length - 1; at >= 0; at--) native[at] += native[at + 1]!;
+        const nativeAt = (boundary: number) => boundary === entries.length ? 0 : native[rawPositions.get(entries[boundary]!.id)!]!;
+        const envelope = convertToLlm([{ role: "compactionSummary", summary: "", tokensBefore: 0, timestamp: 0 }]);
+        const wrapperCharacters = envelope.reduce((n, message) => n + textOf(message.content).length, 0);
+        const summaryTokens = (characters: number) => Math.ceil((characters + wrapperCharacters) / 4);
+        const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, record) => n + serializeRecord(record).length + 1, 0);
+        const frameLength = (cost: number, count: number) => TRANSCRIPT_HEADER.length + DIALOGUE_SUFFIX.length + cost + (count ? 0 : 1);
+        const render = (records: TranscriptRecord[]) => (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + DIALOGUE_SUFFIX;
+        type Unit = { position: number; index: number; count: number };
+        const units: Record<"user" | "assistant" | "toolResult", Unit[]> = { user: [], assistant: [], toolResult: [] };
+        for (const row of rows) {
+            if (row.index === undefined) continue;
+            const message = row.message;
+            if (message.role === "user" && textOf(message.content).length) units.user.push({ position: row.position, index: row.index, count: 1 });
+            else if (message.role === "toolResult") units.toolResult.push({ position: row.position, index: row.index, count: 1 });
+            else if (message.role === "assistant" && !isDiscardedResponse(message)) {
+                const count = message.content.filter(part => part.type === "text" && part.text.trim()).length;
+                if (count) units.assistant.push({ position: row.position, index: row.index, count });
+            }
+        }
+        const prefixes = Object.fromEntries(Object.entries(units).map(([role, list]) => {
+            const end = new Int32Array(entries.length + 1), count = new Int32Array(list.length + 1);
+            let seen = 0;
+            for (let at = 0; at <= entries.length; at++) {
+                while (seen < list.length && list[seen]!.position < at) seen++;
+                end[at] = seen;
+            }
+            list.forEach((unit, at) => count[at + 1] = count[at]! + unit.count);
+            return [role, { end, count }];
+        })) as Record<keyof typeof units, { end: Int32Array; count: Int32Array }>;
+        const quoteCache = new Map<string, { records: TranscriptRecord[]; cost: number; whole: boolean }>();
+        const quote = (entry: SessionEntry, take: number) => {
+            const key = `${entry.id}:${take}`;
+            let cached = quoteCache.get(key);
+            if (cached) return cached;
+            const index = indices.get(entry.id);
+            const text = entry.type === "message" && entry.message.role === "user" ? textOf(entry.message.content) : "";
+            const sourceTimes = index === undefined ? undefined : [{ sourceIndex: index, ...resolveSourceTime(entry) }];
+            const records: TranscriptRecord[] = index === undefined ? [] : take === Infinity
+                ? [{ kind: "excerpt", role: "user", sourceIndex: index, text, sourceTimes }]
+                : userPrefixRecords({ kind: "user", text, originalText: text, startsSource: true, sourceIndex: index }, undefined, take).map(record => ({ ...record, sourceTimes }));
+            cached = { records, cost: lineCost(records), whole: take >= text.length };
+            quoteCache.set(key, cached);
+            return cached;
         };
-        const positions = new Map(entries.map((entry, at) => [entry.id, at]));
-        const originals = tuck.buildOwnCut(entries.filter(entry => entry.type !== "compaction"), 0);
-        if (!originals.ok) return { unavailable: "No eligible original prefix to compile" };
-        const byId = new Map(entries.map(entry => [entry.id, entry]));
-        const receiptContext = { messages: originals.messages, sourceIndices: originals.selectedIds.map(id => indices.get(id)) };
-        // Count original units independently of serialized omission ranges. This
-        // lets the same selected text move into the tail without guessing how
-        // many units a broad range assigned to one particular message.
-        type RankedUnit = { index: number; position: number; role: "user" | "assistant" | "toolResult"; count: number; text?: string };
-        const units = originals.messages.flatMap((message: AgentMessage, at): RankedUnit[] => {
-            const index = indices.get(originals.selectedIds[at]!);
-            if (index === undefined) return [];
-            const position = positions.get(originals.selectedIds[at]!)!;
-            if (message.role === "user") return textOf(message.content).trim() ? [{ index, position, role: "user" as const, count: 1, text: textOf(message.content) }] : [];
-            if (message.role === "toolResult") return [{ index, position, role: "toolResult" as const, count: 1 }];
-            if (message.role !== "assistant" || isDiscardedResponse(message)) return [];
-            const count = message.content.filter(part => part.type === "text" && part.text.trim()).length;
-            return count ? [{ index, position, role: "assistant" as const, count }] : [];
-        });
-        const userTexts = new Map(units.flatMap(unit => unit.text === undefined ? [] : [[unit.index, unit.text] as const]));
-        const prepare = (boundary: number) => {
-            const selected = originals.selectedIds.flatMap((id, i) => positions.get(id)! < boundary ? [{ id, message: originals.messages[i]! }] : []);
-            const ids = selected.map(row => row.id), messages = selected.map(row => row.message);
-            const sourceIndices = ids.map(id => indices.get(id));
+        const highAt = (boundary: number, length: number) => {
+            const kept: TranscriptRecord[] = [], selected = new Set<number>(), whole = new Set<number>();
+            let cost = 0;
+            const add = (entry: SessionEntry, take: number) => {
+                const quoted = quote(entry, take), index = indices.get(entry.id);
+                kept.push(...quoted.records); cost += quoted.cost;
+                if (index !== undefined && quoted.records.length) { selected.add(index); if (quoted.whole) whole.add(index); }
+            };
+            if (userPosition >= 0 && userPosition < boundary && textOnly) add(current!, Infinity);
+            for (const entry of anchors) if (entry.id !== current?.id && positions.get(entry.id)! < boundary) add(entry, length);
+            const omissions: TranscriptRecord[] = [];
+            for (const role of ["user", "assistant", "toolResult"] as const) {
+                const list = units[role], prefix = prefixes[role];
+                let first = 0, last = prefix.end[boundary]! - 1;
+                if (role === "user") {
+                    while (first <= last && selected.has(list[first]!.index)) first++;
+                    while (last >= first && selected.has(list[last]!.index)) last--;
+                }
+                if (last < first) continue;
+                const a = list[first]!, b = list[last]!;
+                let count = prefix.count[last + 1]! - prefix.count[first]!;
+                if (role === "user") for (const index of whole) if (index >= a.index && index <= b.index) count--;
+                if (count) omissions.push(omissionRecord(role, count, [a.index, b.index], false));
+            }
+            const rows = [...kept, ...omissions], totalCost = cost + lineCost(omissions);
+            return { kept, whole, omissions, rows, cost: totalCost, length: frameLength(totalCost, rows.length) };
+        };
+        const calibrationHigh = highAt(floorBoundary, minimumOpeningLength);
+        const floorSummary = render(calibrationHigh.rows), floorProjection = preview(floorSummary, floorBoundary);
+        const offset = measure(floorProjection) - nativeAt(floorBoundary) - summaryTokens(floorSummary.length);
+        const price = (characters: number, boundary: number) => offset + nativeAt(boundary) + summaryTokens(characters);
+        const listCache = new Map<number, { files: ReturnType<typeof ledgerItems>; actions: ReturnType<typeof actionItems>; records: TranscriptRecord[] }>();
+        const listsAt = (boundary: number) => {
+            const cached = listCache.get(boundary);
+            if (cached) return cached;
             const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
             const files = ledgerItems(compacted, indices, resolves, failedCalls), actions = actionItems(compacted, indices, resolves, failedCalls);
-            return { ids, messages, sourceIndices, files, actions };
+            const lists = { files, actions, records: [...actionRecords(actions), ...ledgerRecords(files)] };
+            listCache.set(boundary, lists);
+            return lists;
         };
-        const assemble = (compiled: string, kept: TranscriptRecord[], ledger: TranscriptRecord[], boundary: number) => {
-            const split = compiled ? splitSummary(compiled) : undefined;
-            if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
-            const compiledRecords = split ? parseRecords(split.body, split.version) : [];
-            // A complete lower-ranked user source replaces its opening. Partial
-            // passage clips leave the exact opening and its recall offset intact.
-            const expanded = new Set(kept.filter(record => record.kind === "excerpt" && compiledRecords.some(row =>
-                row.kind === "excerpt" && row.role === "user" && row.sourceIndex === record.sourceIndex && row.text.startsWith(record.text!) && row.text.length > record.text!.length)).map(record => record.sourceIndex));
-            const anchored = new Set(kept.flatMap(record => record.sourceIndex === undefined ? [] : [record.sourceIndex]));
-            const records = [...compiledRecords.flatMap(record => {
-                if (record.kind === "omission" && record.count !== undefined) return [];
-                if (record.role !== "user") return [record];
-                if (record.sourceIndex !== undefined && anchored.has(record.sourceIndex) && !expanded.has(record.sourceIndex)) return [];
-                return [record];
-            }), ...kept.filter(record => !expanded.has(record.sourceIndex))];
-            const shown = new Map<string, number>(), whole = new Map<string, number>();
-            for (const record of records) {
-                if (record.sourceIndex === undefined) continue;
-                const key = `${record.role}:${record.sourceIndex}`;
-                if (record.role === "user" && record.kind === "excerpt") {
-                    shown.set(key, 1);
-                    if (record.text === userTexts.get(record.sourceIndex)) whole.set(key, 1);
-                } else if (record.role === "assistant") {
-                    if (record.kind === "excerpt" && !record.span) {
-                        shown.set(key, (shown.get(key) ?? 0) + 1);
-                        whole.set(key, (whole.get(key) ?? 0) + 1);
-                    } else if (record.kind === "omission" && record.span) shown.set(key, (shown.get(key) ?? 0) + 1);
-                }
-            }
-            for (const role of ["user", "assistant", "toolResult"] as const) {
-                const omitted = units.filter(unit => unit.position < boundary && unit.role === role &&
-                    unit.count > (shown.get(`${role}:${unit.index}`) ?? 0));
-                if (!omitted.length) continue;
-                const start = Math.min(...omitted.map(unit => unit.index)), end = Math.max(...omitted.map(unit => unit.index));
-                // A range can cross a partially retained unit. Count that unit
-                // too: its own continuation note does not lower the range's count.
-                const count = units.reduce((total, unit) => total + (unit.position < boundary && unit.role === role && unit.index >= start && unit.index <= end
-                    ? Math.max(0, unit.count - (whole.get(`${role}:${unit.index}`) ?? 0)) : 0), 0);
-                records.push(omissionRecord(role, count, [start, end], false));
-            }
-
-            orderByOriginalSource(records, receiptContext.sourceIndices, originals.selectedIds);
-            records.push(...ledger);
-            const summary = (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + DIALOGUE_SUFFIX;
-            const projection = preview(summary, boundary);
-            assertNativeToolRounds(projection);
-            return { summary, after: measure(projection) };
-        };
-        const currentRecords = (boundary: number) => userPosition >= 0 && userPosition < boundary && textOnly ? quoted(current!, Infinity) : [];
-        const openings = (boundary: number, length: number) => anchors.filter(entry => entry.id !== current?.id && entries.indexOf(entry) < boundary).flatMap(entry => quoted(entry, length));
-        // Keep the existing half-room native allowance and quarter-free historical
-        // allowance as the amount. The ranked fill may spend that amount on either
-        // representation; the tail gets only what the higher ranks leave.
-        const preferred = prepare(preferredBoundary);
-        const preferredKept = [...currentRecords(preferredBoundary), ...openings(preferredBoundary, openingLength)];
-        const preferredLedger = [...actionRecords(preferred.actions), ...ledgerRecords(preferred.files)];
-        const preferredBase = assemble("", preferredKept, preferredLedger, preferredBoundary).after;
-        const allowance = historicalAllowance(model.contextWindow, reserveTokens, preferredBase, before);
-        const target = Math.min(room, before - 1, preferredBase + allowance / 4);
-        const source = prepare(floorBoundary);
-        const sourceTimes = source.ids.map(id => resolveSourceTime(byId.get(id)!));
-        let kept = [...currentRecords(floorBoundary), ...openings(floorBoundary, minimumOpeningLength)];
-        let ledger: TranscriptRecord[] = [];
-        const compileInput = (limit: number) => ({ messages: source.messages, sourceIndices: source.sourceIndices, sourceEntryIds: source.ids,
-            sourceTimes, receiptContext,
-            ranking: { maxBriefChars: limit, mandatorySourceIndices: new Set(kept.flatMap(record => record.sourceIndex === undefined ? [] : [record.sourceIndex])) } });
-        // Charge the omission-only view before filling: dropped units never vanish
-        // because a richer view did not fit. It has every original source pointer.
-        const floorText = () => tuck.compileOmissions(compileInput(0));
-        let floor = assemble(floorText(), kept, ledger, floorBoundary);
-        const capacity = (after: number) => after + reserveTokens >= model.contextWindow;
-        if (capacity(floor.after) || floor.after >= before) return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget",
-            capacityRejected: capacity(floor.after), floorMessages: preview(floor.summary, floorBoundary) };
-        // Openings outrank the ledger and every part of the old native tail. A
-        // common length is reduced only if the room cannot hold all anchors.
-        let low = minimumOpeningLength, high = openingLength;
-        while (low < high) {
-            const mid = Math.ceil((low + high) / 2), base = currentRecords(floorBoundary);
-            kept = [...base, ...openings(floorBoundary, mid)];
-            const candidate = assemble(floorText(), kept, [], floorBoundary);
-            if (candidate.after <= Math.max(target, floor.after)) low = mid; else high = mid - 1;
-        }
-        kept = [...currentRecords(floorBoundary), ...openings(floorBoundary, low)];
-        // Grow both lists newest first; line caps and their relative rank remain
-        // the ledger's existing policy, but no heading is mandatory on no-room cuts.
-        const maxLines = Math.max(source.files.length, source.actions.length);
-        low = 0; high = maxLines;
-        while (low < high) {
-            const mid = Math.ceil((low + high) / 2);
-            const candidateLedger = [...actionRecords(source.actions, mid), ...ledgerRecords(source.files, mid)];
-            if (assemble(floorText(), kept, candidateLedger, floorBoundary).after <= target) low = mid; else high = mid - 1;
-        }
-        const listed = [...actionRecords(source.actions, low), ...ledgerRecords(source.files, low)];
-        if (assemble(floorText(), kept, listed, floorBoundary).after <= target) ledger = listed;
-        floor = assemble(floorText(), kept, ledger, floorBoundary);
-        const briefLimit = Math.max(0, Math.floor((target - floor.after) * 4) + floorText().length);
-        const baseInput = compileInput(briefLimit);
-        const prepared = { ...baseInput, ranking: { ...baseInput.ranking, mandatorySourceIndices: new Set(currentRecords(floorBoundary).flatMap(record => record.sourceIndex === undefined ? [] : [record.sourceIndex])) } };
-        const whole = tuck.compileDialogue(prepared);
-        const full = whole && whole.length <= briefLimit ? assemble(whole, kept, ledger, floorBoundary) : undefined;
-        if (input.operatorManual && full && full.after >= before && before + reserveTokens < model.contextWindow)
-            return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
-        let compiled = full && full.after <= target ? whole : tuck.compileShrunkDialogue(prepared) || floorText();
-        let offer = assemble(compiled, kept, ledger, floorBoundary);
-        const mode: DraftMode = compiled === whole && Boolean(whole) ? "dialogue" : "shrunk";
-        // Extend exactly one suffix backwards, only at native protocol boundaries.
-        // Higher-ranked text already chosen above remains exact when it moves into
-        // the native tail. A boundary never skips a receipt or an older middle unit.
-        let boundary = floorBoundary;
+        const preferredHigh = highAt(preferredBoundary, openingLength), preferredLists = listsAt(preferredBoundary);
+        const fixedRowsCost = preferredHigh.cost + lineCost(preferredLists.records);
+        const baseCharacters = frameLength(fixedRowsCost, preferredHigh.rows.length + preferredLists.records.length);
+        const base = price(baseCharacters, preferredBoundary);
+        const target = carriedTarget(model.contextWindow, reserveTokens, base, before);
+        // The old tail rule supplies an ordering boundary only. Its recent
+        // suffix follows the openings, and is charged to the same total grant.
+        const boundaries = [floorBoundary];
         for (let at = floorBoundary - 1; at >= preferredBoundary; at--) {
             const entry = entries[at]!;
-            if (entry.type !== "message" && entry.type !== "custom_message" && entry.type !== "branch_summary") continue;
-            if (entry.type === "message" && entry.message.role === "toolResult") continue;
-            const moved = new Set(entries.slice(at, floorBoundary).flatMap(entry => indices.get(entry.id) === undefined ? [] : [indices.get(entry.id)!]));
-            const split = splitSummary(compiled);
-            const records = split ? parseRecords(split.body, split.version).flatMap(record => {
-                if (record.sourceIndex !== undefined && moved.has(record.sourceIndex)) return [];
-                return record.kind === "omission" && record.count !== undefined ? [] : [record];
-            }) : [];
-            const candidateCompiled = records.length ? serializeTranscript(records) + DIALOGUE_SUFFIX : "";
-            const candidateKept = kept.filter(record => record.sourceIndex === undefined || !moved.has(record.sourceIndex));
-            const candidate = assemble(candidateCompiled, candidateKept, ledger, at);
-            if (candidate.after > target) break;
-            boundary = at; compiled = candidateCompiled; offer = candidate;
+            if ((entry.type === "message" && entry.message.role !== "toolResult") || entry.type === "custom_message" || entry.type === "branch_summary") boundaries.push(at);
         }
-        if (capacity(offer.after) || offer.after >= before) return { unavailable: "pi-tuck's draft does not reduce context within the request budget",
-            capacityRejected: capacity(offer.after), floorMessages: preview(floor.summary, floorBoundary) };
+        boundaries.reverse();
+        const tailFor = (length: number) => {
+            // Longest suffix first: the first fit is the preferred rank. Most
+            // cuts keep that entire suffix, so no other boundaries need pricing.
+            for (const boundary of boundaries) {
+                const high = highAt(boundary, length);
+                if (price(high.length, boundary) <= target) return { boundary, high };
+            }
+            return undefined;
+        };
+        let selected = tailFor(minimumOpeningLength);
+        if (!selected) return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget",
+            capacityRejected: price(calibrationHigh.length, floorBoundary) + reserveTokens >= model.contextWindow,
+            floorMessages: floorProjection };
+        let low = minimumOpeningLength, high = openingLength;
+        while (low < high) {
+            const middle = Math.ceil((low + high) / 2);
+            if (tailFor(middle)) low = middle; else high = middle - 1;
+        }
+        selected = tailFor(low)!;
+        let { boundary, high: protectedView } = selected;
+        const sourceRows = rows.filter(row => row.position < boundary);
+        const lists = listsAt(boundary);
+        let ledger: TranscriptRecord[] = lists.records;
+        // List caps are existing ranking policy; only the carried target is a
+        // spending limit. Candidate list sizes have fixed, cached line prices.
+        if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
+          ledger = [];
+          for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
+            const candidate = [...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)];
+            if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) ledger = candidate;
+        }
+        }
+        const mandatory = new Set([...protectedView.whole].filter(index => {
+            const row = users.find(row => row.index === index);
+            return row?.message.role === "user" && isTextOnly(row.message.content);
+        }));
+        const fixed = [...protectedView.kept, ...ledger], fixedCost = lineCost(fixed);
+        const maxSummaryCharacters = Math.floor((target - offset - nativeAt(boundary)) * 4) - wrapperCharacters;
+        const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost);
+        const compileInput = { messages: sourceRows.map(row => row.message), sourceIndices: sourceRows.map(row => row.index),
+            sourceEntryIds: sourceRows.map(row => row.id), sourceTimes: sourceRows.map(row => resolveSourceTime(byId.get(row.id)!)),
+            ranking: { maxBriefChars, mandatorySourceIndices: mandatory } };
+        const imageLabels = new Map<number | undefined, Set<string>>();
+        for (const row of sourceRows) if (row.message.role === "user" && Array.isArray(row.message.content))
+            imageLabels.set(row.index, new Set(row.message.content.flatMap(part => part.type === "image" ? [`[image: ${part.mimeType}]`] : [])));
+        const compiledBoundary = boundary;
+        const assemble = (compiled: string, at = compiledBoundary) => {
+            const split = compiled ? splitSummary(compiled) : undefined;
+            if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
+            const inputRecords = split ? parseRecords(split.body, split.version) : protectedView.omissions;
+            const expanded = new Set(protectedView.kept.filter(record => record.kind === "excerpt" && inputRecords.some(row =>
+                row.kind === "excerpt" && row.role === "user" && row.sourceIndex === record.sourceIndex && row.text.startsWith(record.text!) && row.text.length >= record.text!.length)).map(record => record.sourceIndex));
+            const anchored = new Set(protectedView.kept.map(record => record.sourceIndex));
+            const moved = new Set(rows.filter(row => row.position >= at && row.position < compiledBoundary).map(row => row.index));
+            const records = [...inputRecords.filter(record => {
+                if (record.sourceIndex !== undefined && moved.has(record.sourceIndex)) return false;
+                if (record.kind === "excerpt" && record.role === "user" && imageLabels.get(record.sourceIndex)?.has(record.text)) return true;
+                return record.role !== "user" || record.sourceIndex === undefined || !anchored.has(record.sourceIndex) || expanded.has(record.sourceIndex);
+            }), ...protectedView.kept.filter(record => !expanded.has(record.sourceIndex) && !moved.has(record.sourceIndex))];
+            // Mixed user turns keep their text opening, while their image
+            // metadata remains in the ordinary lower-ranked dialogue lane.
+            const wholeUser = new Set(records.filter(record => record.kind === "excerpt" && record.role === "user" && record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
+            const wholeAssistant = new Map<number, number>();
+            for (const record of records) if (record.kind === "excerpt" && record.role === "assistant" && !record.span && record.sourceIndex !== undefined)
+                wholeAssistant.set(record.sourceIndex, (wholeAssistant.get(record.sourceIndex) ?? 0) + 1);
+            for (let pos = records.length - 1; pos >= 0; pos--) {
+                const record = records[pos]!;
+                if (record.kind !== "omission" || !record.sourceRange) continue;
+                if (record.role === "user") {
+                    const missing = units.user.filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end && !wholeUser.has(unit.index));
+                    if (!missing.length) records.splice(pos, 1);
+                    else records[pos] = omissionRecord("user", missing.length, [missing[0]!.index, missing.at(-1)!.index], false);
+                } else if (at !== compiledBoundary) {
+                    const role = record.role;
+                    if (role === "assistant" || role === "toolResult") {
+                        const missing = units[role].filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end &&
+                            (role === "toolResult" || unit.count > (wholeAssistant.get(unit.index) ?? 0)));
+                        const count = missing.reduce((n, unit) => n + unit.count - (role === "assistant" ? wholeAssistant.get(unit.index) ?? 0 : 0), 0);
+                        if (!count) records.splice(pos, 1);
+                        else records[pos] = omissionRecord(role, count, [missing[0]!.index, missing.at(-1)!.index], false);
+                    }
+                }
+            }
+            orderByOriginalSource(records, sourceIndices, originals.selectedIds);
+            const summary = render([...records, ...ledger]);
+            return { summary, after: price(summary.length, at), records };
+        };
+        const whole = tuck.compileDialogue(compileInput);
+        const complete = whole && whole.length <= maxSummaryCharacters ? assemble(whole) : undefined;
+        if (input.operatorManual && complete && complete.after >= before && before + reserveTokens < model.contextWindow)
+            return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
+        const mode: DraftMode = complete && complete.after <= target ? "dialogue" : "shrunk";
+        const compiled = mode === "dialogue" ? whole : tuck.compileShrunkDialogue(compileInput);
+        let offer = mode === "dialogue" ? complete! : assemble(compiled);
+        // Only capacity left after all higher ranks can extend the native tail
+        // beyond its preferred rank boundary. No old allocator is consulted.
+        const liveStartId = calibration.ok ? calibration.selectedIds[0] : undefined;
+        const liveStart = liveStartId === undefined ? preferredBoundary : positions.get(liveStartId)!;
+        if (boundary > liveStart) {
+            const recordCosts = new Float64Array(entries.length + 1), recordCounts = new Int32Array(entries.length + 1);
+            const sourcePositions = new Map(rows.map(row => [row.index, row.position]));
+            const wholeUsers = new Set(offer.records.filter(record => record.kind === "excerpt" && record.role === "user" &&
+                record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
+            const wholeAssistants = new Map<number, number>();
+            for (const record of offer.records) {
+                const at = record.sourceIndex === undefined ? undefined : sourcePositions.get(record.sourceIndex);
+                if (at !== undefined) { recordCosts[at + 1] += lineCost([record]); recordCounts[at + 1]++; }
+                if (record.kind === "excerpt" && record.role === "assistant" && !record.span && record.sourceIndex !== undefined)
+                    wholeAssistants.set(record.sourceIndex, (wholeAssistants.get(record.sourceIndex) ?? 0) + 1);
+            }
+            for (let at = 1; at <= entries.length; at++) {
+                recordCosts[at] += recordCosts[at - 1]!; recordCounts[at] += recordCounts[at - 1]!;
+            }
+            // A tail extension removes source records and shortens at most three
+            // counted ranges. Price those changes from prefix sums; render only the
+            // winning suffix, rather than parsing/serializing the dialogue per step.
+            const ranges = offer.records.flatMap(record => {
+                if (record.kind !== "omission" || !record.sourceRange || !["user", "assistant", "toolResult"].includes(record.role ?? "")) return [];
+                const role = record.role as keyof typeof units;
+                const missing = units[role].flatMap(unit => {
+                    const count = role === "user" ? Number(!wholeUsers.has(unit.index)) : unit.count - (role === "assistant" ? wholeAssistants.get(unit.index) ?? 0 : 0);
+                    return count && unit.position < compiledBoundary && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end ? [{ ...unit, count }] : [];
+                });
+                const ends = new Int32Array(entries.length + 1), counts = new Int32Array(missing.length + 1);
+                let seen = 0;
+                for (let at = 0; at <= entries.length; at++) {
+                    while (seen < missing.length && missing[seen]!.position < at) seen++;
+                    ends[at] = seen;
+                }
+                missing.forEach((unit, at) => counts[at + 1] = counts[at]! + unit.count);
+                return [{ role, missing, ends, counts, cost: lineCost([record]) }];
+            });
+            const baseCost = lineCost(offer.records) + lineCost(ledger), baseCount = offer.records.length + ledger.length;
+            const extensionPrice = (at: number) => {
+                let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
+                let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
+                for (const range of ranges) {
+                    const end = range.ends[at]!;
+                    cost -= range.cost;
+                    if (end) cost += lineCost([omissionRecord(range.role, range.counts[end]!, [range.missing[0]!.index, range.missing[end - 1]!.index], false)]);
+                    else count--;
+                }
+                return price(frameLength(cost, count), at);
+            };
+            for (let at = boundary - 1; at >= liveStart; at--) {
+                const entry = entries[at]!;
+                if (entry.type !== "message" && entry.type !== "custom_message" && entry.type !== "branch_summary") continue;
+                if (entry.type === "message" && entry.message.role === "toolResult") continue;
+                if (extensionPrice(at) <= target) boundary = at;
+                else break;
+            }
+            if (boundary !== compiledBoundary) offer = assemble(compiled, boundary);
+        }
+        const projection = preview(offer.summary, boundary);
+        assertNativeToolRounds(projection);
+        const after = measure(projection);
+        if (after + reserveTokens >= model.contextWindow || after >= before)
+            return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floorProjection };
         return { compaction: { summary: offer.summary, firstKeptEntryId: entries[boundary]?.id ?? "", tokensBefore: input.tokensBefore,
-            details: { ...detailsAt(boundary), tokensAfter: offer.after, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after: offer.after, mode };
+            details: { ...detailsAt(boundary), tokensAfter: after, carriedTarget: target, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
     }
 
 }

@@ -70,7 +70,7 @@ export function session(seed: number) {
 	const withTimes = random() < 0.7;
 	const times: SourceTime[] = messages.map((_, i) => random() < 0.1 ? { basis: 'unknown' } : { basis: random() < 0.5 ? 'message' : 'journal', utc: new Date(1_700_000_000_000 + i * 1000).toISOString().replace('.000Z', 'Z') });
 	const sourceEntryIds = messages.map((_, i) => `entry-${i}`);
-	const blocks = filterNoise(normalize(messages, sourceIndices, undefined, sourceEntryIds, withTimes ? times : undefined));
+	const blocks = filterNoise(normalize(messages, sourceIndices, sourceEntryIds, withTimes ? times : undefined));
 	const mandatory = new Set(sourceIndices.filter((index): index is number => index !== undefined && random() < 0.08));
 	return { blocks, mandatory, sourceIndices, sourceEntryIds };
 }

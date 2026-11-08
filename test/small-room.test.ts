@@ -66,7 +66,10 @@ test('a 16k room, a live system part and a slow tokenizer: the boundary 1.0.1 re
 	expect(decision.target).toBe('room');
 	// The cut keeps the fresh round native and lands the request under the room, by the same arithmetic.
 	const kept = manager.getBranch().findIndex(e => e.id === decision.plan.compaction.firstKeptEntryId);
-	expect(manager.getBranch().slice(kept).map(e => e.type === 'message' ? e.message.role : e.type)).toEqual(['assistant', 'toolResult', 'toolResult']);
+	// The pinned tail may also keep the current user native when it fits. The
+	// complete fresh round must remain its contiguous final three sources.
+	expect(manager.getBranch().slice(kept).map(e => e.type === 'message' ? e.message.role : e.type).slice(-3)).toEqual(['assistant', 'toolResult', 'toolResult']);
+	expect(decision.plan.after).toBeLessThanOrEqual((decision.plan.compaction.details as { carriedTarget: number }).carriedTarget);
 	expect(decision.plan.after).toBeLessThan(allowance);
 	expect(fits(decision.plan.after + SYSTEM, ROOM)).toBe(true);
 });

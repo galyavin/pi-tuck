@@ -29,7 +29,7 @@ test('a clip names the way to read what it omits, and tuck_recall returns that p
 		{ role: 'custom', customType: entry.customType, content: entry.content, display: entry.display, timestamp: 1 } : undefined as never) as never;
 	// A custom message has no numeric index: its notice is read by entry id.
 	const sourceIndices = ids.map(id => indices.get(id));
-	const blocks = normalize(messages, sourceIndices, undefined, ids).filter(isDialogue);
+	const blocks = normalize(messages, sourceIndices, ids).filter(isDialogue);
 	const kinds = new Set<string>();
 	for (const block of blocks) for (const clip of [[256, 0], [64, 0], [24, 0], [80, 120], [16, 0]] as const) {
 		for (const record of blockRecords(block, undefined, clip)) {

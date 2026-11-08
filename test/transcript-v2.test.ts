@@ -381,5 +381,5 @@ test('counted omission ranges reject invalid bounds, mixed pointers and lossy ex
   expect(() => serializeRecords([{ ...record, sourceIndices: [3, 9] }])).toThrow();
   expect(() => parseRecords('toolResult omitted 2 #9-#3: tuck_recall')).toThrow();
   const summary = serializeTranscript([record, { kind: 'excerpt', role: 'user', sourceIndex: 12, text: 'Unrelated retained source.' }]) + DIALOGUE_SUFFIX;
-  expect(filterOmittedSummary(summary, new Set([5]))).toBe(serializeTranscript([{ kind: 'excerpt', role: 'user', sourceIndex: 12, text: 'Unrelated retained source.' }]) + DIALOGUE_SUFFIX);
+  expect(filterOmittedSummary(summary, new Set([5]))).toBe(summary); // no original source proves that #5 is a counted tool result
 });

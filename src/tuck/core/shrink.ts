@@ -54,6 +54,25 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
   // nothing and its unit is counted in the role's one omission notice, like a dropped unit: a notice per empty clip would cost more than text.
   const NONE: Rendered = { records: [], cost: 0 };
   const emptied: Uint8Array[] = [new Uint8Array(n)];
+  const counts = new Int32Array(n + 1), unknown = new Int32Array(n + 1);
+  const minimum = new Float64Array(n + 1).fill(Infinity), maximum = new Float64Array(n + 1).fill(-Infinity);
+  const firstBySource = new Map<number, number>(), lastBySource = new Map<number, number>();
+  let monotone = true, previousSource = -1;
+  units.forEach((block, at) => {
+    const selected = isOmittable(block, mandatory), source = block.sourceIndex;
+    counts[at + 1] = counts[at]! + Number(selected);
+    unknown[at + 1] = unknown[at]! + Number(selected && source === undefined);
+    minimum[at + 1] = Math.min(minimum[at]!, selected && source !== undefined ? source : Infinity);
+    maximum[at + 1] = Math.max(maximum[at]!, selected && source !== undefined ? source : -Infinity);
+    if (source !== undefined) {
+      if (source < previousSource) monotone = false;
+      previousSource = source;
+      if (!firstBySource.has(source)) firstBySource.set(source, at);
+      lastBySource.set(source, at);
+    }
+  });
+  interface ClipTally { count: Int32Array; unknown: Int32Array; minSuffix: Float64Array; maxSuffix: Float64Array; partial: Int32Array }
+  const tallies: ClipTally[] = [];
   /** Level t holds each unit's tier-t variant. A clip that would not make the unit smaller is not taken, so sizes never grow with t. */
   const level = (t: number): Rendered[] => {
     while (levels.length <= t) {
@@ -65,31 +84,62 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
         if (role !== "notice" && isOmittable(block, mandatory) && !clipped.records.some(record => record.kind === "excerpt")) { empty[i] = 1; return NONE; }
         return clipped.cost < previous[i]!.cost ? clipped : previous[i]!;
       });
+      const tally: ClipTally = { count: new Int32Array(n + 1), unknown: new Int32Array(n + 1),
+        minSuffix: new Float64Array(n + 1).fill(Infinity), maxSuffix: new Float64Array(n + 1).fill(-Infinity), partial: new Int32Array(n + 1) };
+      units.forEach((block, at) => {
+        tally.count[at + 1] = tally.count[at]! + empty[at]!;
+        tally.unknown[at + 1] = tally.unknown[at]! + Number(Boolean(empty[at]) && block.sourceIndex === undefined);
+        tally.partial[at + 1] = tally.partial[at]! + Number(isOmittable(block, mandatory) && block.sourceIndex !== undefined &&
+          next[at]!.records.some(record => record.kind === "excerpt") && next[at]!.records.some(record => record.kind === "omission"));
+      });
+      for (let at = n - 1; at >= 0; at--) {
+        const source = empty[at] ? units[at]!.sourceIndex : undefined;
+        tally.minSuffix[at] = Math.min(tally.minSuffix[at + 1]!, source ?? Infinity);
+        tally.maxSuffix[at] = Math.max(tally.maxSuffix[at + 1]!, source ?? -Infinity);
+      }
+      tallies[levels.length] = tally;
       levels.push(next); sums.push(prefix(next)); emptied.push(empty);
     }
     return levels[t]!;
   };
   const sum = (t: number) => { level(t); return sums[t]!; };
 
-  /** All dropped units, including clips that retained no passage. Count units,
-   * retain one locator per unit, and never truncate the pointer list. */
-  const omission = ({ drop, tier, end }: Setting): TranscriptRecord | undefined => {
+  /** Prefix and clip tallies price every setting in O(1) for chronological
+   * session indices. Rendering a candidate never walks its dropped prefix. */
+  const omission = ({ drop, tier, end, take }: Setting): TranscriptRecord | undefined => {
     if (role === "notice") return undefined;
     if (tier > 0) level(tier);
-    let count = 0, unlocated = false;
-    const sources: number[] = [];
-    for (let i = 0; i < Math.max(drop, end); i++) {
-      if (i >= drop && !(tier > 0 && emptied[tier]![i])) continue;
-      const block = units[i]!;
-      if (!isOmittable(block, mandatory)) continue;
-      count++;
-      if (block.sourceIndex === undefined) unlocated = true; else sources.push(block.sourceIndex);
+    let count = counts[drop]!, unlocated = unknown[drop]! > 0;
+    let min = minimum[drop]!, max = maximum[drop]!;
+    if (end > drop && tier > 0) {
+      const tally = tallies[tier]!;
+      count += tally.count[end]! - tally.count[drop]!;
+      unlocated ||= tally.unknown[end]! > tally.unknown[drop]!;
+      if (end === n) { min = Math.min(min, tally.minSuffix[drop]!); max = Math.max(max, tally.maxSuffix[drop]!); }
+      else for (let at = drop; at < end; at++) if (emptied[tier]![at] && units[at]!.sourceIndex !== undefined) {
+        min = Math.min(min, units[at]!.sourceIndex!); max = Math.max(max, units[at]!.sourceIndex!);
+      }
+      if (Number.isFinite(min)) {
+        if (monotone) {
+          const from = Math.max(drop, firstBySource.get(min)!), through = Math.min(end, lastBySource.get(max)! + 1);
+          if (through > from) count += tally.partial[through]! - tally.partial[from]!;
+        } else for (let at = drop; at < end; at++) {
+          const source = units[at]!.sourceIndex, records = levels[tier]![at]!.records;
+          if (source !== undefined && source >= min && source <= max && isOmittable(units[at]!, mandatory) &&
+            records.some(record => record.kind === "excerpt") && records.some(record => record.kind === "omission")) count++;
+        }
+      }
     }
-    return count ? decorate(omissionRecord(role, count, sources.sort((a, b) => a - b), unlocated)) : undefined;
+    if (take !== undefined && Number.isFinite(min)) {
+      const block = units[drop]!, source = block.sourceIndex;
+      if (source !== undefined && source >= min && source <= max && isOmittable(block, mandatory) &&
+        userPrefixRecords(block, mandatory, take).some(record => record.kind === "omission")) count++;
+    }
+    return count ? decorate(omissionRecord(role, count, Number.isFinite(min) ? [min, max] : [], unlocated)) : undefined;
   };
   const omissionCosts = new Map<string, number>();
   const omissionCost = (setting: Setting) => {
-    const key = `${setting.drop}:${setting.tier}:${setting.end}`;
+    const key = `${setting.drop}:${setting.tier}:${setting.end}:${setting.take ?? ""}`;
     let cost = omissionCosts.get(key);
     if (cost === undefined) { const record = omission(setting); omissionCosts.set(key, cost = record ? rendered([record]).cost : 0); }
     return cost;
@@ -99,13 +149,13 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
   return {
     n, level, sum, omission, prefixAt,
     cost: ({ drop, tier, end, take }: Setting) => take !== undefined
-      ? sums[0]![n]! - sums[0]![drop + 1]! + prefixAt(drop, take).cost + omissionCost({ drop, tier: 0, end: 0 })
+      ? sums[0]![n]! - sums[0]![drop + 1]! + prefixAt(drop, take).cost + omissionCost({ drop, tier: 0, end: 0, take })
       : sums[0]![n]! - sums[0]![Math.max(drop, end)]! + (end > drop ? sum(tier)[end]! - sum(tier)[drop]! : 0) + omissionCost({ drop, tier, end }),
   };
 };
 
 /** The units of a dialogue and what any configuration of them renders, by arithmetic over per-unit lengths or as the summary text. */
-const createDialogue = (input: DialogueInput) => {
+const prepareDialogue = (input: DialogueInput) => {
   const dialogue = input.blocks.filter(isDialogue);
   const times = dialogue.find(block => block.sourceTimes)?.sourceTimes;
   const decorate = (record: TranscriptRecord) => decorateRecord(record, times);
@@ -140,24 +190,17 @@ const createDialogue = (input: DialogueInput) => {
   return { lanes, size, text };
 };
 
+const dialogues = new WeakMap<DialogueInput, ReturnType<typeof prepareDialogue>>();
+const createDialogue = (input: DialogueInput) => {
+  let dialogue = dialogues.get(input);
+  if (!dialogue) dialogues.set(input, dialogue = prepareDialogue(input));
+  return dialogue;
+};
+
 /** The whole pre-cut dialogue: user, assistant and notice records; tool actions and observations are omitted. "" when it renders nothing. */
 export const wholeDialogue = (input: DialogueInput): string => {
   const { text } = createDialogue(input);
   return text({ user: WHOLE, assistant: WHOLE, notice: WHOLE });
-};
-
-/** The fixed omission cost of this cut, charged before any optional text. */
-export const omittedDialogue = (input: DialogueInput): string => {
-  const records: TranscriptRecord[] = [];
-  for (const role of ["user", "assistant", "toolResult"] as const) {
-    const blocks = input.blocks.filter(block => block.kind === (role === "toolResult" ? "tool_result" : role) &&
-      (block.sourceIndex === undefined || !input.mandatorySourceIndices?.has(block.sourceIndex)) &&
-      (!("text" in block) || Boolean(block.text.trim())));
-    if (!blocks.length) continue;
-    const sources = blocks.flatMap(block => block.sourceIndex === undefined ? [] : [block.sourceIndex]);
-    records.push(decorateRecord(omissionRecord(role, blocks.length, sources, blocks.some(block => block.sourceIndex === undefined)), blocks[0]?.sourceTimes));
-  }
-  return records.length ? serializeTranscript(records) + DIALOGUE_SUFFIX : "";
 };
 
 /** Lower ranks of the single fill: the existing recent assistant third, then
@@ -201,6 +244,7 @@ export const shrinkDialogue = (input: DialogueInput, limit: number): Shrunk => {
   for (let drop = user.n - 1; drop >= 0; drop--) {
     if (trySetting("user", { drop, tier: 0, end: 0 })) continue;
     const block = input.blocks.filter(isDialogue).filter(block => block.kind === "user")[drop]!;
+    if (block.kind === "user" && block.image) break;
     let low = 0, high = (block.originalText ?? block.text).length - 1;
     while (low < high) {
       const take = Math.ceil((low + high) / 2);

@@ -1,4 +1,3 @@
-import { isSourceExport } from "./recall-operation";
 import type { CompilerMessage, NormalizedBlock } from "../types";
 import { textOf } from "./content";
 import { sanitize } from "./sanitize";
@@ -12,7 +11,7 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined): Norma
     if (msg.content && typeof msg.content !== "string") {
       for (const part of msg.content) {
         if (part.type === "image") {
-          blocks.push({ kind: "user", text: `[image: ${part.mimeType}]`, sourceIndex: msgIndex });
+          blocks.push({ kind: "user", image: true, text: `[image: ${part.mimeType}]`, sourceIndex: msgIndex });
         }
       }
     }
@@ -60,42 +59,27 @@ const normalizeOne = (msg: CompilerMessage, msgIndex: number | undefined): Norma
  * legacy positional behavior is preserved (used by callers/tests that have no
  * index space to map into).
  */
-/** Pair against eligible original history, not only the selected prefix. Never infer effects. */
+/** Original-source blocks only; every historical result is counted, without pairing or inferred effects. */
 export const normalize = (
   messages: CompilerMessage[],
   sourceIndices?: Array<number | undefined>,
-  receiptContext?: { messages: CompilerMessage[]; sourceIndices: Array<number | undefined> },
   sourceEntryIds?: readonly string[],
   sourceTimes?: readonly import("./source-time").SourceTime[],
 ): NormalizedBlock[] => {
   if (sourceEntryIds && sourceEntryIds.length !== messages.length) throw new Error("Original entry IDs must align with compiler messages");
   if (sourceTimes && sourceTimes.length !== messages.length) throw new Error("Original times must align with compiler messages");
   const timeByIndex = Object.fromEntries((sourceIndices ?? messages.map((_, i) => i)).flatMap((index, i) => index === undefined || !sourceTimes ? [] : [[index, sourceTimes[i]]]));
-  const pairs = new Map<string, { calls: { name: string; order: number; args: Record<string, unknown> }[];
-    receipts: { name: string; order: number }[] }>();
-  const group = (id: string) => {
-    if (typeof id !== "string" || !id) throw new Error("Tool history lacks a recorded call identity");
-    let pair = pairs.get(id);
-    if (!pair) { pair = { calls: [], receipts: [] }; pairs.set(id, pair); }
-    return pair;
-  };
-  (receiptContext?.messages ?? messages).forEach((msg, order) => {
-    if (msg.role === "assistant" && Array.isArray(msg.content)) for (const part of msg.content) {
-      if (part.type === "toolCall") group(part.id).calls.push({ name: part.name, order, args: part.arguments });
+  // Identity/status validation is still useful for malformed source history;
+  // export pairing is not: every result now contributes to counted omissions.
+  for (const message of messages) {
+    if (message.role === "toolResult") {
+      if (typeof message.toolCallId !== "string" || !message.toolCallId) throw new Error("Tool history lacks a recorded call identity");
+      if (typeof message.isError !== "boolean") throw new Error("Tool receipt lacks a recorded error status");
     }
-    if (msg.role === "toolResult") {
-      if (typeof msg.isError !== "boolean") throw new Error("Tool receipt lacks a recorded error status");
-      group(msg.toolCallId).receipts.push({ name: msg.toolName, order });
-    }
-  });
-  // A call paired with exactly one later receipt of the same tool has a recorded outcome. An export through recall keeps its outcome block.
-  const paired = (id: string): boolean => {
-    const pair = pairs.get(id), call = pair?.calls[0], receipt = pair?.receipts[0];
-    return Boolean(pair && call && receipt && pair.calls.length === 1 && pair.receipts.length === 1 && receipt.name === call.name && receipt.order > call.order);
-  };
+    if (message.role === "assistant" && Array.isArray(message.content)) for (const part of message.content)
+      if (part.type === "toolCall" && (typeof part.id !== "string" || !part.id)) throw new Error("Tool history lacks a recorded call identity");
+  }
   return messages.flatMap((msg, i) => normalizeOne(msg, sourceIndices ? sourceIndices[i] : i).map(block => {
-    if (block.kind === "tool_result" && msg.role === "toolResult" && paired(msg.toolCallId) &&
-      isSourceExport(pairs.get(msg.toolCallId)?.calls[0]?.args)) block = { ...block, recallExport: true };
     if (sourceTimes) block = { ...block, sourceTimes: timeByIndex };
     return block.kind === "notice" && sourceEntryIds?.[i] !== undefined ? { ...block, sourceEntryId: sourceEntryIds[i] } : block; }));
 };

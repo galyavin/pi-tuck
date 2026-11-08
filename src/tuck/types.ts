@@ -15,10 +15,10 @@ export interface HistoricalReceipt {
 
 /** `startsSource`: the block's original text begins the message's readable text, so an offset into it is a tuck_recall offset into the source. */
 export type NormalizedBlock = { sourceTimes?: Record<number, import("./core/source-time").SourceTime> } & (
-  | { kind: "user"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
+  | { kind: "user"; image?: true; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
   | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
   | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string; startsSource?: true }
   // Tool results render as counted omissions with original pointers; calls feed the ledger and noise filtering.
   | { kind: "tool_call"; name: string; args: Record<string, unknown>; sourceIndex?: number }
-  | { kind: "tool_result"; name: string; sourceIndex?: number; recallExport?: true }
+  | { kind: "tool_result"; name: string; sourceIndex?: number }
   | { kind: "bash"; sourceIndex?: number });

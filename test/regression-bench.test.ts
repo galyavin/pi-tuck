@@ -1,4 +1,5 @@
 import { test, expect, afterAll } from 'vitest';
+import { pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { SessionManager, estimateTokens, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { DEFAULT_CUT_AT, bandOf, decideCut, measurableConversationTokens, planningReserve, projectedConversationTokens, type Plan } from '../src/budget';
@@ -20,6 +21,22 @@ import { tuck, tuckObservedDraft } from '../src/tuck';
 // test/regression-bench.json holds the metrics. GOLDEN_RECORD=1 rewrites it instead of checking it (the convention of view-golden.test.ts).
 // The three recordings in test/fixtures/regression are sanitized public SWE-bench sessions; they are inputs and are never edited. A window the
 // recording is too short for records cuts 0 (and says so in the golden): it still asserts that nothing cuts and nothing is refused.
+
+const baselinePath = process.env.PART3_BASELINE;
+// Test-only counterfactual. Production never imports or runs the old allocator.
+const baseline: typeof import('../src/tuck') | undefined = baselinePath ? await import(/* @vite-ignore */ pathToFileURL(baselinePath).href) : undefined;
+const baselineBudget: typeof import('../src/budget') | undefined = baselinePath ? await import(/* @vite-ignore */ pathToFileURL(baselinePath.replace(/tuck\.js$/, 'budget.js')).href) : undefined;
+const performanceRows: Record<string, { v117: number; current: number; ratio: number }> = {};
+interface CutObservation { round: number; target: string; before: number; after: number; carried: number; cap: number; overshoot: number;
+  mode: string; boundary: number; baselineMode?: string; baselineBoundary?: number; baselineAfter?: number; baselineCarried?: number; baselineUnavailable?: string }
+const cutObservations: Record<string, CutObservation[]> = {};
+const capFailures: Record<string, string[]> = {};
+const decisionObservations: Record<string, unknown[]> = {};
+afterAll(() => {
+  if (process.env.PART3_DECISION_REPORT) writeFileSync(process.env.PART3_DECISION_REPORT, JSON.stringify(decisionObservations, null, 2) + '\n');
+  if (process.env.PART3_PERF_REPORT) writeFileSync(process.env.PART3_PERF_REPORT, JSON.stringify(performanceRows, null, 2) + '\n');
+  if (process.env.PART3_CUT_REPORT) writeFileSync(process.env.PART3_CUT_REPORT, JSON.stringify(cutObservations, null, 2) + '\n');
+});
 
 type Message = Parameters<SessionManager['appendMessage']>[0];
 type Header = NonNullable<ReturnType<SessionManager['getHeader']>>;
@@ -90,11 +107,16 @@ interface Metrics {
 	note?: string;
 }
 
-function replay(session: Session, { window, response, mandatory }: Window): Metrics & { refusalReasons: string[] } {
+function replay(session: Session, { window, response, mandatory }: Window, reference = false): Metrics & { refusalReasons: string[] } {
+	const name = `${session.name}@${window / 1024}k`;
+	const observations: CutObservation[] = cutObservations[name] = [];
+	const failures: string[] = capFailures[name] = [];
 	const manager = SessionManager.inMemory(session.cwd, undefined, session.header ? [session.header] : undefined);
 	const ctx = { sessionManager: manager, cwd: session.cwd, model: { contextWindow: window, maxTokens: response, provider: 'regression', id: 'regression', api: 'openai-completions' } } as unknown as ExtensionContext;
-	const measure = (messages: never[]) => projectedConversationTokens(messages, ctx);
-	const plannerMeasure = (messages: never[]) => measurableConversationTokens(messages, ctx);
+	const owner = reference ? baselineBudget! : { projectedConversationTokens, measurableConversationTokens };
+	const compiler = reference ? baseline! : { tuck, tuckObservedDraft };
+	const measure = (messages: never[]) => owner.projectedConversationTokens(messages, ctx);
+	const plannerMeasure = (messages: never[]) => owner.measurableConversationTokens(messages, ctx);
 	const room = window - response, band = bandOf(room, DEFAULT_CUT_AT), fits = (tokens: number, limit: number) => tokens < limit;
 	const carried = () => manager.buildSessionProjection().messages.reduce((n, m) => n + estimateTokens(m), 0);
 	let rounds = 0, refusals = 0, low = 0;
@@ -107,11 +129,13 @@ function replay(session: Session, { window, response, mandatory }: Window): Metr
 		const before = measure(saved);
 		const previousSummary = (saved.find(m => (m as { role: string }).role === 'compactionSummary') as { summary?: string } | undefined)?.summary;
 		let refused: string | undefined;
+		const plans: Record<string, unknown> = {};
 		const started = performance.now();
 		const decision = decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
 			plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>['compaction']> }> => {
 				const reserve = planningReserve(window, target === 'band' ? band : room, 1, mandatory);
-				const draft = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasure as never, {}, true);
+				const draft = compiler.tuckObservedDraft(compiler.tuck, { branchEntries: manager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasure as never, {}, true);
+                plans[target] = draft.compaction ? { after: draft.after, mode: draft.mode } : { reason: draft.unavailable };
 				if (!draft.compaction) {
 					if (draft.unavailable.includes(CAPACITY)) refused ??= draft.unavailable;
 					return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
@@ -123,13 +147,44 @@ function replay(session: Session, { window, response, mandatory }: Window): Metr
 				return { draft: true, after: measure(messages as never[]), mode: draft.mode, compaction: draft.compaction };
 			} });
 		const ms = performance.now() - started;
+        if (process.env.PART3_DECISION_REPORT && baseline && !reference) {
+            const oldPlans: Record<string, unknown> = {};
+            const oldDecision = decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
+                plan: (target): Plan => {
+                    const reserve = planningReserve(window, target === 'band' ? band : room, 1, mandatory);
+                    const draft = baseline.tuckObservedDraft(baseline.tuck, { branchEntries: manager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasure as never, {}, true);
+                    oldPlans[target] = draft.compaction ? { after: draft.after, mode: draft.mode } : { reason: draft.unavailable };
+                    return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode } : { draft: false, reason: draft.unavailable, capacityRejected: Boolean(draft.capacityRejected) };
+                } });
+            (decisionObservations[name] ??= []).push({ round: rounds, before, total: before + mandatory, room, band,
+                kind: decision.kind, target: decision.kind === 'cut' ? decision.target : undefined, plans,
+                baselineKind: oldDecision.kind, baselineTarget: oldDecision.kind === 'cut' ? oldDecision.target : undefined, baselinePlans: oldPlans });
+        }
 		if (decision.kind === 'fault') refused ??= decision.message;
 		if (refused !== undefined) { refusals++; refusalReasons.push(`round ${rounds}: ${refused}`); }
 		if (decision.kind !== 'cut') return;
 		const c = decision.plan.compaction;
+        const cap = (c.details as { carriedTarget: number }).carriedTarget;
+        if (!reference && !Number.isFinite(cap)) failures.push(`round ${rounds}: missing carried target`);
+        if (!reference && decision.plan.after > cap) failures.push(`round ${rounds}: ${decision.plan.after} exceeds target ${cap}`);
+        const observation: CutObservation = { round: rounds, target: decision.target, before, after: decision.plan.after, carried: 0, mode: decision.plan.mode, boundary: manager.getBranch().findIndex(entry => entry.id === c.firstKeptEntryId), cap, overshoot: decision.plan.after - cap };
+        if (baseline && !reference && !process.env.PART3_PERF_REPORT) {
+            const reserve = planningReserve(window, decision.target === 'band' ? band : room, 1, mandatory);
+            const old = baseline.tuckObservedDraft(baseline.tuck, { branchEntries: manager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasure as never, {}, true);
+            if (old.compaction) {
+                observation.baselineAfter = old.after;
+                observation.baselineMode = old.mode; observation.baselineBoundary = manager.getBranch().findIndex(entry => entry.id === old.compaction!.firstKeptEntryId);
+                const preview = SessionManager.inMemory(session.cwd, undefined, [manager.getHeader()!, ...manager.getBranch()]);
+                preview.appendCompaction(old.compaction.summary, old.compaction.firstKeptEntryId, before, old.compaction.details, true);
+                observation.baselineCarried = preview.buildSessionProjection().messages.reduce((n, m) => n + estimateTokens(m), 0);
+                if (process.env.PART3_ENFORCE === '1' && decision.plan.after > old.after)
+                    failures.push(`round ${rounds}: ${decision.plan.after} exceeds v1.0.17 at this cut point (${old.after})`);
+            } else observation.baselineUnavailable = old.unavailable;
+        }
 		manager.appendCompaction(c.summary, c.firstKeptEntryId, before, c.details, true);
 		if (before - decision.plan.after < room / 10) low++;
-		carriedAfter.push(carried()); chars.push(c.summary.length); times.push(ms);
+        observation.carried = carried(); observations.push(observation);
+		carriedAfter.push(observation.carried); chars.push(c.summary.length); times.push(ms);
 	});
 	const mean = (xs: number[]) => xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0;
 	const max = (xs: number[]) => Math.max(0, ...xs);
@@ -155,6 +210,18 @@ for (const make of sessions) {
 		const name = `${session.name}@${w.window / 1024}k`;
 		test(`${name}: cut frequency, yield, carried context, summary size and cut time stay at the golden`, () => {
 			const { refusalReasons, ...m } = replay(session, w);
+			expect(capFailures[name], `${name}: per-cut target`).toEqual([]);
+            if (process.env.PART3_PERF_REPORT && baseline && m.cuts) {
+                const old: number[] = [], current: number[] = [];
+                for (let sample = 0; sample < 5; sample++) {
+                    old.push(replay(session, w, true).medianCutMs);
+                    current.push(replay(session, w).medianCutMs);
+                }
+                const median = (xs: number[]) => xs.sort((a,b) => a-b)[2]!;
+                const v117 = median(old), now = median(current);
+                performanceRows[name] = { v117, current: now, ratio: now / v117 };
+                if (process.env.PART3_ENFORCE === '1') expect(now / v117, `${name}: median cut time`).toBeLessThanOrEqual(2);
+            }
 			if (recordGolden) { recorded[name] = m; return; }
 			const g = (JSON.parse(readFileSync(goldenUrl, 'utf8')) as Record<string, Metrics>)[name];
 			if (!g) throw new Error(`${name} has no golden: GOLDEN_RECORD=1 records it`);

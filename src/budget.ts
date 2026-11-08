@@ -32,6 +32,17 @@ export const bandOf = (room: number, cutAt = 1, adaptive?: { system: number; tok
 	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + MAX_TAIL_TOKENS / 2) * adaptive.factor)) : base);
 };
 
+/** The cut's one carried-context grant, in the planner's estimate. Combines
+ * the existing native/fixed base with the quarter-free historical amount;
+ * neither component remains an independent spending limit in the fill.
+ * The historical arithmetic and the band/decision procedures are unchanged. */
+export function carriedTarget(window: number, reserve: number, base: number, before: number): number {
+  const room = Math.max(0, window - reserve - 1);
+  const free = Math.max(0, window - reserve - base - 1);
+  const historical = Math.max(0, Math.min(Math.floor(free / 4), before - base - 1));
+  return Math.min(room, before - 1, base + historical);
+}
+
 /** The APIs whose request converter (pi-ai openai-responses-shared) sends each signed thinking block back as an input reasoning item. */
 const REPLAYING_APIS: ReadonlySet<string> = new Set(["openai-responses", "azure-openai-responses", "openai-codex-responses"]);
 /**
