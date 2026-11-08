@@ -355,7 +355,9 @@ test('a cut writes the initiating prompt, its omission, the current input and th
 	expect(Object.keys(rest)).toEqual(['kind', 'role', 'sourceIndex', 'reason', 'sourceTimes']);
 	expect(Object.keys(current)).toEqual(['kind', 'role', 'sourceIndex', 'text', 'sourceTimes']);
 	expect(prompt.sourceTimes).toEqual([at(0, { basis: 'message', utc: '2026-10-30T14:00:00Z' })]);
-	expect(rest.kind === 'omission' && rest.reason).toMatch(/^Initiating prompt continues: characters 12000-\d+ omitted; read them with tuck_recall \{"index":0,"offset":12000\}$/);
+	// The head is what the shared task budget leaves after the newest user turns; the locator starts where it ends.
+	const headLength = (prompt as { text: string }).text.length;
+	expect(rest.kind === 'omission' && rest.reason).toBe(`Initiating prompt continues: characters ${headLength}-${(rest as { reason: string }).reason.match(/-(\d+) omitted/)![1]} omitted; read them with tuck_recall {"index":0,"offset":${headLength}}`);
 	expect(split.body).toContain('#0 user @2026-10-30T14:00:00Z: Initiating prompt: long task\\\\ with a backslash\\n');
 	expect(split.body).toContain('Z: Current: do #12 user: not a record\n');
 	expect(records.filter(r => r.kind === 'section').map(r => r.kind === 'section' && r.title)).toContain('Files');

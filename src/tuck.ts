@@ -191,35 +191,31 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     // an older user turn followed by short steps, and the dialogue clips user turns oldest first down to a few words, so quoting only the first prompt
     // kept a finished task whole and lost the one being worked on. A turn that does not fit keeps its head and a locator; the first prompt gets what
     // the newest turns leave, so a one-task session, whose later turns are short, still quotes it as before.
-    const recent: TranscriptRecord[] = [];
-    let recentLeft = MAX_TASK_CONTRACT_CHARACTERS;
-    for (let at = boundary - 1; at >= 0 && recentLeft > 0; at--) {
-        const entry = entries[at]!;
-        if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === firstUser?.id) continue;
-        const content = entry.message.content;
-        if (!isTextOnly(content)) continue;
-        const text = textOf(content), index = indices.get(entry.id);
-        if (!text.trim() || index === undefined) continue;
-        const quoted = head(text, recentLeft), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(entry) }];
-        recentLeft -= quoted.length;
-        if (quoted.length < text.length) recent.unshift({ kind: "omission", role: "user", sourceIndex: index,
-            reason: `User turn continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
-        recent.unshift({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
-    }
-    const mandatory: TranscriptRecord[] = [];
-    // The initiating prompt is quoted first, like the current input below: text only, since quoting cannot deliver other blocks.
     const initiating = firstUserPosition >= 0 && firstUserPosition < boundary && entries[firstUserPosition]!.id !== protectedUser?.id ? entries[firstUserPosition] : undefined;
-    const initiatingContent = initiating?.type === "message" && initiating.message.role === "user" ? initiating.message.content : undefined;
-    if (initiating && isTextOnly(initiatingContent)) {
-        const text = textOf(initiatingContent!), index = indices.get(initiating.id);
-        if (index === undefined) throw new Error("Missing initiating user source index");
-        const quoted = head(text, recentLeft), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(initiating) }];
-        if (text.trim() && quoted.length) {
-            mandatory.push({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
-            if (quoted.length < text.length) mandatory.push({ kind: "omission", role: "user", sourceIndex: index,
-                reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
+    const quote = (entry: SessionEntry, budget: number, label: string): TranscriptRecord[] => {
+        const content = entry.type === "message" && entry.message.role === "user" ? entry.message.content : undefined;
+        if (!isTextOnly(content)) return [];
+        const text = textOf(content!), index = indices.get(entry.id);
+        if (index === undefined) throw new Error("Missing quoted user source index");
+        const quoted = head(text, budget), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(entry) }];
+        if (!text.trim() || !quoted.length) return [];
+        return [{ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes }, ...(quoted.length < text.length ? [{ kind: "omission" as const, role: "user" as const,
+            sourceIndex: index, reason: `${label} continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes }] : [])];
+    };
+    const quotesFor = (budget: number, withFirst: boolean): TranscriptRecord[] => {
+        const records: TranscriptRecord[] = [];
+        let left = budget;
+        for (let at = boundary - 1; at >= 0 && left > 0; at--) {
+            const entry = entries[at]!;
+            if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === firstUser?.id) continue;
+            const turn = quote(entry, left, "User turn");
+            if (turn[0]?.kind === "excerpt") left -= turn[0].text.length;
+            records.unshift(...turn);
         }
-    }
+        if (withFirst && initiating && left > 0) records.unshift(...quote(initiating, left, "Initiating prompt"));
+        return records;
+    };
+    const mandatory: TranscriptRecord[] = [];
     if (protectedUser?.type === "message" && protectedUser.message.role === "user")
         mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, text: textOf(protectedUser.message.content), sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }] });
     // The file ledger and the action trail of the compacted history are mandatory, so they are charged in base like the quotes above.
@@ -237,18 +233,16 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     };
     const before = measure(projected.messages);
     const model = ctx.model;
-    // When room is tight the newest turns win over the first: a long-running session's first prompt is often a finished task.
-    const first = new Set(initiating ? [indices.get(initiating.id)] : []);
-    const quotes = (choice: { recent: boolean; first: boolean }) => [...mandatory.filter(r => choice.first || !first.has(r.sourceIndex)), ...(choice.recent ? recent : [])];
-    const floorAt = (keep: number, choice: { recent: boolean; first: boolean }) => {
+    const floorAt = (keep: number, choice: { budget: number; first: boolean }) => {
         const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        const messages = preview(serializeTranscript([...quotes(choice), ...ledger]) + DIALOGUE_SUFFIX);
+        const messages = preview(serializeTranscript([...mandatory, ...quotesFor(choice.budget, choice.first), ...ledger]) + DIALOGUE_SUFFIX);
         return { ledger, messages, base: measure(messages), choice };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
-    // The floor gives way in this order: the trail and ledger to their headings, the first prompt's quote, then the newest turns' quote. Only the
-    // floor with none of them can refuse the cut, as before either was quoted.
-    const choices = [{ recent: true, first: true }, { recent: true, first: false }, { recent: false, first: true }, { recent: false, first: false }];
+    // When room is tight the newest turns win over the first prompt, which in a long-running session is often a finished task. The floor gives way
+    // in this order: the trail and ledger to their headings, the first prompt's quote, then the newest turns' quote, halved until it fits. Only a
+    // floor with no quote but the current input can refuse the cut.
+    const choices = [MAX_TASK_CONTRACT_CHARACTERS, 6000, 3000, 1500, 600, 0].flatMap(budget => [{ budget, first: true }, { budget, first: false }]);
     let floor = floorAt(Math.max(items.length, actions.length), choices[0]!);
     for (const choice of choices) {
         floor = floorAt(Math.max(items.length, actions.length), choice);
@@ -256,7 +250,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (items.length || actions.length) { floor = floorAt(0, choice); if (fits(floor.base)) break; }
     }
     const { ledger, base } = floor;
-    const kept = quotes(floor.choice);
+    const kept = [...mandatory, ...quotesFor(floor.choice.budget, floor.choice.first)];
     if (!model || !fits(base))
         return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorMessages: floor.messages };
     const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
