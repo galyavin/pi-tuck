@@ -324,7 +324,8 @@ async function runCellInner(cell: Cell): Promise<Run> {
   const probeStart = h.probes.length;
   // One answer per context build, not its text: a grid's requests held in memory run the worker out of heap.
   const carriedPrompt: boolean[] = [];
-  let carriedSeen = 0, opening = '', taskOpening = '';
+  let carriedSeen = 0, opening = '';
+  const answeredPrompts: { prompt: number; opening: string }[] = [];
   h.extension().on('context_with_system', event => { carriedPrompt.push(JSON.stringify(event.messages).includes(opening)); });
   for (let i = 0; i < cell.prompts.length; i++) {
    // Exactly the size the cell names: a prompt that says 36,000 tokens is 36,000 tokens of what pi-tuck counts.
@@ -345,11 +346,15 @@ async function runCellInner(cell: Cell): Promise<Run> {
    carriedSeen = carriedPrompt.length;
    const missing = built.filter(carried => !carried).length;
    if (missing) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens was missing from ${missing} of its ${requests} requests`, { prompt: i + 1 });
-   // The newest answered prompt of some length is the task the session is on: after a cut it must still be in the summary or the kept tail.
-   // A prompt refused for being larger than the room was never taken up, so it is not the task.
-   if (tokens >= 125 && requests > 0) taskOpening = opening;
-   else if (taskOpening && h.compactions().length > cutsBefore && !JSON.stringify(h.manager.buildSessionProjection().messages).includes(taskOpening)) record(cell, 'task-turn', `after a cut during prompt ${i + 1}, the newest task prompt is in neither the summary nor the kept tail`, { prompt: i + 1 });
-   else if (requests > 0 && !JSON.stringify(h.manager.buildSessionProjection().messages).includes(opening)) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens reached the model but is gone from the saved session`, { prompt: i + 1 });
+   // Which earlier prompt is the task can't be known without reading it, so every answered prompt must keep at least its opening through a cut,
+   // in the summary or the kept tail. A prompt refused for being larger than the room was never taken up and is not counted.
+   if (requests > 0) answeredPrompts.push({ prompt: i + 1, opening });
+   if (h.compactions().length > cutsBefore) {
+    const saved = JSON.stringify(h.manager.buildSessionProjection().messages);
+    const lost = answeredPrompts.filter(p => !saved.includes(p.opening)).map(p => p.prompt);
+    if (lost.length) record(cell, 'task-turn', `after a cut during prompt ${i + 1}, earlier prompts ${lost.join(', ')} are in neither the summary nor the kept tail`, { prompt: i + 1, lost });
+   }
+   if (requests > 0 && !JSON.stringify(h.manager.buildSessionProjection().messages).includes(opening)) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens reached the model but is gone from the saved session`, { prompt: i + 1 });
    // Every request has exactly one context build before it, and both lists grow in order, so the first `requests` measures are the requests that
    // went out. A build that never became a request was refused before it was sent, and so cannot have exceeded the window.
    const sent = h.guard.slice(seen.guard, seen.guard + requests);
@@ -799,6 +804,11 @@ function namedCells(): Cell[] {
  // is Pi's own check rather than pi-tuck's. The cell asks only that the session says so, in words, and takes the prompt after it.
  // A run of tasks at a small window: each task is a longer prompt followed by short steps and tool rounds, so cuts fall while the current task is
  // several turns back. The newest task must survive every cut.
+ // Tasks whose steps are long too: what follows a task can be larger than the whole quote budget, and the task must still keep its head.
+ const longSteps = [32_768, 81_920].map(window => base(`a task followed by long steps at a ${window} window`, {
+  window, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
+  prompts: [2_000, 3_000, 3_000, 3_000, 3_000, 2_000, 3_000, 3_000, 3_000, 3_000], rounds: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], results: [1_500],
+ }));
  const tasksSmallWindow = base('a run of tasks at a 32,768 window', {
   window: 32_768, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
   prompts: [2_000, 100, 100, 100, 2_500, 100, 100, 100, 3_000, 100, 100, 100, 2_000, 100, 100], rounds: [1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2], results: [1_500, 800],
@@ -934,7 +944,7 @@ function namedCells(): Cell[] {
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
-  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, tasksSmallWindow,
+  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, tasksSmallWindow, ...longSteps,
   ...providerCells, ...oddUsageCells,
  ];
 }

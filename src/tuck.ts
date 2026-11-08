@@ -202,16 +202,20 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         return [{ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes }, ...(quoted.length < text.length ? [{ kind: "omission" as const, role: "user" as const,
             sourceIndex: index, reason: `${label} continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes }] : [])];
     };
-    const quotesFor = (budget: number, withFirst: boolean): TranscriptRecord[] => {
-        const records: TranscriptRecord[] = [];
-        let left = budget;
-        for (let at = boundary - 1; at >= 0 && left > 0; at--) {
+    // Two passes, breadth first: every user turn, newest first, gets its head before any turn gets more, so steps after a task can't use up the budget
+    // the task turn needs; what is left then extends turns newest first. The first prompt gets what the user turns leave.
+    const quotesFor = (budget: number, headSize: number, withFirst: boolean): TranscriptRecord[] => {
+        const turns: { entry: SessionEntry; text: string; take: number }[] = [];
+        for (let at = boundary - 1; at >= 0; at--) {
             const entry = entries[at]!;
-            if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === firstUser?.id) continue;
-            const turn = quote(entry, left, "User turn");
-            if (turn[0]?.kind === "excerpt") left -= turn[0].text.length;
-            records.unshift(...turn);
+            if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === firstUser?.id || !isTextOnly(entry.message.content)) continue;
+            const text = textOf(entry.message.content);
+            if (text.trim()) turns.push({ entry, text, take: 0 });
         }
+        let left = budget;
+        for (const turn of turns) { if (left <= 0) break; turn.take = Math.min(turn.text.length, headSize, left); left -= turn.take; }
+        for (const turn of turns) { if (left <= 0) break; const more = Math.min(turn.text.length - turn.take, left); turn.take += more; left -= more; }
+        const records = turns.filter(turn => turn.take > 0).reverse().flatMap(turn => quote(turn.entry, turn.take, "User turn"));
         if (withFirst && initiating && left > 0) records.unshift(...quote(initiating, left, "Initiating prompt"));
         return records;
     };
@@ -233,16 +237,17 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     };
     const before = measure(projected.messages);
     const model = ctx.model;
-    const floorAt = (keep: number, choice: { budget: number; first: boolean }) => {
+    const floorAt = (keep: number, choice: { budget: number; head: number; first: boolean }) => {
         const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        const messages = preview(serializeTranscript([...mandatory, ...quotesFor(choice.budget, choice.first), ...ledger]) + DIALOGUE_SUFFIX);
+        const messages = preview(serializeTranscript([...mandatory, ...quotesFor(choice.budget, choice.head, choice.first), ...ledger]) + DIALOGUE_SUFFIX);
         return { ledger, messages, base: measure(messages), choice };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
     // When room is tight the newest turns win over the first prompt, which in a long-running session is often a finished task. The floor gives way
-    // in this order: the trail and ledger to their headings, the first prompt's quote, then the newest turns' quote, halved until it fits. Only a
-    // floor with no quote but the current input can refuse the cut.
-    const choices = [MAX_TASK_CONTRACT_CHARACTERS, 6000, 3000, 1500, 600, 0].flatMap(budget => [{ budget, first: true }, { budget, first: false }]);
+    // in this order: the trail and ledger to their headings, the first prompt's quote, the extensions of user turns (the budget halved), their heads
+    // (300 characters, then 100), and only then every quote. Only a floor with no quote but the current input can refuse the cut.
+    const choices = [{ head: 300, budgets: [MAX_TASK_CONTRACT_CHARACTERS, 6000, 3000, 1500] }, { head: 100, budgets: [1500, 600] }]
+        .flatMap(({ head, budgets }) => budgets.flatMap(budget => [{ budget, head, first: true }, { budget, head, first: false }])).concat([{ budget: 0, head: 0, first: false }]);
     let floor = floorAt(Math.max(items.length, actions.length), choices[0]!);
     for (const choice of choices) {
         floor = floorAt(Math.max(items.length, actions.length), choice);
@@ -250,7 +255,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (items.length || actions.length) { floor = floorAt(0, choice); if (fits(floor.base)) break; }
     }
     const { ledger, base } = floor;
-    const kept = [...mandatory, ...quotesFor(floor.choice.budget, floor.choice.first)];
+    const kept = [...mandatory, ...quotesFor(floor.choice.budget, floor.choice.head, floor.choice.first)];
     if (!model || !fits(base))
         return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorMessages: floor.messages };
     const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
