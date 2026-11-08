@@ -348,11 +348,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // "decided": `input` has decided for the run it starts, so that run's before_agent_start does not decide again. "starting": a run is
     // between before_agent_start and agent_start, where Pi 1.1 still reports idle but a message joins that run.
     let phase: "idle" | "decided" | "starting" = "idle";
+    // The system prompt the input decision saw. Another extension can still patch it in before_agent_start (a host adding a large section for one
+    // iteration, say); the cut is then planned again against the prompt the run will send, or the final guard would refuse a request a cut could fit.
+    let decidedPrompt = "";
     pi.on("input", async (event, ctx) => {
         if (!ctx.isIdle() || phase === "starting") return; // a steering or follow-up message joins the running request
         forgetFailure();
         phase = "decided";
-        try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
+        decidedPrompt = ctx.getSystemPrompt();
+        try { await preflight(ctx, incomingTokens(event.text, event.images), decidedPrompt, pi.getActiveTools()); }
         catch (error) { fail(error, ctx); }
     });
 	pi.registerTool({
@@ -525,8 +529,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const prompted = phase === "decided";
         phase = "starting";
         try {
-            if (prompted) access(); // decided on input; a failure latched there still stops the run
-            else await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools);
+            if (prompted && event.systemPrompt === decidedPrompt) access(); // decided on input; a failure latched there still stops the run
+            else { if (prompted) forgetFailure(); await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools); }
         } catch (error) { fail(error, ctx); }
     });
     // A cut at a public boundary, drafted against the boundary's own preview: "tool-loop" between the rounds of a run, "run-end" once its

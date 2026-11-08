@@ -823,6 +823,13 @@ function namedCells(): Cell[] {
   window: 32_768, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
   prompts: [2_000, 100, 100, 100, 2_500, 100, 100, 100, 3_000, 100, 100, 100, 2_000, 100, 100], rounds: [1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2], results: [1_500, 800],
  });
+ // A host engine that patches a large system section in and out per iteration: 8k tokens for one iteration, then 24k, removed at each stand-off. Each
+ // iteration is a stand-off prompt and short steps with tool rounds.
+ const standoffSection = [65_536, 81_920].map(window => base(`a host patches an 8k then 24k system section per iteration at a ${window} window`, {
+  window, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
+  prompts: [2_000, 100, 100, 100, 2_000, 100, 100, 100, 2_000, 100, 100, 100], rounds: [3, 3, 3, 2, 3, 3, 3, 2, 3, 3, 3, 2], results: [4_000, 2_500],
+  extra: { systemSection: (run: number) => run === 0 ? 8_000 : run === 4 ? 24_000 : run === 8 ? null : undefined },
+ }));
  const replaySecond = base('setup 68000 at window 131072, second prompt (replay)', {
   window: 131_072, reserve: SETUP_RESERVE, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: 68_000, system: 68_000 - 500 - SETUP_SCHEMA, host: 500,
   prompts: [40_000, 40_000, 300], rounds: [1, 0, 0], results: [2_000],
@@ -954,7 +961,7 @@ function namedCells(): Cell[] {
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
-  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, tasksSmallWindow, ...longSteps, ...specThenSteering,
+  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, standoffSection[0]!, standoffSection[1]!, tasksSmallWindow, ...longSteps, ...specThenSteering,
   ...providerCells, ...oddUsageCells,
  ];
 }

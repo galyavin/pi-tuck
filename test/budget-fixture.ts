@@ -71,6 +71,9 @@ export interface Options {
  thinkingChars?: (request: number) => number;
  /** Another extension, present beside the compactor: it appends N boundary entries at every turn end. */
  turnEndEntries?: number;
+ /** A host extension that patches a system-prompt section in `before_agent_start`, as an engine adds the current iteration's packet: called with the
+  * run's number, it returns the section's size in tokens to set from this run on, null to remove it, or undefined to leave it as it is. */
+ systemSection?: (run: number) => number | null | undefined;
  /** Another model from the catalogue, for a case that depends on which API it uses. */
  model?: { provider: string; id: string };
  /** Persist the session to a file, then close it and open it again: the caller starts from a saved session. */
@@ -242,6 +245,15 @@ export async function harness(options: Options) {
    extension = pi;
    if (options.cancelCompact) pi.on('session_before_compact', () => { state.vetoes++; return { cancel: true }; });
    // Another extension at the turn boundary: it appends entries that carry no content, as a plugin writing its own boundaries does.
+   if (options.systemSection) {
+    let run = 0, section: string | undefined;
+    pi.on('before_agent_start', event => {
+     const size = options.systemSection!(run++);
+     if (size === null) section = undefined; else if (size !== undefined) section = sized(size);
+     if (section) event.systemPromptOptions.sections = { ...event.systemPromptOptions.sections, standoff: section };
+     else if (event.systemPromptOptions.sections) delete event.systemPromptOptions.sections.standoff;
+    });
+   }
    if (options.turnEndEntries) pi.on('turn_end', () => { for (let i = 0; i < options.turnEndEntries!; i++) pi.appendEntry(`stress-boundary-${i}`, { at: state.requests }); });
    pi.on('session_before_compact', (event, ctx) => { state.compacts++; if (options.onBeforeCompact) options.onBeforeCompact(event, ctx); });
    // The host's per-request view: present in every request, never in the saved conversation.
