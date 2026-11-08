@@ -102,8 +102,8 @@ export const planningReserve = (window: number, targetRoom: number, factor: numb
 	window - Math.floor(targetRoom / factor) + mandatory;
 
 export type Target = "band" | "room";
-/** A planned cut: the conversation it leaves, and the summary view that produced it (whole dialogue or shrunk). */
-export type Plan<D extends object = {}> = ({ draft: true; after: number; mode: string } & D) | { draft: false; capacityRejected: boolean; reason: string };
+/** A planned cut: the conversation it leaves. The optional mode is diagnostic data, not a decision input. */
+export type Plan<D extends object = {}> = ({ draft: true; after: number; mode?: string } & D) | { draft: false; capacityRejected: boolean; reason: string };
 export type Decision<D extends object = {}> =
 	/** The request fits below the band, or an opportunistic cut cannot help: no cut and no fault; the request goes to the guard. */
 	| { kind: "none" }
@@ -133,14 +133,13 @@ export type Verdict<D extends object = {}> = Exclude<Decision<D>, { kind: "defer
  * Rule 4. The exact room is planned first. When its plan already lands below the band it is taken as it is (target "room"): it keeps the
  * room plan's content exactly, because every allowance of the planner is derived from the reserve and the band's is smaller. Only
  * otherwise is the band planned. Inside the band a cut is opportunistic, so a failed plan is never a fault and never falls back to the
- * room (a cut that still lands in the band would trigger again every round); the exact room would cut nothing there, so a band cut is
- * taken only when the room can plan a cut too and with the same mode (a lossy view the room could not even plan is a quality change with
- * no fault to prevent). At or above the room, where a cut is due, a band plan of another mode gives way to the room plan (today's
- * view), and a band plan stands when the room has none (a cut instead of a fault).
+ * room (a cut that still lands in the band would trigger again every round). A band plan that lands and frees the existing minimum
+ * is taken regardless of its form. At or above the room, where a cut is due, a band draft stands; only a missing band draft falls back
+ * to the room plan. The same reduction, fit and fault checks apply to whichever draft is chosen.
  * A lean band, one the cut point binds (`band < bandOf(room)`), is planned first and the room plan landing below it is not taken for that:
  * the room plan keeps a native tail of up to half the room, so it can land just under a band that far below the room, and the next round
- * would cut again, freeing little. The room is planned only where the rules above use it: to compare the mode, or when the band has no plan
- * and a cut is due. An adaptive band can also reach the margin, in which case the room plan is tried first.
+ * would cut again, freeing little. The room is planned only when the band has no draft and a cut is due. An adaptive band can also reach
+ * the margin, in which case the room plan is tried first.
  * The margin adds no new decision fault. Exceptions thrown by `plan` are not caught here: they are faults, and they now surface at
  * boundaries inside the band too, where no planner ran before the margin.
  */
@@ -156,12 +155,10 @@ export function chooseCut<D extends object = {}>(input: CutInput<D> & { opportun
 	const preferred = plan("band");
 	if (input.opportunistic) {
 		if (!lands(preferred) || !worthwhile(preferred)) return { kind: "none" };
-		const e = exact();
-		return e.draft && e.mode === preferred.mode ? { kind: "cut", target: "band", plan: preferred } : { kind: "none" };
+		return { kind: "cut", target: "band", plan: preferred };
 	}
-	const e = exact();
 	let chosen: Plan<D> = preferred, target: Target = "band";
-	if (!preferred.draft || (e.draft && e.mode !== preferred.mode)) { chosen = e; target = "room"; }
+	if (!preferred.draft) { chosen = exact(); target = "room"; }
 	if (!chosen.draft) return { kind: "fault", capacity: chosen.capacityRejected, message: chosen.reason };
 	if (chosen.after >= before || !fits(chosen.after + mandatory, room))
 		return { kind: "fault", capacity: !fits(chosen.after + mandatory, room), message: unreduced };

@@ -28,7 +28,7 @@ const baseline: typeof import('../src/tuck') | undefined = baselinePath ? await 
 const baselineBudget: typeof import('../src/budget') | undefined = baselinePath ? await import(/* @vite-ignore */ pathToFileURL(baselinePath.replace(/tuck\.js$/, 'budget.js')).href) : undefined;
 const performanceRows: Record<string, { v117: number; current: number; ratio: number }> = {};
 interface CutObservation { round: number; target: string; before: number; after: number; carried: number; cap: number; overshoot: number;
-  mode: string; boundary: number; baselineMode?: string; baselineBoundary?: number; baselineAfter?: number; baselineCarried?: number; baselineUnavailable?: string }
+  mode?: string; boundary: number; baselineMode?: string; baselineBoundary?: number; baselineAfter?: number; baselineCarried?: number; baselineUnavailable?: string }
 const cutObservations: Record<string, CutObservation[]> = {};
 const capFailures: Record<string, string[]> = {};
 const decisionObservations: Record<string, unknown[]> = {};
@@ -131,7 +131,8 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 		let refused: string | undefined;
 		const plans: Record<string, unknown> = {};
 		const started = performance.now();
-		const decision = decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
+		const decide = reference ? baselineBudget!.decideCut : decideCut;
+		const decision = decide({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
 			plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>['compaction']> }> => {
 				const reserve = planningReserve(window, target === 'band' ? band : room, 1, mandatory);
 				const draft = compiler.tuckObservedDraft(compiler.tuck, { branchEntries: manager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasure as never, {}, true);
@@ -149,7 +150,7 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 		const ms = performance.now() - started;
         if (process.env.PART3_DECISION_REPORT && baseline && !reference) {
             const oldPlans: Record<string, unknown> = {};
-            const oldDecision = decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
+            const oldDecision = baselineBudget!.decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
                 plan: (target): Plan => {
                     const reserve = planningReserve(window, target === 'band' ? band : room, 1, mandatory);
                     const draft = baseline.tuckObservedDraft(baseline.tuck, { branchEntries: manager.getBranch(), tokensBefore: before, previousSummary }, ctx, reserve, plannerMeasure as never, {}, true);

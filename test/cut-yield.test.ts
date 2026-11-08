@@ -15,7 +15,7 @@ function drive(window: number, response: number, mandatory: number, turns: numbe
   const ctx = { sessionManager: manager, cwd: '/tmp/p', model: { contextWindow: window, maxTokens: response, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
   const measure = (m: never[]) => measurableConversationTokens(m, ctx);
   const room = window - response, band = bandOf(room, cutAt), fits = (t: number, l: number) => t < l;
-  const cuts: { turn: number; before: number; after: number; mode: string; target: Target }[] = []; const faults: string[] = [];
+  const cuts: { turn: number; before: number; after: number; mode?: string; target: Target }[] = []; const faults: string[] = [];
   let c = 0;
   for (let turn = 1; turn <= turns; turn++) {
     if (shape === 'prose' || turn % 60 === 1) manager.appendMessage({ role: 'user', content: `Task ${turn}: please ${words(40)}`, timestamp: stamp() });

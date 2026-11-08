@@ -1,15 +1,15 @@
 {
 	"prose-heavy@32k": {
 		"rounds": 72,
-		"cuts": 6,
-		"cutsPer100Rounds": 8.33,
+		"cuts": 9,
+		"cutsPer100Rounds": 12.5,
 		"lowYieldShare": 0,
-		"carriedMean": 7731,
-		"carriedMax": 14754,
-		"summaryCharsMean": 10860,
-		"summaryCharsMax": 16632,
+		"carriedMean": 7365,
+		"carriedMax": 8761,
+		"summaryCharsMean": 11038,
+		"summaryCharsMax": 13718,
 		"refusals": 0,
-		"medianCutMs": 8.1
+		"medianCutMs": 4
 	},
 	"prose-heavy@64k": {
 		"rounds": 72,
@@ -111,38 +111,38 @@
 	},
 	"synthetic-low-prose@32k": {
 		"rounds": 480,
-		"cuts": 70,
-		"cutsPer100Rounds": 14.58,
+		"cuts": 77,
+		"cutsPer100Rounds": 16.04,
 		"lowYieldShare": 0,
-		"carriedMean": 8707,
-		"carriedMax": 13695,
-		"summaryCharsMean": 12200,
-		"summaryCharsMax": 16341,
+		"carriedMean": 8569,
+		"carriedMax": 8806,
+		"summaryCharsMean": 12016,
+		"summaryCharsMax": 14883,
 		"refusals": 0,
-		"medianCutMs": 33
+		"medianCutMs": 9.1
 	},
 	"synthetic-low-prose@64k": {
 		"rounds": 480,
-		"cuts": 29,
-		"cutsPer100Rounds": 6.04,
+		"cuts": 35,
+		"cutsPer100Rounds": 7.29,
 		"lowYieldShare": 0,
-		"carriedMean": 15869,
-		"carriedMax": 28069,
-		"summaryCharsMean": 18401,
-		"summaryCharsMax": 27793,
+		"carriedMean": 15398,
+		"carriedMax": 16193,
+		"summaryCharsMean": 18447,
+		"summaryCharsMax": 28820,
 		"refusals": 0,
-		"medianCutMs": 28.4
+		"medianCutMs": 8.3
 	},
 	"synthetic-low-prose@128k": {
 		"rounds": 480,
-		"cuts": 7,
-		"cutsPer100Rounds": 1.46,
+		"cuts": 11,
+		"cutsPer100Rounds": 2.29,
 		"lowYieldShare": 0,
-		"carriedMean": 29491,
-		"carriedMax": 33803,
-		"summaryCharsMean": 30114,
-		"summaryCharsMax": 56521,
+		"carriedMean": 31695,
+		"carriedMax": 34013,
+		"summaryCharsMean": 33501,
+		"summaryCharsMax": 53954,
 		"refusals": 0,
-		"medianCutMs": 26.3
+		"medianCutMs": 5.6
 	}
 }

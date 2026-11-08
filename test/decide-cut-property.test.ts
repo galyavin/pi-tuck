@@ -69,9 +69,9 @@ const decide = (c: Case, band: number, calls: Target[] = []) =>
 // `lean` branches below); every other property is the same at both.
 for (const cutAt of [1, 0.6]) {
 const label = cutAt === 1 ? '' : ` (cut point ${cutAt})`;
-test(`monotone safety: a margin adds no fault, changes no view, every cut lands below the room, an opportunistic cut below the band, and nothing thrashes${label}`, () => {
+test(`monotone safety: a margin adds no fault, every cut lands below the room, an opportunistic cut below the band, and nothing thrashes${label}`, () => {
 	const kinds: Record<string, number> = { none: 0, defer: 0, cut: 0, fault: 0 };
-	const cuts: Record<string, number> = { opportunistic: 0, band: 0, fallback: 0, other: 0, declined: 0, declinedNoRoom: 0, forcedNoRoom: 0, ...(cutAt === 1 ? { roomFirstInBand: 0, roomFirstDue: 0 } : { bandOverRoom: 0, roomDue: 0 }) };
+	const cuts: Record<string, number> = { opportunistic: 0, band: 0, fallback: 0, opportunisticNoRoom: 0, opportunisticOtherForm: 0, dueOtherForm: 0, forcedNoRoom: 0, ...(cutAt === 1 ? { roomFirstInBand: 0, roomFirstDue: 0 } : { bandOverRoom: 0, roomDue: 0 }) };
 	let cases = 0;
 	for (let seed = 1; seed <= 24000; seed++) {
 		const c = makeCase(seed, cutAt);
@@ -103,17 +103,16 @@ test(`monotone safety: a margin adds no fault, changes no view, every cut lands 
 		}
 		if (lean && !c.fits(total, c.band) && c.fits(c.mandatory, c.room)) {
 			const bandLands = leanBand.draft && leanBand.after < c.before && c.fits(leanBand.after + c.mandatory, c.band);
-			// A band plan that lands is the cut, whatever the room plan lands at, when its view is the room's (or the room has none and a cut is due):
-			// the room plan is not planned until the view is compared, and then not taken.
-			if (bandLands && (c.fits(total, c.room) ? exact.draft && exact.mode === leanBand.mode : !exact.draft || exact.mode === leanBand.mode)) {
+			// A band draft that lands is chosen without consulting the room or the form.
+			if (bandLands) {
 				expect(withMargin, why).toMatchObject({ kind: 'cut', target: 'band', plan: { after: leanBand.after, mode: leanBand.mode } });
-				expect(calls, why).toEqual(['band', 'room']);
+				expect(calls, why).toEqual(['band']);
 				if (roomFits) cuts.bandOverRoom!++;
 			}
-			// A room plan is taken, from the room up only, when the band has no plan or one of another view; inside the band nothing falls back to it.
+			// A room plan is taken, from the room up only, when the band has no draft; inside the band nothing falls back to it.
 			if (withMargin.kind === 'cut' && withMargin.target === 'room') {
 				expect(c.fits(total, c.room), why).toBe(false);
-				expect(!leanBand.draft || (exact.draft && exact.mode !== leanBand.mode), why).toBe(true);
+				expect(leanBand.draft, why).toBe(false);
 				cuts.roomDue!++;
 			}
 			if (!bandLands && c.fits(total, c.room)) { expect(withMargin, why).toEqual({ kind: 'none' }); expect(calls, why).toEqual(['band']); }
@@ -123,21 +122,28 @@ test(`monotone safety: a margin adds no fault, changes no view, every cut lands 
 			// Every cut reduces and lands below the room; an opportunistic one lands below the band.
 			expect(d.plan.after, why).toBeLessThan(c.before);
 			expect(c.fits(d.plan.after + c.mandatory, c.room), why).toBe(true);
-			// The margin never changes the view: whenever the room has a plan, a cut has the room plan's view.
-			if (exact.draft) expect(d.plan.mode, why).toBe(exact.mode);
-			// Inside the band, where the exact room cuts nothing, a cut needs a room plan of the same view.
-			if (d === withMargin && c.fits(total, c.room)) { expect(c.fits(d.plan.after + c.mandatory, c.band), why).toBe(true); expect(exact.draft, why).toBe(true); if (!roomTaken) cuts.opportunistic!++; }
-			// At or above the room a band plan stands when the room has none: a cut instead of a fault.
-			if (d === withMargin && !c.fits(total, c.room) && !exact.draft) { expect(d.target, why).toBe('band'); cuts.forcedNoRoom!++; }
-			if (d === withMargin && !c.fits(total, c.room) && !roomTaken) cuts[exact.draft && d.target === 'band' ? 'band' : d.target === 'room' && exact.draft && planner(c, c.band, [])('band').draft ? 'other' : 'fallback']!++;
+			// An opportunistic cut only needs its own numeric landing.
+			if (d === withMargin && c.fits(total, c.room)) {
+				expect(c.fits(d.plan.after + c.mandatory, c.band), why).toBe(true);
+				if (!roomTaken) {
+					cuts.opportunistic!++;
+					if (!exact.draft) cuts.opportunisticNoRoom!++;
+					else if (leanBand.draft && exact.mode !== leanBand.mode) cuts.opportunisticOtherForm!++;
+				}
+			}
+			if (d === withMargin && !c.fits(total, c.room)) {
+				if (!exact.draft) { expect(d.target, why).toBe('band'); cuts.forcedNoRoom!++; }
+				if (!roomTaken) {
+					cuts[d.target === 'band' ? 'band' : 'fallback']!++;
+					if (d.target === 'band' && exact.draft && leanBand.draft && exact.mode !== leanBand.mode) cuts.dueOtherForm!++;
+				}
+			}
 		}
-		// A cut above the room has the very view it has without the margin.
-		if (withMargin.kind === 'cut' && withoutMargin.kind === 'cut') expect(withMargin.plan.mode, why).toBe(withoutMargin.plan.mode);
-		// An opportunistic cut that the room's view stands in the way of, or the room cannot plan at all, is a decision to do nothing, not a fault.
-		if (withMargin.kind === 'none' && c.fits(total, c.room) && !c.fits(total, c.band) && c.fits(c.mandatory, c.room)) {
-			const preferred = planner(c, c.band, [])('band');
-			if (preferred.draft && preferred.after < c.before && c.fits(preferred.after + c.mandatory, c.band)) { if (!exact.draft) cuts.declinedNoRoom!++; else if (exact.mode !== preferred.mode) cuts.declined!++; }
-		}
+		// Removing all form metadata leaves every decision and chosen amount unchanged.
+		const withoutForms = decideCut({ total, mandatory: c.mandatory, before: c.before, room: c.room, band: c.band, fits: c.fits,
+			plan: (target): Plan => { const p = planner(c, c.band, [])(target); return p.draft ? { draft: true, after: p.after } : p; }, unreduced: 'did not reduce' });
+		const amount = (d: Decision) => d.kind === 'cut' ? { kind: d.kind, target: d.target, after: d.plan.after } : d;
+		expect(amount(withoutForms), why).toEqual(amount(withMargin));
 		// No thrash: after a cut the next boundaries (same mandatory input, the same views) never fault, each cut that follows leaves strictly
 		// less, and the sequence ends with a decision to do nothing.
 		if (withMargin.kind === 'cut') {
@@ -153,7 +159,7 @@ test(`monotone safety: a margin adds no fault, changes no view, every cut lands 
 		}
 	}
 	expect(cases).toBeGreaterThanOrEqual(10000);
-	// The cases really cover every outcome, the kinds of cut, and the opportunistic cut that the room's view declines.
+	// The cases really cover every outcome, the kinds of cut, and opportunistic cuts with no room draft or another form.
 	const stats = JSON.stringify({ kinds, cuts });
 	for (const kind of Object.keys(kinds)) expect(kinds[kind], stats).toBeGreaterThan(200);
 	for (const kind of Object.keys(cuts)) expect(cuts[kind], stats).toBeGreaterThan(100);

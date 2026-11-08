@@ -3,13 +3,10 @@ import { BAND, HOST, ROOM, WINDOW, harness, receiptOf, referenceSystemPart } fro
 import { measurableConversationTokens, planningReserve } from '../src/budget';
 import { tuck, tuckDraft, tuckObservedDraft, type DraftMode } from '../src/tuck';
 
-// The margin changes when a cut happens, not what a cut keeps. The exact room is planned first: when its plan already lands below the band
-// it is taken as it is (every allowance of the planner derives from the reserve, so the band's plan can carry less of the same view). Only
-// otherwise is the band planned. Inside the band, where the exact room would cut nothing, a band cut is taken only when the room plan exists
-// and has the same mode; at or above the room a band plan of another mode gives way to the room plan, and a band plan stands where the room
-// has none (a cut instead of a fault).
-// The two plans are computed here independently, with the same functions and the same state as the compactor's, and the compactor's cut
-// (target, mode, size and the summary itself) is compared with this rule.
+// Compare the actual saved cut with independently compiled room/band plans.
+// At the cap a room plan that lands below the band wins first. Otherwise an
+// opportunistic band plan needs only to land; a due band draft falls back to
+// the room only when absent. Form is checked as diagnostic output after choice.
 interface Planned { mode: DraftMode; after: number; summary: string }
 type Plan = Planned | null;
 const planned = (d: { compaction?: { summary: string }; after?: number; mode?: DraftMode }): Plan => d.compaction ? { mode: d.mode!, after: d.after!, summary: d.compaction.summary } : null;
@@ -17,9 +14,9 @@ type Expected = { kind: 'none' } | { kind: 'fault' } | { kind: 'cut'; target: 'b
 function rule(room: Plan, band: Plan, before: number, mandatory: number, total: number): Expected {
 	const fitsBand = (p: Planned) => p.after < before && p.after + mandatory < BAND;
 	if (room && fitsBand(room)) return { kind: 'cut', target: 'room', plan: room };
-	if (total < ROOM) return band && fitsBand(band) && room && room.mode === band.mode ? { kind: 'cut', target: 'band', plan: band } : { kind: 'none' };
+	if (total < ROOM) return band && fitsBand(band) ? { kind: 'cut', target: 'band', plan: band } : { kind: 'none' };
 	if (!band && !room) return { kind: 'fault' };
-	return band && (!room || room.mode === band.mode) ? { kind: 'cut', target: 'band', plan: band } : { kind: 'cut', target: 'room', plan: room! };
+	return band ? { kind: 'cut', target: 'band', plan: band } : { kind: 'cut', target: 'room', plan: room! };
 }
 const MANDATORY_MANUAL = 12052 + HOST;
 
@@ -38,8 +35,8 @@ async function manualCut(latest: number) {
 	} finally { await h.cleanup(); }
 }
 
-test('an operator cut takes the room plan when it lands below the band, else the band plan of the room plan\'s view, else the room plan', async () => {
-	const seen = { 'room below the band': 0, 'band, same view': 0, 'room over a band plan': 0, 'room only': 0, refused: 0 };
+test('an operator cut takes the room plan below the band, else a band draft, else the room fallback', async () => {
+	const seen = { 'room below the band': 0, 'band': 0, 'room only': 0, refused: 0 };
 	for (let latest = 112000; latest <= 126000; latest += 500) {
 		const { room, band, before, compacted, entries, faults } = await manualCut(latest);
 		const why = JSON.stringify({ latest, room: room && [room.mode, room.after], band: band && [band.mode, band.after], entries: entries.map(receiptOf), faults });
@@ -55,11 +52,10 @@ test('an operator cut takes the room plan when it lands below the band, else the
 		expect([receipt.target, receipt.mode, receipt.tokensAfter], why).toEqual([expected.target, expected.plan.mode, expected.plan.after]);
 		// The summary is the planned one, to the byte.
 		expect(entries[0]!.summary === expected.plan.summary, why).toBe(true);
-		if (expected.target === 'room') seen[band && room && room.after + MANDATORY_MANUAL < BAND ? 'room below the band' : band ? 'room over a band plan' : 'room only']++;
-		else seen['band, same view']++;
+		if (expected.target === 'room') seen[room && room.after + MANDATORY_MANUAL < BAND ? 'room below the band' : 'room only']++;
+		else seen.band++;
 	}
-	// The sweep passes through every case the two views produce here. A room plan over a band plan needed a view whose size follows the
-	// allowance (the retired bounded view); decide-cut-property.test.ts covers that branch of the unchanged rule.
+	// The sweep covers the preserved cap branch, a fallback and a refusal.
 	const stats = JSON.stringify(seen);
 	expect(seen['room below the band'], stats).toBeGreaterThan(5);
 	expect(seen['room only'], stats).toBeGreaterThan(2); expect(seen.refused, stats).toBeGreaterThan(0);
@@ -85,7 +81,7 @@ async function boundary(options: { history: number; oneTurn: boolean; complete: 
 }
 
 test('at a tool boundary a cut follows the rule', async () => {
-	const seen = { 'declined: another view': 0, 'band cut: same view': 0, 'declined: out of reach': 0, 'declined: no room plan': 0, 'room below the band': 0, 'room over a band plan': 0, 'forced band plan': 0, 'forced room plan only': 0 };
+	const seen = { 'band cut': 0, 'declined: out of reach': 0, 'room below the band': 0, 'forced band plan': 0, 'forced room plan only': 0 };
 	// A fresh result of 6,000 tokens brings the request over the band only at the tool boundary, so the prompt makes no cut of its own.
 	for (const fresh of [100, 6000]) for (const oneTurn of [false, true]) for (const history of [1500, 3000, 6000]) for (const d of [100, 600, 1200, 1800, 2400, 2800, 3200, 4000]) {
 		const { r, found, tool, promptCut } = await boundary({ history, oneTurn, complete: BAND + d, fresh });
@@ -101,33 +97,31 @@ test('at a tool boundary a cut follows the rule', async () => {
 		if (expected.kind === 'fault') continue; // fails closed, as before the margin
 		if (expected.kind === 'none') {
 			expect(tool.cut, why).toBe(0); expect(r.faults, why).toEqual([]);
-			seen[!f.band || !(f.band.after < f.before && f.band.after + f.mandatory < BAND) ? 'declined: out of reach' : f.room ? 'declined: another view' : 'declined: no room plan']++;
+			seen['declined: out of reach']++;
 			continue;
 		}
 		expect([tool.cut, receipt?.target, receipt?.mode, receipt?.tokensAfter], why).toEqual([1, expected.target, expected.plan.mode, expected.plan.after]);
 		expect(tool.entry!.summary === expected.plan.summary, why).toBe(true);
 		if (expected.target === 'room' && f.room && f.room.after < f.before && f.room.after + f.mandatory < BAND) seen['room below the band']++;
-		else if (expected.target === 'room') seen[f.band ? 'room over a band plan' : 'forced room plan only']++;
-		else seen[f.total < ROOM ? 'band cut: same view' : 'forced band plan']++;
+		else if (expected.target === 'room') seen['forced room plan only']++;
+		else seen[f.total < ROOM ? 'band cut' : 'forced band plan']++;
 	}
-	// A declined band plan of another view and a band-target cut needed a view whose size follows the allowance (the retired bounded
-	// view): the dialogue view is the same at both limits. decide-cut-property.test.ts covers those branches of the unchanged rule.
+	// Numeric landing and fallback branches remain covered by real tool rounds.
 	const stats = JSON.stringify(seen);
 	expect(seen['declined: out of reach'], stats).toBeGreaterThan(0);
 	expect(seen['room below the band'], stats).toBeGreaterThan(0);
 	expect(seen['forced room plan only'], stats).toBeGreaterThan(0);
 }, 120000);
 
-test('the request that the margin would have cut to a poorer view is sent as it stands', async () => {
-	// Inside the band (2,800 tokens in), the room plan keeps the whole dialogue but does not reach the band, and the band has no plan of
-	// that view. Before the amendment such a request was cut to a poorer band view; the exact room would have cut nothing.
-	// History 2,500 meets the precondition from 2,400 to 2,850 tokens into the band; the scenario sits inside that range, since summary
-	// sizes from earlier cuts shift the run's estimate calibration.
+test('a tool boundary with different plan forms follows the amount-only rule', async () => {
+	// The independently observed offers may have different forms or no band
+	// draft; the numeric landing, rather than form parity, decides the cut.
 	const { r, found, tool } = await boundary({ history: 2500, oneTurn: false, complete: BAND + 2800 });
 	const f = found[0]!;
 	expect(f.room?.mode, r.probe).toBe('dialogue');
 	expect(f.band === null || f.band.mode !== f.room!.mode, r.probe).toBe(true);
-	expect(tool.cut, r.probe).toBe(0);
+	const expected = rule(f.room, f.band, f.before, f.mandatory, f.total);
+	expect(tool.cut, r.probe).toBe(expected.kind === 'cut' ? 1 : 0);
 	expect(r.faults, r.probe).toEqual([]);
 	expect(r.requests, r.probe).toBe(2);
 	expect(r.guard.at(-1)!, r.probe).toBeLessThan(ROOM);
@@ -148,7 +142,7 @@ async function prompt(options: { history: number; complete: number }) {
 }
 
 test('at the prompt a cut follows the same rule', async () => {
-	const seen = { 'declined: no room plan': 0, 'declined: another view': 0, 'band cut: same view': 0, 'room below the band': 0, 'room over a band plan': 0, 'forced band plan': 0 };
+	const seen = { 'declined: out of reach': 0, 'band cut': 0, 'room below the band': 0, 'room fallback': 0, 'forced band plan': 0 };
 	for (const history of [1500, 2500, 4000, 8000, 20000]) for (const d of [100, 800, 1600, 2400, 2800, 2900, 3400, 4500]) {
 		const { r, found, cut, entry } = await prompt({ history, complete: BAND + d });
 		const why = JSON.stringify({ history, d, found: found[0] && { room: found[0].room && [found[0].room.mode, found[0].room.after], band: found[0].band && [found[0].band.mode, found[0].band.after], total: found[0].total }, cut, probe: r.probe });
@@ -158,19 +152,18 @@ test('at the prompt a cut follows the same rule', async () => {
 		if (expected.kind === 'fault') continue; // fails closed, as before the margin
 		if (expected.kind === 'none') {
 			expect(cut, why).toBe(0); expect(r.faults, why).toEqual([]);
-			const reaches = f.band && f.band.after < f.before && f.band.after + f.mandatory < BAND;
-			if (reaches) seen[f.room ? 'declined: another view' : 'declined: no room plan']++;
+			seen['declined: out of reach']++;
 			continue;
 		}
 		expect([cut, receipt?.target, receipt?.mode, receipt?.tokensAfter], why).toEqual([1, expected.target, expected.plan.mode, expected.plan.after]);
 		expect(entry!.summary === expected.plan.summary, why).toBe(true);
 		if (expected.target === 'room' && f.room && f.room.after < f.before && f.room.after + f.mandatory < BAND) seen['room below the band']++;
-		else if (expected.target === 'room') seen['room over a band plan']++;
-		else seen[f.total < ROOM ? 'band cut: same view' : 'forced band plan']++;
+		else if (expected.target === 'room') seen['room fallback']++;
+		else seen[f.total < ROOM ? 'band cut' : 'forced band plan']++;
 	}
 	const stats = JSON.stringify(seen);
-	expect(seen['room below the band'] + seen['band cut: same view'], stats).toBeGreaterThan(0);
-	expect(seen['band cut: same view'] + seen['forced band plan'] + seen['room over a band plan'], stats).toBeGreaterThan(0);
+	expect(seen['room below the band'] + seen['band cut'], stats).toBeGreaterThan(0);
+	expect(seen['band cut'] + seen['forced band plan'] + seen['room fallback'], stats).toBeGreaterThan(0);
 });
 
 
