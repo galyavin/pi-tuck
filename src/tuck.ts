@@ -7,7 +7,7 @@ import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
-import { fileObservations } from "./content-observations";
+import { fileObservations, thinkingRecords } from "./content-observations";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -524,6 +524,19 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (outputs.size || definitions.size) {
             ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
             offer = assemble(compiled.text, boundary);
+        }
+        // Plain thinking follows both observation kinds and cannot move any
+        // higher-ranked content, including the tail's older end.
+        const thinking: TranscriptRecord[] = [];
+        let thinkingCost = 0;
+        for (const record of thinkingRecords(entries.slice(0, boundary), indices, openingLength)) {
+            const extra = lineCost([record]);
+            if (price(offer.summary.length + thinkingCost + extra, boundary) > target) break;
+            thinking.push(record); thinkingCost += extra;
+        }
+        if (thinking.length) {
+            const summary = render([...offer.records, ...ledger, ...thinking]);
+            offer = { ...offer, summary, after: price(summary.length, boundary) };
         }
         const projection = preview(offer.summary, boundary);
         assertNativeToolRounds(projection);

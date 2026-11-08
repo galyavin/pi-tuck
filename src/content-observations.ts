@@ -2,6 +2,9 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isDiscardedResponse } from "./protocol";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { extractPath } from "./tuck/core/tool-args";
+import { readableContentParts } from "./tuck/core/readable-content";
+import type { TranscriptRecord } from "./tuck/core/transcript";
+import { MAX_RECALL_CHARACTERS } from "./recall";
 
 export const MAX_OUTPUT_TAIL_LINES = 3;
 export const MAX_OUTPUT_TAIL_CHARACTERS = 200;
@@ -88,4 +91,25 @@ export function fileObservations(paths: ReadonlySet<string>, entries: readonly S
     }
   }
   return known;
+}
+
+/** Plain-thinking openings before the final kept tail, newest block first.
+ * Each pointer addresses the exact block in the message's readable text. */
+export function* thinkingRecords(entries: readonly SessionEntry[], indices: ReadonlyMap<string, number>, openingLength: number): Generator<TranscriptRecord> {
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at]!;
+    if (entry.type !== "message" || entry.message.role !== "assistant" || isDiscardedResponse(entry.message)) continue;
+    const sourceIndex = indices.get(entry.id);
+    if (sourceIndex === undefined) continue;
+    const parts = readableContentParts(entry.message.content, true);
+    for (let block = parts.length - 1; block >= 0; block--) {
+      const part = parts[block]!;
+      if (part.kind !== "thinking" || !part.text.trim()) continue;
+      let end = Math.min(part.text.length, openingLength);
+      if (end < part.text.length && /[\uD800-\uDBFF]/u.test(part.text[end - 1]!)) end++;
+      const locator = { index: sourceIndex, offset: part.offset, limit: Math.min(MAX_RECALL_CHARACTERS, part.text.length) };
+      yield { kind: "section", title: "Thinking", sourceIndex,
+        text: `Plain thinking opening (tuck_recall ${JSON.stringify(locator)}):\n${part.text.slice(0, end)}` };
+    }
+  }
 }

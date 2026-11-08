@@ -37,6 +37,41 @@ beforeAll(async () => {
 });
 afterAll(() => { if (directory) rmSync(directory, { recursive: true, force: true }); });
 
+test('plain-thinking openings remain below the complete Part 6 tail at every tested room', () => {
+  const rows = readFileSync(new URL('./fixtures/regression/prose-heavy.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const manager = SessionManager.inMemory('/part6-plain-thinking', undefined, [rows[0]]);
+  for (const [at, row] of rows.filter(e => e.type === 'message').slice(0, 120).entries()) {
+    const message = row.message;
+    manager.appendMessage(message.role === 'assistant' ? { ...message, content: [
+      { type: 'thinking', thinking: `Plain plan ${at}: ` + 'Inspect the source before changing it. '.repeat(20) }, ...message.content,
+    ] } : message);
+  }
+  const spare = SessionManager.inMemory('/part6-plain-spare');
+  spare.appendMessage({ role: 'user', content: 'Preserve this opening.', timestamp: 0 });
+  const answer = (content: unknown[]) => ({ role: 'assistant', content, api: 'openai-completions', provider: 'probe', model: 'probe',
+    stopReason: 'stop', timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as never;
+  spare.appendMessage(answer([{ type: 'thinking', thinking: 'Inspect the source before changing it. '.repeat(20) }]));
+  for (let at = 0; at < 12; at++) spare.appendMessage(answer([{ type: 'text', text: `Old ${at}:` + 'x'.repeat(9000) }]));
+  spare.appendMessage({ role: 'user', content: 'Continue the current task.', timestamp: 0 });
+  spare.appendMessage(answer([{ type: 'text', text: 'Recent state is ready.' }]));
+  let quoted = 0;
+  for (const sessionManager of [manager, spare]) {
+    const ctx = { sessionManager, cwd: '/part6-plain-thinking', model: { contextWindow: 81920, maxTokens: 16384 } } as unknown as ExtensionContext;
+    const input = { branchEntries: sessionManager.getBranch(), tokensBefore: conversationTokens(sessionManager.buildSessionProjection().messages) };
+    for (let room = 2000; room <= 20000; room += 250) {
+      const expected = part6.tuckObservedDraft(part6.tuck, input, ctx, 81920 - room, conversationTokens);
+      const actual = tuckObservedDraft(tuck, input, ctx, 81920 - room, conversationTokens);
+      expect(actual.compaction?.firstKeptEntryId, `room ${room}`).toBe(expected.compaction?.firstKeptEntryId);
+      if (actual.compaction) {
+        quoted += Number(actual.compaction.summary.includes(' Thinking:'));
+        expect(actual.after).toBeLessThanOrEqual((actual.compaction.details as { carriedTarget: number }).carriedTarget);
+      }
+    }
+  }
+  expect(quoted).toBeGreaterThan(0);
+});
+
 test('Part 6 tail boundaries agree near capacity edges', () => {
   const rows = readFileSync(new URL('./fixtures/regression/prose-heavy.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const manager = SessionManager.inMemory('/part6-tail-edges', undefined, [rows[0]]);

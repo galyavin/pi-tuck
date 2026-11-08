@@ -22,9 +22,9 @@ test("null, private, off-branch, duplicate and saved-view sources cannot export"
  const replacement={id:"edit",type:"context_edit",targetId:x.id,replacement:"unsupported",parentId:x.id,timestamp:new Date().toISOString()} as unknown as SessionEntry;
  expect(()=>exportSource(x.entries,[...x.branch,replacement],{entryId:x.id})).toThrow("replacement context edits");
 });
-test("empty or image-only sources have no text; assistant hidden reasoning is never exported", () => {
+test("empty or image-only sources have no text; assistant signed reasoning is never exported", () => {
  const m=SessionManager.inMemory("/test");const id=m.appendMessage({role:"user",content:[{type:"image",data:"PIXEL",mimeType:"image/png"}],timestamp:0});expect(exportSource(m.getEntries(),m.getBranch(),{entryId:id})).toBeUndefined();
- const a=m.appendMessage({role:"assistant",content:[{type:"thinking",thinking:"SECRET_REASONING"},{type:"text",text:"Public prose"}],api:"openai-codex-responses",provider:"openai-codex",model:"gpt-6.1-sol",timestamp:0,stopReason:"stop",usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}});expect(exportSource(m.getEntries(),m.getBranch(),{entryId:a})?.text).toBe("Public prose");
+ const a=m.appendMessage({role:"assistant",content:[{type:"thinking",thinking:"SECRET_REASONING",thinkingSignature:"opaque"},{type:"text",text:"Public prose"}],api:"openai-codex-responses",provider:"openai-codex",model:"gpt-6.1-sol",timestamp:0,stopReason:"stop",usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}});expect(exportSource(m.getEntries(),m.getBranch(),{entryId:a})?.text).toBe("Public prose");
 });
 test("actual registered tool rejects mixed export schemas/access/cancellation before native write", async () => {
  let tool:ToolDefinition|undefined, denied=false, writes=0;
