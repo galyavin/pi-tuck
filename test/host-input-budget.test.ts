@@ -109,9 +109,10 @@ test('messages queued at the tool boundary leave room in the cut: a cut that kee
 
 test('queued messages that cannot fit even with no history fail closed at the guard, with no cut', async () => {
  // The queued input alone exceeds the room. A cut removes only saved conversation, so the trigger defers to the guard (as it does for
- // mandatory input at the prompt) instead of attempting a cut that cannot work and reporting its own error.
+ // mandatory input at the prompt) instead of attempting a cut that cannot work and reporting its own error. The queued messages are the last user entry, so the guard's re-plan
+ // names them as the incoming input that cannot fit.
  const r = await scenario({ at: 'tool', complete: ROOM - 5000, host: HOST, queued: ROOM + 20000 });
  expect(r.faults.length, r.probe).toBeGreaterThan(0);
- for (const fault of r.faults) expect(fault, r.probe).toContain('Complete Pi context and response reserve exceed the estimated request budget');
+ for (const fault of r.faults) expect(fault, r.probe).toContain('Incoming Pi prompt and response reserve cannot fit the estimated request budget');
  expect(r.requests, r.probe).toBe(1); expect(r.effects, r.probe).toBe(1); expect(r.cuts, r.probe).toBe(0);
 });

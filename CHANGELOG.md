@@ -3,6 +3,31 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.17] - 2026-11-08
+
+### Fixed
+
+- **A host that patches a large section into the system prompt could get a refusal a cut would fit (1.0.0 to 1.0.16).** pi-tuck plans a prompt's cut when
+  the prompt arrives, before other extensions change the system prompt. A host engine that adds a section of thousands of tokens for one turn, as an
+  orchestrator does for its stand-off, could push that turn's first request over the room, and the final guard refused it. The guard now reduces first:
+  when the run's first request is over the room and no cut is planned, it plans the prompt's cut there, against the system prompt as finally sent, and
+  refuses only if that cut does not fit either. It works whatever order the extensions load in.
+
+### Added
+
+- Stress cells for a host that patches an 8k then 24k system section, at 65,536 and 81,920, registered before and after pi-tuck, with the section arriving
+  on a stand-off or on the first step turn after one and removed at the next stand-off. 1.0.16 refuses in the four cells at 81,920; 1.0.17 in none.
+
+### Changed
+
+- When queued input alone exceeds the room, the refusal names it as incoming input that cannot fit, instead of complete context. It still fails closed
+  with no cut.
+
+### Release gates
+
+- Replay matches 1.0.16: 0 of 13,946 requests differ on 29 recordings, 0 lost or dead tasks. Shipped without a live gate as a replay-matching patch.
+  Tests; CI; the stress test, with no cell worse than 1.0.16.
+
 ## [1.0.16] - 2026-11-08
 
 ### Fixed

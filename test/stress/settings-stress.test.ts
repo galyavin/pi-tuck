@@ -823,7 +823,20 @@ function namedCells(): Cell[] {
   window: 32_768, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
   prompts: [2_000, 100, 100, 100, 2_500, 100, 100, 100, 3_000, 100, 100, 100, 2_000, 100, 100], rounds: [1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2], results: [1_500, 800],
  });
- const replaySecond = base('setup 68000 at window 131072, second prompt (replay)', {
+ // A host engine that patches a large system section in and out: 8k tokens, then 24k. Each iteration is a stand-off prompt and short steps with tool
+// rounds. Two timings: the section comes with a stand-off and goes at the third, or it comes on the first step turn after a stand-off and goes at the
+// next stand-off, as Nautilus does (changes of up to ~95k characters either way).
+const standoffTimings: [string, (run: number) => number | null | undefined][] = [
+ ['on stand-offs', run => run === 0 ? 8_000 : run === 4 ? 24_000 : run === 8 ? null : undefined],
+ ['on step turns, gone at the stand-off', run => run === 1 ? 8_000 : run === 4 ? null : run === 5 ? 24_000 : run === 8 ? null : undefined],
+];
+const standoffSection = [65_536, 81_920].flatMap(window => [false, true].flatMap(late => standoffTimings.map(([timing, systemSection], i) => base(
+ `a host patches an 8k then 24k system section${i ? ` ${timing}` : ' per iteration'} at a ${window} window, ${late ? 'after' : 'before'} pi-tuck`, {
+  window, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
+  prompts: [2_000, 100, 100, 100, 2_000, 100, 100, 100, 2_000, 100, 100, 100], rounds: [3, 3, 3, 2, 3, 3, 3, 2, 3, 3, 3, 2], results: [4_000, 2_500],
+  extra: { systemSection, systemSectionLate: late },
+ }))));
+const replaySecond = base('setup 68000 at window 131072, second prompt (replay)', {
   window: 131_072, reserve: SETUP_RESERVE, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: 68_000, system: 68_000 - 500 - SETUP_SCHEMA, host: 500,
   prompts: [40_000, 40_000, 300], rounds: [1, 0, 0], results: [2_000],
   // On 1.0.10 the second prompt was refused with "Complete Pi context and response reserve exceed", which is Pi's own check rather than pi-tuck's. What
@@ -954,7 +967,7 @@ function namedCells(): Cell[] {
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
-  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, tasksSmallWindow, ...longSteps, ...specThenSteering,
+  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, ...standoffSection, tasksSmallWindow, ...longSteps, ...specThenSteering,
   ...providerCells, ...oddUsageCells,
  ];
 }
