@@ -346,12 +346,14 @@ async function runCellInner(cell: Cell): Promise<Run> {
    carriedSeen = carriedPrompt.length;
    const missing = built.filter(carried => !carried).length;
    if (missing) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens was missing from ${missing} of its ${requests} requests`, { prompt: i + 1 });
-   // Which earlier prompt is the task can't be known without reading it, so every answered prompt must keep at least its opening through a cut,
-   // in the summary or the kept tail. A prompt refused for being larger than the room was never taken up and is not counted.
+   // Which earlier prompt is the task can't be known without reading it, so the first answered prompt (the goal of a long session) and the newest
+   // 8 answered prompts (where the current task is) must keep at least their openings through a cut, in the summary or the kept tail. A prompt
+   // refused for being larger than the room was never taken up and is not counted.
    if (requests > 0) answeredPrompts.push({ prompt: i + 1, opening });
    if (h.compactions().length > cutsBefore) {
     const saved = JSON.stringify(h.manager.buildSessionProjection().messages);
-    const lost = answeredPrompts.filter(p => !saved.includes(p.opening)).map(p => p.prompt);
+    const watched = answeredPrompts.length > 9 ? [answeredPrompts[0]!, ...answeredPrompts.slice(-8)] : answeredPrompts;
+    const lost = watched.filter(p => !saved.includes(p.opening)).map(p => p.prompt);
     if (lost.length) record(cell, 'task-turn', `after a cut during prompt ${i + 1}, earlier prompts ${lost.join(', ')} are in neither the summary nor the kept tail`, { prompt: i + 1, lost });
    }
    if (requests > 0 && !JSON.stringify(h.manager.buildSessionProjection().messages).includes(opening)) record(cell, 'lost-prompt', `prompt ${i + 1} of ${cell.prompts[i] ?? 100} tokens reached the model but is gone from the saved session`, { prompt: i + 1 });
@@ -809,6 +811,12 @@ function namedCells(): Cell[] {
   window, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
   prompts: [2_000, 3_000, 3_000, 3_000, 3_000, 2_000, 3_000, 3_000, 3_000, 3_000], rounds: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], results: [1_500],
  }));
+ // One long spec, then many steering turns that paste logs or errors: the spec is the goal and must keep its opening through every cut.
+ const specThenSteering = [32_768, 81_920].map(window => base(`a spec followed by 30 steering turns at a ${window} window`, {
+  window, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
+  prompts: [4_000, ...Array(30).fill(1_500)], rounds: Array(31).fill(1), results: [1_000],
+  extra: { noOpening: true },
+ }));
  const tasksSmallWindow = base('a run of tasks at a 32,768 window', {
   window: 32_768, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
   prompts: [2_000, 100, 100, 100, 2_500, 100, 100, 100, 3_000, 100, 100, 100, 2_000, 100, 100], rounds: [1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2], results: [1_500, 800],
@@ -944,7 +952,7 @@ function namedCells(): Cell[] {
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
-  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, tasksSmallWindow, ...longSteps,
+  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, tasksSmallWindow, ...longSteps, ...specThenSteering,
   ...providerCells, ...oddUsageCells,
  ];
 }

@@ -56,6 +56,8 @@ export interface Options {
  summaryOnly?: boolean;
  /** Build no history and do no prompt sizing: the caller drives the session itself, prompt by prompt. */
  noHistory?: boolean;
+ /** Seed no opening user turn: the session's first user turn is the case's first prompt. */
+ noOpening?: boolean;
  /** Answer request N with a tool call rather than a final text, so the run keeps going after the first request. */
  toolCalls?: (request: number) => boolean;
  /** The size of the Nth tool result, so one run can grow by mixed amounts. */
@@ -299,7 +301,8 @@ export async function harness(options: Options) {
   await session.bindExtensions({ uiContext: ui as never, abortHandler: () => { state.aborts++; void session!.abort(); } });
   const initialTools = JSON.parse(activeToolsJson());
   const mandatory = estimateTokens({ role: 'system', content: session.systemPrompt, ...(initialTools.length ? { toolsAdded: initialTools } : {}), timestamp: 0 });
-  const opening = manager.appendMessage({ role: 'user', content: 'Opening task', timestamp: 0 });
+  // A session that opens with its own first prompt (a long spec, say) has no seeded opening turn before it.
+  const opening = options.noOpening ? '' : manager.appendMessage({ role: 'user', content: 'Opening task', timestamp: 0 });
   // A previous compaction: the saved conversation starts with a summary message that Pi wraps when it converts it for the model.
   if (options.summary) {
    const records: Parameters<typeof serializeTranscript>[0] = [{ kind: 'omission', reason: 'Earlier work, summarized. ' + text(options.summaryTokens ?? 800) }];
