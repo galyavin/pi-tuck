@@ -55,8 +55,8 @@ test('A: the initiating prompt is quoted verbatim in the summary', () => {
 	} finally { s.dispose(); }
 });
 
-test('A: an initiating prompt over 12,000 characters keeps its head within the task budget and says how to recall the rest', () => {
-	const first = 'Task line.\n'.repeat(1300);
+test('A: an initiating prompt over the task budget keeps its head and says how to recall the rest', () => {
+	const first = 'Task line.\n'.repeat(25000); // longer than the task budget at this window
 	expect(first.length).toBeGreaterThan(MAX_TASK_CONTRACT_CHARACTERS);
 	const s = session(first, []);
 	try {
@@ -64,9 +64,9 @@ test('A: an initiating prompt over 12,000 characters keeps its head within the t
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		const rows = records(draft.compaction.summary);
 		const excerpt = rows.find(r => r.kind === 'excerpt' && r.role === 'user' && r.text!.startsWith('Task line.'))!;
-		// The newest user turns share the budget and come first, so the head is at most 12,000 characters.
+		// The newest user turns share the budget (15% of the room, at least 12,000 characters) and come first; the head is what they leave.
 		const kept = excerpt.text!.length;
-		expect(kept).toBeGreaterThan(0); expect(kept).toBeLessThanOrEqual(MAX_TASK_CONTRACT_CHARACTERS); expect(first.startsWith(excerpt.text!)).toBe(true);
+		expect(kept).toBeGreaterThan(0); expect(kept).toBeLessThan(first.length); expect(first.startsWith(excerpt.text!)).toBe(true);
 		const note = rows.find(r => r.kind === 'omission' && r.sourceIndex === excerpt.sourceIndex)!;
 		expect(note.reason).toContain(`tuck_recall {"index":${excerpt.sourceIndex},"offset":${kept}}`);
 		// The locator reads exactly the omitted remainder.

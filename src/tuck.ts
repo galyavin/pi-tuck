@@ -213,8 +213,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             if (text.trim()) turns.push({ entry, text, take: 0 });
         }
         let left = budget;
-        // Heads take at most half the budget: in a session of hundreds of turns they would otherwise spend all of it on old turns' openings.
-        let heads = Math.floor(budget / 2);
+        // Heads take at most a quarter of the budget: in a session of hundreds of turns they would otherwise spend it on old turns' openings.
+        let heads = Math.floor(budget / 4);
         for (const turn of turns) { if (heads <= 0) break; turn.take = Math.min(turn.text.length, headSize, heads); heads -= turn.take; left -= turn.take; }
         for (const turn of turns) { if (left <= 0) break; const more = Math.min(turn.text.length - turn.take, left); turn.take += more; left -= more; }
         const records = turns.filter(turn => turn.take > 0).reverse().flatMap(turn => quote(turn.entry, turn.take, "User turn"));
@@ -248,7 +248,11 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     // When room is tight the newest turns win over the first prompt, which in a long-running session is often a finished task. The floor gives way
     // in this order: the trail and ledger to their headings, the first prompt's quote, the extensions of user turns (the budget halved), their heads
     // (300 characters, then 100), and only then every quote. Only a floor with no quote but the current input can refuse the cut.
-    const choices = [{ head: 300, budgets: [MAX_TASK_CONTRACT_CHARACTERS, 6000, 3000, 1500] }, { head: 100, budgets: [1500, 600] }]
+    // The budget grows with the room: 15% of it, at least the 12,000 characters a first prompt always had. A long-running session's task can be tens
+    // of thousands of characters, and the room is what can afford it.
+    const taskBudget = Math.max(MAX_TASK_CONTRACT_CHARACTERS, Math.floor(Math.max(0, (model?.contextWindow ?? 0) - reserveTokens) * charsPerToken * 0.15));
+    const budgets = [taskBudget, taskBudget / 2, taskBudget / 4, taskBudget / 8, 1500].map(Math.floor).filter((b, at, all) => b >= 1500 && all.indexOf(b) === at);
+    const choices = [{ head: 300, budgets }, { head: 100, budgets: [1500, 600] }]
         .flatMap(({ head, budgets }) => budgets.flatMap(budget => [{ budget, head, first: true }, { budget, head, first: false }])).concat([{ budget: 0, head: 0, first: false }]);
     let floor = floorAt(Math.max(items.length, actions.length), choices[0]!);
     for (const choice of choices) {

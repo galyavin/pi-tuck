@@ -148,7 +148,8 @@ test('a cut at the tool boundary records its mode', async () => {
 test('a history whose dialogue exceeds the allowance is cut to the shrunk view, which still carries the file ledger', async () => {
 	// Many hundreds of turns (cycles of 60 tokens): the whole dialogue outgrows the one allowance (there is no 3x multiplier), so the same dialogue is shrunk to it.
 	// The shrunk view is never a view without tool history: the ledger and closing instruction are in it.
-	const r = await scenario({ at: 'prompt', complete: ROOM + 500, host: HOST, cycleSize: 60 });
+	// Smaller cycles than other cases: the newest user turns are quoted within a share of the room, so the dialogue must outgrow the allowance by more.
+	const r = await scenario({ at: 'prompt', complete: ROOM + 500, host: HOST, cycleSize: 30 });
 	expect(r.faults, r.probe).toEqual([]);
 	expect(r.cuts, r.probe).toBe(1);
 	const entry = r.entries[0]!;
