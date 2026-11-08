@@ -213,7 +213,9 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             if (text.trim()) turns.push({ entry, text, take: 0 });
         }
         let left = budget;
-        for (const turn of turns) { if (left <= 0) break; turn.take = Math.min(turn.text.length, headSize, left); left -= turn.take; }
+        // Heads take at most half the budget: in a session of hundreds of turns they would otherwise spend all of it on old turns' openings.
+        let heads = Math.floor(budget / 2);
+        for (const turn of turns) { if (heads <= 0) break; turn.take = Math.min(turn.text.length, headSize, heads); heads -= turn.take; left -= turn.take; }
         for (const turn of turns) { if (left <= 0) break; const more = Math.min(turn.text.length - turn.take, left); turn.take += more; left -= more; }
         const records = turns.filter(turn => turn.take > 0).reverse().flatMap(turn => quote(turn.entry, turn.take, "User turn"));
         if (withFirst && initiating && left > 0) records.unshift(...quote(initiating, left, "Initiating prompt"));
