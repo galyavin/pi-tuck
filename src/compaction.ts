@@ -8,7 +8,7 @@ import { projectedMessages } from "./omissions.js";
 import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
 import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
-import { isContextOverflow, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
@@ -348,15 +348,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // "decided": `input` has decided for the run it starts, so that run's before_agent_start does not decide again. "starting": a run is
     // between before_agent_start and agent_start, where Pi 1.1 still reports idle but a message joins that run.
     let phase: "idle" | "decided" | "starting" = "idle";
-    // The system prompt the input decision saw. Another extension can still patch it in before_agent_start (a host adding a large section for one
-    // iteration, say); the cut is then planned again against the prompt the run will send, or the final guard would refuse a request a cut could fit.
-    let decidedPrompt = "";
     pi.on("input", async (event, ctx) => {
         if (!ctx.isIdle() || phase === "starting") return; // a steering or follow-up message joins the running request
         forgetFailure();
         phase = "decided";
-        decidedPrompt = ctx.getSystemPrompt();
-        try { await preflight(ctx, incomingTokens(event.text, event.images), decidedPrompt, pi.getActiveTools()); }
+        try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
         catch (error) { fail(error, ctx); }
     });
 	pi.registerTool({
@@ -483,7 +479,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // custom message starts). The cut is pi-tuck's own, planned as at a tool boundary. It is not Pi's: Pi's cut finder keeps the last
     // keepRecentTokens, and where those are the whole conversation it has nothing to cut, so every later prompt was refused for good (t06 at
     // Pi's defaults on a 32k window). Each request of the run carries the cut, and the run's first boundary saves it.
-    const preflight = async (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[]) => {
+    const preflight = (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[]) => {
         promptCut = undefined;
         promptCutAt = ctx.sessionManager.getBranch().length;
         if (!active()) return;
@@ -529,8 +525,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const prompted = phase === "decided";
         phase = "starting";
         try {
-            if (prompted && event.systemPrompt === decidedPrompt) access(); // decided on input; a failure latched there still stops the run
-            else { if (prompted) forgetFailure(); await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools); }
+            if (prompted) access(); // decided on input; a failure latched there still stops the run
+            else await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools);
         } catch (error) { fail(error, ctx); }
     });
     // A cut at a public boundary, drafted against the boundary's own preview: "tool-loop" between the rounds of a run, "run-end" once its
@@ -703,20 +699,35 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 			if (!ctx.model) throw missingModel();
 			// The complete request, counted after Pi's conversion (summary/custom/bash envelopes), with the effective system once.
 			// Pi applies a forced prompt after this hook; the public prompt already observes it.
-            const tokens = requestTokens(event.messages, ctx.getSystemPrompt());
+            let messages = event.messages, tokens = requestTokens(messages, ctx.getSystemPrompt());
+            // The run's first request is over the room although the prompt's decision found it fit: something changed the request after that decision
+            // (another extension patching the system prompt in before_agent_start, whatever the load order). Reduce here rather than refuse: plan the
+            // prompt's cut against the request as it now is, carry it in memory, and save it at the first boundary, as any prompt's cut is saved.
+            if (!fits(tokens, limits(ctx).room, ctx) && !promptCut) {
+                const branch = ctx.sessionManager.getBranch(), last = branch.at(-1);
+                if (last?.type === "message" && last.message.role === "user") {
+                    const header = ctx.sessionManager.getHeader();
+                    const before = header && SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch.slice(0, -1)]);
+                    if (before) {
+                        preflight(Object.create(ctx, { sessionManager: { value: before } }), incomingTokens(typeof last.message.content === "string" ? last.message.content : last.message.content.flatMap(b => b.type === "text" ? [b.text] : []).join("\n"), typeof last.message.content === "string" ? [] : last.message.content.filter((b): b is ImageContent => b.type === "image")), ctx.getSystemPrompt(), pi.getActiveTools());
+                        if (promptCut) { messages = cutRequest(event.messages, ctx, promptCut); tokens = requestTokens(messages, ctx.getSystemPrompt()); }
+                    }
+                }
+            }
 			if (!fits(tokens, limits(ctx).room, ctx))
 				throw new CapacityError("Complete Pi context and response reserve exceed the estimated request budget");
             if (recorder.enabled && !recorder.waitingForCut) recorder.measureInline(() => {
                 recorder.request();
                 // No system prompt or hidden assistant blocks; no provider payload/headers.
-                const permitted = event.messages.filter(m => m.role !== "system" &&
+                const permitted = messages.filter(m => m.role !== "system" &&
                     !(m.role === "assistant" && m.content.some(b => b.type === "thinking")) &&
                     !(m.role === "custom" && options.recallPolicy?.privateCustomTypes?.includes(m.customType)));
                 recorder.capture("prepared-request", "public-context-with-system-hook-before-later-transforms-not-wire", { messages: permitted, estimatedInputTokens: tokens }, permitted.length !== event.messages.length);
             });
             if (tokens > 0 && Number.isSafeInteger(tokens)) pending = {
-                identity: identityFor(ctx), tokens, messages: event.messages, snapshot: structuredClone(convertToLlm(event.messages)),
+                identity: identityFor(ctx), tokens, messages, snapshot: structuredClone(convertToLlm(messages)),
             };
+            if (messages !== event.messages) return { messages };
 
 		} catch (error) { fail(error, ctx); }
 	});
