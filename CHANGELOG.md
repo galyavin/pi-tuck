@@ -3,6 +3,43 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.16] - 2026-11-08
+
+### Fixed
+
+- **A long session could lose the task it was working on (1.0.0 to 1.0.15).** A summary quoted only the session's first user turn, up to 12,000 characters, and the
+  newest one. Every other user turn competed in the shrunk dialogue, which in a long session clips user turns to a few words and drops the oldest. In a session
+  that runs task after task, the current task is an older turn followed by short steps, so it was clipped or dropped while a finished first task stayed whole,
+  and agents acted on a days-old task. Short sessions, and the SWE-bench chains behind our benchmarks, keep each task's prompt in the kept tail and never hit it.
+  A summary now quotes user turns from both ends: first the opening of every recent answered turn, then the first prompt's opening (up to 2,000 characters),
+  then more of the newest turns, then the rest of the first prompt. A turn that does not fit keeps its opening and a locator to the rest. The budget is 15% of
+  the room and never less than 12,000 characters. When room is tight the quotes shrink step by step: the extensions first, then the openings, then the first
+  prompt alone as before. A turn pi-tuck refused and that never got a reply is not quoted.
+
+### Added
+
+- The settings stress test checks that the first prompt and the newest 8 answered prompts keep their openings through every cut, with cells for a run of
+  tasks at 32,768, tasks followed by long steps, and a long spec followed by 30 steering turns, at 32,768 and 81,920.
+
+### Known issues
+
+- At very small free room (a few thousand tokens or less), quotes give way and an older prompt can still lose its opening: 40 findings in 32 stress cells,
+  against 447 in 168 cells on 1.0.15. One sampled cell, with about 1,000 tokens free, loses a short middle prompt that 1.0.15 kept.
+- The known issues listed under 1.0.13 still apply.
+
+### Cost
+
+On replay of 17 real single-task sessions, cut rate and cost are unchanged: 7.0 cuts per 100 requests at 131,072 for both builds, and 9.3 at 81,920 (838 cuts
+against 837); billed tokens and request time within 0.1%. Those sessions have a median of one prompt, so the new quotes rarely apply there; their cost in a
+session of hundreds of turns is not measured.
+
+### Release gates
+
+- **Shipped without a live gate, as a fix for lost work.** Replay differs from 1.0.15, because summaries now quote more: 11,860 of 13,946 requests on 29
+  recordings, with 0 dead tasks, 0 refused requests and every clip read back (7 clips, where 1.0.15 had 28: summaries changed where cuts land). Tests; CI;
+  the stress test on Pi 1.2.0 and the newest Pi.
+- The 32k regression bench makes 74 cuts in 480 rounds, up from 67: sessions with a short first prompt now quote their newest turns too.
+
 ## [1.0.15] - 2026-11-08
 
 ### Fixed
