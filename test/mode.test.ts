@@ -112,7 +112,7 @@ test('an empty compiler offer still yields the mandatory floor (initiating promp
 		expect(draft.mode).toBe('shrunk');
 		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 0$/m);
 		expect(draft.compaction.summary).toContain(LEDGER);
-		expect(draft.compaction.summary).not.toContain('Earlier request 1\n');
+		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 1$/m); // the newest user turns are quoted too
 	} finally { s.dispose(); }
 });
 

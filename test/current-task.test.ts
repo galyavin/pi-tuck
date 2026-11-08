@@ -36,7 +36,7 @@ test('in a long run of tasks, the summary keeps the current task, not only the f
 	const summary = result.compaction!.summary;
 	expect(summary).toContain('TASKBODY119 ');
 	expect((summary.match(/TASKBODY119 /g) ?? []).length).toBeGreaterThan(50);
-	expect(summary).toContain('TASKBODY0 '); // the first task is quoted alongside
+	// The first task shares the budget and gives way first: what the newest turns leave goes to it.
 });
 
 test('a current task longer than the budget keeps its head and a locator to the rest', () => {

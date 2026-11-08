@@ -187,28 +187,15 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	for (const entry of entries) if (entry.type === "message") {
 		receiptContext.messages.push(entry.message); receiptContext.sourceIndices.push(indices.get(entry.id));
 	}
-    const mandatory: TranscriptRecord[] = [];
-    // The initiating prompt is quoted first, like the current input below: text only, since quoting cannot deliver other blocks.
-    const initiating = firstUserPosition >= 0 && firstUserPosition < boundary && entries[firstUserPosition]!.id !== protectedUser?.id ? entries[firstUserPosition] : undefined;
-    const initiatingContent = initiating?.type === "message" && initiating.message.role === "user" ? initiating.message.content : undefined;
-    if (initiating && isTextOnly(initiatingContent)) {
-        const text = textOf(initiatingContent!), index = indices.get(initiating.id);
-        if (index === undefined) throw new Error("Missing initiating user source index");
-        const quoted = head(text, MAX_TASK_CONTRACT_CHARACTERS), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(initiating) }];
-        if (text.trim()) {
-            mandatory.push({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
-            if (quoted.length < text.length) mandatory.push({ kind: "omission", role: "user", sourceIndex: index,
-                reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
-        }
-    }
-    // The newest user turns, newest first, within the same budget as the initiating prompt: in a session that runs task after task, the current task
-    // is an older user turn followed by short steps, and the dialogue below clips user turns oldest first down to a few words, so without this the
-    // summary kept the first task whole and lost the one being worked on. The oldest turn that does not fit keeps its head and a locator.
+    // The newest user turns, newest first, then the initiating prompt, share one budget: in a session that runs task after task, the current task is
+    // an older user turn followed by short steps, and the dialogue clips user turns oldest first down to a few words, so quoting only the first prompt
+    // kept a finished task whole and lost the one being worked on. A turn that does not fit keeps its head and a locator; the first prompt gets what
+    // the newest turns leave, so a one-task session, whose later turns are short, still quotes it as before.
     const recent: TranscriptRecord[] = [];
     let recentLeft = MAX_TASK_CONTRACT_CHARACTERS;
     for (let at = boundary - 1; at >= 0 && recentLeft > 0; at--) {
         const entry = entries[at]!;
-        if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === initiating?.id) continue;
+        if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === firstUser?.id) continue;
         const content = entry.message.content;
         if (!isTextOnly(content)) continue;
         const text = textOf(content), index = indices.get(entry.id);
@@ -218,6 +205,20 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (quoted.length < text.length) recent.unshift({ kind: "omission", role: "user", sourceIndex: index,
             reason: `User turn continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
         recent.unshift({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
+    }
+    const mandatory: TranscriptRecord[] = [];
+    // The initiating prompt is quoted first, like the current input below: text only, since quoting cannot deliver other blocks.
+    const initiating = firstUserPosition >= 0 && firstUserPosition < boundary && entries[firstUserPosition]!.id !== protectedUser?.id ? entries[firstUserPosition] : undefined;
+    const initiatingContent = initiating?.type === "message" && initiating.message.role === "user" ? initiating.message.content : undefined;
+    if (initiating && isTextOnly(initiatingContent)) {
+        const text = textOf(initiatingContent!), index = indices.get(initiating.id);
+        if (index === undefined) throw new Error("Missing initiating user source index");
+        const quoted = head(text, recentLeft), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(initiating) }];
+        if (text.trim() && quoted.length) {
+            mandatory.push({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
+            if (quoted.length < text.length) mandatory.push({ kind: "omission", role: "user", sourceIndex: index,
+                reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
+        }
     }
     if (protectedUser?.type === "message" && protectedUser.message.role === "user")
         mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, text: textOf(protectedUser.message.content), sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }] });

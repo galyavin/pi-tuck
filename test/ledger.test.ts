@@ -55,7 +55,7 @@ test('A: the initiating prompt is quoted verbatim in the summary', () => {
 	} finally { s.dispose(); }
 });
 
-test('A: an initiating prompt over 12,000 characters keeps its first 12,000 and says how to recall the rest', () => {
+test('A: an initiating prompt over 12,000 characters keeps its head within the task budget and says how to recall the rest', () => {
 	const first = 'Task line.\n'.repeat(1300);
 	expect(first.length).toBeGreaterThan(MAX_TASK_CONTRACT_CHARACTERS);
 	const s = session(first, []);
@@ -64,12 +64,14 @@ test('A: an initiating prompt over 12,000 characters keeps its first 12,000 and 
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		const rows = records(draft.compaction.summary);
 		const excerpt = rows.find(r => r.kind === 'excerpt' && r.role === 'user' && r.text!.startsWith('Task line.'))!;
-		expect(excerpt.text).toBe(first.slice(0, MAX_TASK_CONTRACT_CHARACTERS));
+		// The newest user turns share the budget and come first, so the head is at most 12,000 characters.
+		const kept = excerpt.text!.length;
+		expect(kept).toBeGreaterThan(0); expect(kept).toBeLessThanOrEqual(MAX_TASK_CONTRACT_CHARACTERS); expect(first.startsWith(excerpt.text!)).toBe(true);
 		const note = rows.find(r => r.kind === 'omission' && r.sourceIndex === excerpt.sourceIndex)!;
-		expect(note.reason).toContain(`tuck_recall {"index":${excerpt.sourceIndex},"offset":${MAX_TASK_CONTRACT_CHARACTERS}}`);
+		expect(note.reason).toContain(`tuck_recall {"index":${excerpt.sourceIndex},"offset":${kept}}`);
 		// The locator reads exactly the omitted remainder.
-		const read = tuckRecall(tuck, s.manager.getEntries(), s.manager.getBranch(), { index: excerpt.sourceIndex!, offset: MAX_TASK_CONTRACT_CHARACTERS }) as { entries: { text: string }[] };
-		expect(read.entries[0]!.text).toBe(first.slice(MAX_TASK_CONTRACT_CHARACTERS, MAX_TASK_CONTRACT_CHARACTERS + 8000));
+		const read = tuckRecall(tuck, s.manager.getEntries(), s.manager.getBranch(), { index: excerpt.sourceIndex!, offset: kept }) as { entries: { text: string }[] };
+		expect(read.entries[0]!.text).toBe(first.slice(kept, kept + 8000));
 	} finally { s.dispose(); }
 });
 
@@ -179,7 +181,7 @@ test('B: calls from an aborted or failed response and paths with line breaks are
 	} finally { s.dispose(); }
 });
 
-test('A: an initiating prompt removed by a native edit is not quoted, and no later user message is promoted in its place', () => {
+test('A: an initiating prompt removed by a native edit is not quoted, and no later user message is quoted as the task contract in its place', () => {
 	const s = session('ORIGINAL TASK', [{ name: 'read', args: { path: 'a.md' } }]);
 	try {
 		s.manager.appendContextEdit(s.manager.getBranch().find(e => e.type === 'message' && e.message.role === 'user')!.id, null);
@@ -189,7 +191,8 @@ test('A: an initiating prompt removed by a native edit is not quoted, and no lat
 		const draft = tuckObservedDraft(floorOnly, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		expect(draft.compaction.summary).not.toContain('ORIGINAL TASK');
-		expect(records(draft.compaction.summary).filter(r => r.kind === 'excerpt')).toEqual([]);
+		// Later user turns may be quoted as the newest turns, never as a replacement initiating prompt.
+		expect(draft.compaction.summary).not.toContain('Initiating prompt continues');
 	} finally { s.dispose(); }
 });
 

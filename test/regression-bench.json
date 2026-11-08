@@ -9,7 +9,7 @@
 		"summaryCharsMean": 12203,
 		"summaryCharsMax": 17100,
 		"refusals": 0,
-		"medianCutMs": 7.4
+		"medianCutMs": 3
 	},
 	"prose-heavy@64k": {
 		"rounds": 72,
@@ -21,7 +21,7 @@
 		"summaryCharsMean": 13499,
 		"summaryCharsMax": 16644,
 		"refusals": 0,
-		"medianCutMs": 5.5
+		"medianCutMs": 2
 	},
 	"prose-heavy@128k": {
 		"rounds": 72,
@@ -33,7 +33,7 @@
 		"summaryCharsMean": 15112,
 		"summaryCharsMax": 15112,
 		"refusals": 0,
-		"medianCutMs": 6.2
+		"medianCutMs": 2.2
 	},
 	"low-prose@32k": {
 		"rounds": 68,
@@ -45,7 +45,7 @@
 		"summaryCharsMean": 9022,
 		"summaryCharsMax": 12923,
 		"refusals": 0,
-		"medianCutMs": 3.6
+		"medianCutMs": 1.9
 	},
 	"low-prose@64k": {
 		"rounds": 68,
@@ -57,7 +57,7 @@
 		"summaryCharsMean": 8899,
 		"summaryCharsMax": 8899,
 		"refusals": 0,
-		"medianCutMs": 3.7
+		"medianCutMs": 1.5
 	},
 	"low-prose@128k": {
 		"rounds": 68,
@@ -82,7 +82,7 @@
 		"summaryCharsMean": 9746,
 		"summaryCharsMax": 13356,
 		"refusals": 0,
-		"medianCutMs": 3.8
+		"medianCutMs": 1.6
 	},
 	"large-tool-output@64k": {
 		"rounds": 69,
@@ -94,7 +94,7 @@
 		"summaryCharsMean": 9759,
 		"summaryCharsMax": 10748,
 		"refusals": 0,
-		"medianCutMs": 3.4
+		"medianCutMs": 1.3
 	},
 	"large-tool-output@128k": {
 		"rounds": 69,
@@ -111,27 +111,27 @@
 	},
 	"synthetic-low-prose@32k": {
 		"rounds": 480,
-		"cuts": 67,
-		"cutsPer100Rounds": 13.96,
+		"cuts": 74,
+		"cutsPer100Rounds": 15.42,
 		"lowYieldShare": 0,
-		"carriedMean": 8331,
-		"carriedMax": 8778,
-		"summaryCharsMean": 12320,
+		"carriedMean": 8428,
+		"carriedMax": 8944,
+		"summaryCharsMean": 12566,
 		"summaryCharsMax": 23607,
 		"refusals": 0,
-		"medianCutMs": 61.3
+		"medianCutMs": 19.8
 	},
 	"synthetic-low-prose@64k": {
 		"rounds": 480,
 		"cuts": 25,
 		"cutsPer100Rounds": 5.21,
 		"lowYieldShare": 0,
-		"carriedMean": 13721,
-		"carriedMax": 15937,
-		"summaryCharsMean": 20702,
+		"carriedMean": 13777,
+		"carriedMax": 16038,
+		"summaryCharsMean": 20924,
 		"summaryCharsMax": 46912,
 		"refusals": 0,
-		"medianCutMs": 68.5
+		"medianCutMs": 20.3
 	},
 	"synthetic-low-prose@128k": {
 		"rounds": 480,
@@ -143,6 +143,6 @@
 		"summaryCharsMean": 35413,
 		"summaryCharsMax": 58243,
 		"refusals": 0,
-		"medianCutMs": 17.8
+		"medianCutMs": 5.6
 	}
 }
