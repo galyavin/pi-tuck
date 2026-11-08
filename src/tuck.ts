@@ -266,8 +266,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const budgets = [taskBudget, taskBudget / 2, taskBudget / 4, taskBudget / 8, 1500].map(Math.floor).filter((b, at, all) => b >= 1500 && all.indexOf(b) === at);
     const choices = [{ head: 300, budgets }, { head: 100, budgets: [1500, 600] }]
         .flatMap(({ head, budgets }) => budgets.map(budget => ({ budget, head, first: true }))).concat([{ budget: MAX_TASK_CONTRACT_CHARACTERS, head: 0, first: true }, { budget: 0, head: 0, first: false }]);
-    let floor = floorAt(Math.max(items.length, actions.length), choices[0]!);
-    for (const choice of choices) {
+    // When even the smallest floor cannot fit, no step of the ladder can: refuse at once instead of building every preview.
+    const smallest = floorAt(0, choices[choices.length - 1]!);
+    let floor = smallest;
+    if (fits(smallest.base)) for (const choice of choices) {
         floor = floorAt(Math.max(items.length, actions.length), choice);
         if (fits(floor.base)) break;
         if (items.length || actions.length) { floor = floorAt(0, choice); if (fits(floor.base)) break; }
