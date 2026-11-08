@@ -57,3 +57,5 @@ The first run of this gate (arms L = 1.0.11 and O = `21fa1a4`) was stopped by ha
 ## Later gates
 
 One line per later gate is appended below before the gate starts (base, candidate, tier, suite, chains), and lane counts and start commands are not registered terms of any gate in this file from here on.
+
+- 2026-11-08: base pi-tuck 1.0.15 (`85f71d5`, tag `v1.0.15`, arm L), candidate pi-tuck 1.0.16 (`dee0eab`, tag `v1.0.16`, arm O), tier 1 (at least 60 pairs, lower bound above −10 points, lost tasks counted as in the restart section), suite `w81`, chains `t06`, `t07`, `t08` (90 pairs).
