@@ -3,7 +3,7 @@ import { orderByOriginalSource } from "./tuck/core/source-order";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
 import { parseRecords, serializeTranscript, serializeRecord, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from "./tuck/core/transcript";
 import { DIALOGUE_SUFFIX } from "./tuck/core/format";
-import { carriedTarget, conversationTokens } from "./budget";
+import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
@@ -80,8 +80,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	const chars = (calibration.ok ? calibration.messages.reduce((n, m) => n + estimateSourceMessageChars(m), 0) : 0)
 		+ (input.previousSummary?.length ?? 0);
 	const { charsPerToken } = tuck.calibrateCharsPerToken(chars, input.tokensBefore);
-    // A rank boundary, not another spending limit: the preferred tail keeps
-    // its existing half-room/25k position inside the single carried grant.
+    // The existing keep-recent rule offers a native suffix. The budget owner
+    // bounds its rank and base price below, in the planner's estimate.
     // The planner's reserve includes mandatory input (system, host and incoming prompt), so this is half of the target room *after* that
     // fixed input, not half of the whole room. Current/fresh-source floors below may still require an explicit rejection.
     const inputRoom = Math.floor(Math.max(0, (ctx.model?.contextWindow ?? 0) - reserveTokens - 1) / 2);
@@ -161,7 +161,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 	if (cut.messages.length !== cut.selectedIds.length || (!cut.compactAll && !entries.some((e) => e.id === cut.firstKeptEntryId)))
 		throw new Error("pi-tuck returned an invalid source boundary");
     const budgetCut = cut.budgetCut;
-    const preferredBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
+    let preferredBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
     let floorBoundary = freshRound ? lastResponse : entries.length;
     if (freshBash >= 0) floorBoundary = Math.min(floorBoundary, freshBash);
     if (userPosition >= 0 && (!textOnly || userPosition > lastResponse)) floorBoundary = Math.min(floorBoundary, userPosition);
@@ -218,6 +218,18 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         }
         for (let at = branch.length - 1; at >= 0; at--) native[at] += native[at + 1]!;
         const nativeAt = (boundary: number) => boundary === entries.length ? 0 : native[rawPositions.get(entries[boundary]!.id)!]!;
+        const tailTokens = carriedTailTokens(nativeAt(preferredBoundary));
+        // Move only the older end, to the newest whole protocol-safe entries
+        // within the shared tail size. Required current/fresh native sources
+        // stay whole even when their floor exceeds that preferred amount.
+        while (preferredBoundary < floorBoundary && nativeAt(preferredBoundary) > tailTokens) {
+            preferredBoundary++;
+            while (preferredBoundary < floorBoundary) {
+                const entry = entries[preferredBoundary]!;
+                if ((entry.type === "message" && entry.message.role !== "toolResult") || entry.type === "custom_message" || entry.type === "branch_summary") break;
+                preferredBoundary++;
+            }
+        }
         const envelope = convertToLlm([{ role: "compactionSummary", summary: "", tokensBefore: 0, timestamp: 0 }]);
         const wrapperCharacters = envelope.reduce((n, message) => n + textOf(message.content).length, 0);
         const summaryTokens = (characters: number) => Math.ceil((characters + wrapperCharacters) / 4);

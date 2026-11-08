@@ -37,7 +37,7 @@ function session(rounds = 12) {
 const forcing = (target: DraftMode): Tuck => ({ ...tuck, compileDialogue: input =>
 	target === 'dialogue' ? tuck.compileDialogue(input) : '' });
 
-test('the tail budget halves the room left after fixed input, capped at 25k', () => {
+test('the existing native-tail offer respects the room before the shared tail amount is applied', () => {
 	const s = session();
 	try {
 		const measure = (messages: Parameters<typeof conversationTokens>[0]) => measurableConversationTokens(messages, s.ctx);

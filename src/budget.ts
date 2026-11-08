@@ -26,10 +26,13 @@ export const validCutAt = (value: unknown): value is number => typeof value === 
 /** The initial default cut point: 60% of the room before a usable previous cut. Measured against 1 with paired replays (no answer loss) and billed
  * input under automatic and explicit prompt caching (about 17% less at 128k, 10-14% at 32k). */
 export const DEFAULT_CUT_AT = 0.6;
+/** Preferred native carry, in the planner's estimate: never more than the
+ * keep-recent cut offers or the tail amount the adaptive band assumes. */
+export const carriedTailTokens = (offeredTokens: number): number => Math.min(offeredTokens, MAX_TAIL_TOKENS / 2);
 export const bandOf = (room: number, cutAt = 1, adaptive?: { system: number; tokensAfter: number; factor: number }): number => {
 	const positive = Math.max(0, room);
 	const base = Math.floor(positive * cutAt);
-	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + MAX_TAIL_TOKENS / 2) * adaptive.factor)) : base);
+	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + carriedTailTokens(MAX_TAIL_TOKENS)) * adaptive.factor)) : base);
 };
 
 /** The cut's one carried-context grant, in the planner's estimate. Combines

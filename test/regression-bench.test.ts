@@ -28,7 +28,8 @@ const baseline: typeof import('../src/tuck') | undefined = baselinePath ? await 
 const baselineBudget: typeof import('../src/budget') | undefined = baselinePath ? await import(/* @vite-ignore */ pathToFileURL(baselinePath.replace(/tuck\.js$/, 'budget.js')).href) : undefined;
 const performanceRows: Record<string, { v117: number; current: number; ratio: number }> = {};
 interface CutObservation { round: number; target: string; before: number; after: number; carried: number; cap: number; overshoot: number;
-  mode?: string; boundary: number; baselineMode?: string; baselineBoundary?: number; baselineAfter?: number; baselineCarried?: number; baselineUnavailable?: string }
+  mode?: string; boundary: number; nativeAfter?: number; summaryAfter?: number; baselineNativeAfter?: number; baselineSummaryAfter?: number;
+  baselineMode?: string; baselineBoundary?: number; baselineAfter?: number; baselineCarried?: number; baselineUnavailable?: string }
 const cutObservations: Record<string, CutObservation[]> = {};
 const capFailures: Record<string, string[]> = {};
 const decisionObservations: Record<string, unknown[]> = {};
@@ -178,11 +179,19 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
                 const preview = SessionManager.inMemory(session.cwd, undefined, [manager.getHeader()!, ...manager.getBranch()]);
                 preview.appendCompaction(old.compaction.summary, old.compaction.firstKeptEntryId, before, old.compaction.details, true);
                 observation.baselineCarried = preview.buildSessionProjection().messages.reduce((n, m) => n + estimateTokens(m), 0);
+                if (process.env.PART3_CUT_REPORT) {
+                    observation.baselineNativeAfter = plannerMeasure(preview.buildSessionProjection().messages.filter(m => m.role !== 'compactionSummary') as never[]);
+                    observation.baselineSummaryAfter = old.after - observation.baselineNativeAfter;
+                }
                 if (process.env.PART3_ENFORCE === '1' && decision.plan.after > old.after)
                     failures.push(`round ${rounds}: ${decision.plan.after} exceeds v1.0.17 at this cut point (${old.after})`);
             } else observation.baselineUnavailable = old.unavailable;
         }
 		manager.appendCompaction(c.summary, c.firstKeptEntryId, before, c.details, true);
+		if (process.env.PART3_CUT_REPORT) {
+			observation.nativeAfter = measure(manager.buildSessionProjection().messages.filter(m => m.role !== 'compactionSummary') as never[]);
+			observation.summaryAfter = observation.after - observation.nativeAfter;
+		}
 		if (before - decision.plan.after < room / 10) low++;
         observation.carried = carried(); observations.push(observation);
 		carriedAfter.push(observation.carried); chars.push(c.summary.length); times.push(ms);
