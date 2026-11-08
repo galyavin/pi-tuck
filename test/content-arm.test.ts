@@ -104,7 +104,7 @@ function rankedFixture(laterEdit = false, olderItems = false) {
     f.run('write', { path: 'older.py', content: Array.from({ length: 12 }, (_, i) => `def older_${i}():`).join('\n') });
     f.run('bash', { command: 'older-command' }, 'OLD_OUTPUT: ' + 'x'.repeat(220));
   }
-  f.run('write', { path: 'engine.go', content: Array.from({ length: 12 }, (_, i) => `func Engine${i}() {}`).join('\n') });
+  f.run('write', { path: 'engine.go', content: Array.from({ length: 3 }, (_, i) => `func Engine${i}() {}`).join('\n') });
   f.run('bash', { command: 'npm test' }, 'old log\n'.repeat(1000) + 'Tests: 128 passed\nErrors: 0\nDuration: 1s');
   for (let i = 0; i < 8; i++) {
     f.manager.appendMessage({ role: 'user', content: `OPENING_${i}: ` + 'Task context. '.repeat(10), timestamp: 0 });
@@ -119,7 +119,7 @@ function rankedFixture(laterEdit = false, olderItems = false) {
   return { ...f, opening, draft };
 }
 
-test('observations spend the carried target and disappear before protected openings or the preferred native tail', () => {
+test('observations spend only leftover room and disappear before protected openings or the whole native tail', () => {
   const f = rankedFixture(), large = f.draft(1200);
   if (!large.compaction) throw new Error(large.unavailable);
   expect(large.compaction.summary).toContain('(output tail):');

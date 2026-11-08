@@ -377,32 +377,6 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             }
         }
         }
-        // These optional observations follow the pointer lists and precede the
-        // recent assistant third. Price them only against the one carried target;
-        // they never change its base, the openings, or the selected native tail.
-        const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
-        const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
-        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
-        for (const item of shownFiles) item.definitions = observations.get(item.path);
-        const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
-        let listCost = lineCost(ledger);
-        const fitsObservation = (extra: number) => price(frameLength(protectedView.cost + listCost + extra,
-            protectedView.rows.length + ledger.length), boundary) <= target;
-        // Each kind gives way as whole items, oldest first; an oversized newest
-        // item cannot promote an older one. Pointer lines need no extra omission.
-        for (const item of shownActions) {
-            if (!item.outputTail) continue;
-            const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
-            if (!fitsObservation(extra)) break;
-            outputs.add(item); listCost += extra;
-        }
-        for (const item of shownFiles) {
-            if (!item.definitions) continue;
-            const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
-            if (!fitsObservation(extra)) break;
-            definitions.add(item); listCost += extra;
-        }
-        if (outputs.size || definitions.size) ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
         const mandatory = new Set([...protectedView.whole].filter(index => {
             const row = users.find(row => row.index === index);
             return row?.message.role === "user" && isTextOnly(row.message.content);
@@ -522,6 +496,34 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 else break;
             }
             if (boundary !== compiledBoundary) offer = assemble(compiled.text, boundary);
+        }
+        // The observations are the very last rank, after the complete dialogue
+        // fill and the native tail's older end. Spend only their leftover room;
+        // no observation can change the selected dialogue or tail boundary.
+        const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
+        const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
+        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
+        for (const item of shownFiles) item.definitions = observations.get(item.path);
+        const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
+        let observationCost = 0;
+        const fitsObservation = (extra: number) => price(offer.summary.length + observationCost + extra, boundary) <= target;
+        // Each kind gives way as whole items, oldest first; an oversized newest
+        // item cannot promote an older one. Pointer lines need no extra omission.
+        for (const item of shownActions) {
+            if (!item.outputTail) continue;
+            const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            outputs.add(item); observationCost += extra;
+        }
+        for (const item of shownFiles) {
+            if (!item.definitions) continue;
+            const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            definitions.add(item); observationCost += extra;
+        }
+        if (outputs.size || definitions.size) {
+            ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
+            offer = assemble(compiled.text, boundary);
         }
         const projection = preview(offer.summary, boundary);
         assertNativeToolRounds(projection);
