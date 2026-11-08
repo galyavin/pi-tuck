@@ -7,15 +7,16 @@
 # Usage: harness/run_adaptive_gate.sh   (from anywhere; the model key must be in the environment, as for every live run)
 cd "$(dirname "$0")/.." || exit 1
 L_BUILD=${L_BUILD:-runs/tuck-1.0.12}; O_BUILD=${O_BUILD:-runs/tuck-adaptive-882f6f6}
-LANES=${LANES:-4}; PAIRS=$((LANES / 2)); [ "$PAIRS" -lt 1 ] && PAIRS=1
-mkdir -p runs/live81
-F1=$(harness/fingerprint_guard.sh now runs/live81/model-fingerprint-at-start.log)
+ARMS=${ARMS:-LO}; LANES=${LANES:-4}; PAIRS=$((LANES / ${#ARMS})); [ "$PAIRS" -lt 1 ] && PAIRS=1   # one lane per arm of a chain; ARMS=O runs the candidate arm alone
+SUITE=${SUITE:-w81}; ROOT=runs/live${SUITE#w}   # w81 -> runs/live81, w81b -> runs/live81b
+mkdir -p "$ROOT"
+F1=$(harness/fingerprint_guard.sh now "$ROOT/model-fingerprint-at-start.log")
 [ -n "$F1" ] || { echo "no model sha at the start (server error or no key in the environment): not starting" >&2; exit 1; }
-runs/.venv/bin/python harness/run_live_all.py --suite w81 --tuck "$L_BUILD" --pairs "$PAIRS" --arms LO --sessions "${SESSIONS:-t06,t07,t08,t09,t10}" \
+runs/.venv/bin/python harness/run_live_all.py --suite "$SUITE" --tuck "$L_BUILD" --pairs "$PAIRS" --arms "$ARMS" --sessions "${SESSIONS:-t06,t07,t08,t09,t10}" \
   --tuck-arm L="$L_BUILD" --tuck-arm O="$O_BUILD" --wall-seconds 0 --stall-seconds 3600 &
 d=$!
 sleep 5
 harness/trim_loop.sh > /dev/null 2>&1 &
-harness/gate_load_sampler.sh > /dev/null 2>&1 &
-harness/fingerprint_guard.sh watch "$d" "$F1" > /dev/null 2>&1 &
+harness/gate_load_sampler.sh "$ROOT" > /dev/null 2>&1 &
+GUARD_LOG="$ROOT/model-fingerprints.log" GUARD_NOTE="$ROOT/STOPPED-FINGERPRINT.txt" harness/fingerprint_guard.sh watch "$d" "$F1" > /dev/null 2>&1 &
 wait $d

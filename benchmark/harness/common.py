@@ -38,11 +38,21 @@ W32G = {**W32M, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRec
 # The gate of the adaptive candidate (PREREG-ADAPTIVE.md), on the new model setup: the same model entry with the window forced to its 81,920 tokens, Pi's default compaction settings
 # (reserveTokens 16,384, keepRecentTokens 20,000) and the 16,384-token output cap.
 W81 = {"window": 81920, "max_tokens": 16384, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 20000}}
+# The SWE-bench Pro head-to-head (pi-tuck against Pi's native compaction, one task per session): the same model entry, Pi's default compaction settings, the window forced to 81,920 (the
+# server's own context) or, for the smaller room, to 49,152; both arms always share one setting.
+PRO81 = {"window": 81920, "max_tokens": 16384, "compaction": {"enabled": True, "reserveTokens": 16384, "keepRecentTokens": 20000}}
+# The 49,152-token window of the head-to-head (room 32,768 = 49,152 - 16,384) is built on the server's real 81,920 context so that the room is a hard limit for both arms: the replies are capped at
+# 49,152 tokens and Pi's reserve is 49,152, so Pi and pi-tuck both plan a room of 81,920 - 49,152 = 32,768, and the server itself refuses any request whose prompt plus that reply cap passes 81,920,
+# that is, any prompt over 32,768 tokens (the request fails its task).
+PRO49 = {"window": 81920, "max_tokens": 49152, "compaction": {"enabled": True, "reserveTokens": 49152, "keepRecentTokens": 20000}}
 SUITES = {"main": {"root": "live", "model": MODEL, "thinking": THINKING, "health": None},
+          "pro81": {"root": "livepro81", "model": MODEL, "thinking": THINKING, "health": None},
+          "pro49": {"root": "livepro49", "model": MODEL, "thinking": THINKING, "health": None},
           "w32": {"root": "live32", "model": W32["model"], "thinking": W32["thinking"], "health": "https://openrouter.ai/api/v1/models"},
           "w32m": {"root": "live32m", "model": MODEL, "thinking": THINKING, "health": None},
           "w32g": {"root": "live32g", "model": MODEL, "thinking": THINKING, "health": None},
-          "w81": {"root": "live81", "model": MODEL, "thinking": THINKING, "health": None}}
+          "w81": {"root": "live81", "model": MODEL, "thinking": THINKING, "health": None},
+          "w81b": {"root": "live81b", "model": MODEL, "thinking": THINKING, "health": None}}  # the w81 settings with their own results folder, for a later gate on the same chains
 
 
 def refuse_openrouter(what: str):
@@ -91,8 +101,10 @@ def agent_dir(arm: str, suite: str = "main") -> Path:
         return agent_dir_w32m(arm)
     if suite == "w32g":
         return agent_dir_w32m(arm, W32G, "w32g")
-    if suite == "w81":
-        return agent_dir_w32m(arm, W81, "w81")
+    if suite in ("w81", "w81b"):
+        return agent_dir_w32m(arm, W81, suite)
+    if suite in ("pro81", "pro49"):
+        return agent_dir_w32m(arm, PRO81 if suite == "pro81" else PRO49, suite)
     path = RUNS / "agent" / arm
     path.mkdir(parents=True, exist_ok=True)
     if arm == "C" and not (path / "pi-tuck").exists():  # arm C is pi-tuck 1.0.3 with the semantic runtime arm B provisioned, cloned
