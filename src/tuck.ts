@@ -236,21 +236,26 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     };
     const before = measure(projected.messages);
     const model = ctx.model;
-    const quotes = (withRecent: boolean) => withRecent ? [...mandatory, ...recent] : mandatory;
-    const floorAt = (keep: number, withRecent: boolean) => {
+    // When room is tight the newest turns win over the first: a long-running session's first prompt is often a finished task.
+    const first = new Set(initiating ? [indices.get(initiating.id)] : []);
+    const quotes = (choice: { recent: boolean; first: boolean }) => [...mandatory.filter(r => choice.first || !first.has(r.sourceIndex)), ...(choice.recent ? recent : [])];
+    const floorAt = (keep: number, choice: { recent: boolean; first: boolean }) => {
         const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        const messages = preview(serializeTranscript([...quotes(withRecent), ...ledger]) + DIALOGUE_SUFFIX);
-        return { ledger, messages, base: measure(messages), withRecent };
+        const messages = preview(serializeTranscript([...quotes(choice), ...ledger]) + DIALOGUE_SUFFIX);
+        return { ledger, messages, base: measure(messages), choice };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
-    // When the whole floor cannot fit, the trail and the ledger keep only their headings and counts, then the recent user turns go; only the
-    // floor without them can refuse the cut, as before they were quoted.
-    let floor = floorAt(Math.max(items.length, actions.length), true);
-    if (!fits(floor.base) && (items.length || actions.length)) floor = floorAt(0, true);
-    if (!fits(floor.base) && recent.length) floor = floorAt(Math.max(items.length, actions.length), false);
-    if (!fits(floor.base) && recent.length && (items.length || actions.length)) floor = floorAt(0, false);
+    // The floor gives way in this order: the trail and ledger to their headings, the first prompt's quote, then the newest turns' quote. Only the
+    // floor with none of them can refuse the cut, as before either was quoted.
+    const choices = [{ recent: true, first: true }, { recent: true, first: false }, { recent: false, first: true }, { recent: false, first: false }];
+    let floor = floorAt(Math.max(items.length, actions.length), choices[0]!);
+    for (const choice of choices) {
+        floor = floorAt(Math.max(items.length, actions.length), choice);
+        if (fits(floor.base)) break;
+        if (items.length || actions.length) { floor = floorAt(0, choice); if (fits(floor.base)) break; }
+    }
     const { ledger, base } = floor;
-    const kept = quotes(floor.withRecent);
+    const kept = quotes(floor.choice);
     if (!model || !fits(base))
         return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorMessages: floor.messages };
     const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
