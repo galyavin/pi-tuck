@@ -20,7 +20,7 @@ export type Measure = ((messages: AgentMessage[]) => number) & {
     /** The same per-message estimate, including any temporary native result clip. */
     messageTokens?: (message: AgentMessage) => number;
 };
-/** The summary view that produced a draft: the whole pre-cut dialogue, or the same dialogue shrunk to the allowance. Both carry the file ledger. */
+/** Diagnostic description of the single ranked compiler result. Never a decision input. */
 export type DraftMode = "dialogue" | "shrunk";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
     // The actual floor projection lets the caller measure it without the fresh results it may clip.
@@ -35,11 +35,9 @@ export interface Tuck {
 	applyTailBudget(entries: SessionEntry[], cut: Extract<Cut, { ok: true }>, options: { charsPerToken: number; maxTokens?: number; oversizedFactor?: number }): Cut;
 	calibrateCharsPerToken(chars: number, tokens: number): { charsPerToken: number };
 	buildGlobalIndexById(entries: readonly SessionEntry[]): Map<string, number>;
-	/** The lower ranks within `ranking.maxBriefChars`: recent assistant third, more user text, then remaining dialogue. */
-	compileShrunkDialogue(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
-		ranking: { maxBriefChars: number; mandatorySourceIndices?: ReadonlySet<number> } }): string;
-	/** The whole pre-cut dialogue view; "" offers none, and the shrunk view is used. */
-	compileDialogue(input: Parameters<Tuck["compileShrunkDialogue"]>[0]): string;
+	/** Fill the lower ranks once within the remaining serialized amount. */
+	compileDialogue(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
+		ranking: { maxBriefChars: number; mandatorySourceIndices?: ReadonlySet<number> } }): ReturnType<typeof compileDialogue>;
 	prepareKeywordQuery(query: string): PreparedKeywordQuery;
 	searchEntriesDetailed(entries: SearchHit[], messages: Message[], query: string,
 		tuning: { relativeFloor: number; cap: number }): {
@@ -49,10 +47,10 @@ export interface Tuck {
 import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./tuck/cut";
 import { calibrateCharsPerToken, estimateSourceMessageChars } from "./tuck/core/token-estimate";
 import { buildGlobalIndexById } from "./tuck/core/global-indices";
-import { compileShrunkDialogue, compileDialogue } from "./tuck/core/summarize";
+import { compileDialogue } from "./tuck/core/summarize";
 import { prepareKeywordQuery } from "./tuck/core/keyword-query";
 import { searchEntriesDetailed } from "./tuck/core/search-entries";
-export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileShrunkDialogue, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
+export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
 /** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation. */
 export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false, newPrompt = false) {
  return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual, newPrompt }, ctx, reserveTokens, measure, policy, retainCurrentInput);
@@ -414,13 +412,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             const summary = render([...records, ...ledger]);
             return { summary, after: price(summary.length, at), records };
         };
-        const whole = tuck.compileDialogue(compileInput);
-        const complete = whole && whole.length <= maxSummaryCharacters ? assemble(whole) : undefined;
-        if (input.operatorManual && complete && complete.after >= before && before + reserveTokens < model.contextWindow)
-            return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
-        const mode: DraftMode = complete && complete.after <= target ? "dialogue" : "shrunk";
-        const compiled = mode === "dialogue" ? whole : tuck.compileShrunkDialogue(compileInput);
-        let offer = mode === "dialogue" ? complete! : assemble(compiled);
+        const compiled = tuck.compileDialogue(compileInput);
+        let offer = assemble(compiled.text);
         // Only capacity left after all higher ranks can extend the native tail
         // beyond its preferred rank boundary. No old allocator is consulted.
         const liveStartId = calibration.ok ? calibration.selectedIds[0] : undefined;
@@ -478,13 +471,14 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 if (extensionPrice(at) <= target) boundary = at;
                 else break;
             }
-            if (boundary !== compiledBoundary) offer = assemble(compiled, boundary);
+            if (boundary !== compiledBoundary) offer = assemble(compiled.text, boundary);
         }
         const projection = preview(offer.summary, boundary);
         assertNativeToolRounds(projection);
         const after = measure(projection);
         if (after + reserveTokens >= model.contextWindow || after >= before)
             return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floorProjection };
+        const mode: DraftMode = compiled.step === "whole" ? "dialogue" : "shrunk";
         return { compaction: { summary: offer.summary, firstKeptEntryId: entries[boundary]?.id ?? "", tokensBefore: input.tokensBefore,
             details: { ...detailsAt(boundary), tokensAfter: after, carriedTarget: target, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
     }

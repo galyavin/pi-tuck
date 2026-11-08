@@ -145,13 +145,13 @@ test('a lean band is planned first and the room plan landing below it is not tak
 	expect(choose(0.6, 1000, { band: draft(300, 'band'), room: nothing() }, [], 300)).toEqual({ kind: 'fault', capacity: false, message: 'did not reduce' });
 });
 
-test('a band the cut point does not bind is not lean: the room is planned first and a room plan below the band is taken as before', () => {
+test('a capped band still plans the band first even when the room plan would land below it', () => {
 	// F = 0.98 and above leave the band at the room less the margin (980), whatever F is.
 	for (const cutAt of [1, 0.99, 0.98]) {
 		expect(bandOf(1000, cutAt)).toBe(980);
 		const calls: Target[] = [];
-		expect(choose(cutAt, 999, { band: draft(300, 'band'), room: draft(450, 'room') }, calls)).toMatchObject({ kind: 'cut', target: 'room', plan: { tag: 'room' } });
-		expect(calls).toEqual(['room']);
+		expect(choose(cutAt, 999, { band: draft(300, 'band'), room: draft(450, 'room') }, calls)).toMatchObject({ kind: 'cut', target: 'band', plan: { tag: 'band' } });
+		expect(calls).toEqual(['band']);
 	}
 	// F = 0.97 binds (the band is 970): lean.
 	const calls: Target[] = [];
@@ -296,7 +296,7 @@ test('a request that fits the room is never rejected, however low the cut point;
 	}
 });
 
-// A long prose history, which a summary cannot make small: with a low cut point the room plan no longer lands below the band, so the band is planned.
+// A long prose history exercises the different amounts selected by lean and default bands.
 async function proseSession(cutAt: number | undefined, total: number) {
 	const h = await harness({ at: 'prompt', complete: 20000, host: HOST, compaction: { cutAt } });
 	try {
@@ -318,7 +318,7 @@ test('cutAt 0.3: the planner targets the lean band, and the cut leaves far less 
 	expect(standard.cuts, standard.probe).toBe(0);
 	expect(lean.cuts, lean.probe).toBe(1);
 	const receipt = receiptOf(lean.entries[0]!);
-	// The room plan does not land below the lean band, so the band was planned: its reserve is the window less the band, plus the mandatory input.
+	// The band reserve is the window less the band, plus the mandatory input.
 	expect(receipt.target, lean.probe).toBe('band');
 	expect(receipt.cutAt, lean.probe).toBe(0.3);
 	expect(receipt.tokensAfter + receipt.mandatoryInputTokens!, lean.probe).toBeLessThan(band);
@@ -326,7 +326,7 @@ test('cutAt 0.3: the planner targets the lean band, and the cut leaves far less 
 	// Over the room both cut; the lean cut keeps less.
 	const leanDue = await proseSession(0.3, ROOM + 500), standardDue = await proseSession(undefined, ROOM + 500);
 	expect(leanDue.cuts, leanDue.probe).toBe(1); expect(standardDue.cuts, standardDue.probe).toBe(1);
-	expect(receiptOf(standardDue.entries[0]!).target, standardDue.probe).toBe('room');
+	expect(receiptOf(standardDue.entries[0]!).target, standardDue.probe).toBe('band');
 	expect(receiptOf(leanDue.entries[0]!).tokensAfter, leanDue.probe).toBeLessThan(receiptOf(standardDue.entries[0]!).tokensAfter / 2);
 	for (const r of [lean, leanDue, standard, standardDue]) for (const guarded of r.guard) expect(guarded, r.probe).toBeLessThan(ROOM);
 });

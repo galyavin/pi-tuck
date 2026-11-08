@@ -4,12 +4,12 @@
 		"cuts": 9,
 		"cutsPer100Rounds": 12.5,
 		"lowYieldShare": 0,
-		"carriedMean": 7365,
+		"carriedMean": 7360,
 		"carriedMax": 8761,
-		"summaryCharsMean": 11038,
-		"summaryCharsMax": 13718,
+		"summaryCharsMean": 10859,
+		"summaryCharsMax": 13310,
 		"refusals": 0,
-		"medianCutMs": 4
+		"medianCutMs": 3.7
 	},
 	"prose-heavy@64k": {
 		"rounds": 72,

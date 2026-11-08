@@ -47,7 +47,7 @@ test(`a recorded ${how} shows the arithmetic it was made with`, async () => {
 		const records = await recorded(directory, hasProposal(directory));
 		const proposal = records.find(r => r.kind === 'proposal')!.data as { details: { diagnosticReceipt: { settings: Record<string, unknown> } } };
 		const settings = proposal.details.diagnosticReceipt.settings;
-		expect(settings).toMatchObject({ hostInputTokens: HOST, target: 'room', triggerMarginTokens: 2880, responseReserveTokens: 128000, calibrationFactor: 1 });
+		expect(settings).toMatchObject({ hostInputTokens: HOST, target: 'band', triggerMarginTokens: 2880, responseReserveTokens: 128000, calibrationFactor: 1 });
 		expect(settings.mandatoryInputTokens).toBeGreaterThan(HOST);
 		expect(settings).not.toHaveProperty('projectedHostInputTokens');
 		expect(settings).not.toHaveProperty('incomingPromptEstimateTokens');

@@ -1,7 +1,7 @@
 import {expect,test,vi} from 'vitest';
 import {SessionManager,DefaultResourceLoader,SettingsManager,type ExtensionToolContext} from '@earendil-works/pi-coding-agent';
 import {installCompaction} from '../src/compaction';
-import {compileDialogue,compileShrunkDialogue} from '../src/tuck/core/summarize';
+import {compileDialogue} from '../src/tuck/core/summarize';
 import {parseRecords,serializeRecords,splitSummary} from '../src/tuck/core/transcript';
 import {resolveSourceTime} from '../src/tuck/core/source-time';
 const usage={input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
@@ -40,15 +40,15 @@ test('actual registered source/search/continuation/around/image/export surfaces 
 
 test('public original custom notices keep their native entry identity and carry no time: only user turns are timed',()=>{
  const m=SessionManager.inMemory('/test'),id=m.appendCustomMessageEntry('public','Original public qualification',true),entry=m.getBranch()[0]!;
- const compiled=compileDialogue({messages:[{role:'custom',customType:'public',content:'Original public qualification',display:true,timestamp:999}],sourceIndices:[undefined],sourceEntryIds:[id],sourceTimes:[resolveSourceTime(entry)]});
+ const compiled=compileDialogue({messages:[{role:'custom',customType:'public',content:'Original public qualification',display:true,timestamp:999}],sourceIndices:[undefined],sourceEntryIds:[id],sourceTimes:[resolveSourceTime(entry)]}).text;
  const record=rows(compiled)[0];expect(record.sourceEntryId).toBe(id);expect(resolveSourceTime(entry).basis).toBe('journal');expect(record).not.toHaveProperty('sourceTime');expect(record).not.toHaveProperty('sourceIndex');expect(parseRecords(serializeRecords([record]))).toEqual([record]);
 });
 
-test('portable core times user turns only, in the whole and the shrunk dialogue, and keeps strict serialization',()=>{
+test('portable core times user turns only, at different available amounts, and keeps strict serialization',()=>{
  const messages=[{role:'user' as const,content:'Old binding: retain qualified mode.',timestamp:999}, {...answer('later correction'),content:[{type:'text' as const,text:'later correction'},{type:'toolCall' as const,id:'a',name:'bash',arguments:{command:'check'}}]}, {role:'toolResult' as const,toolCallId:'a',toolName:'bash',content:[{type:'text' as const,text:'recorded output'}],isError:false,timestamp:999}];
  const sourceTimes=[{basis:'journal' as const,utc:'2026-01-01T00:00:00Z'},{basis:'message' as const,utc:'2026-02-01T00:00:00Z'},{basis:'unknown' as const}];
  const input={messages,sourceIndices:[5,6,7],sourceTimes,ranking:{maxBriefChars:2400}};
- const whole=compileDialogue(input),shrunk=compileShrunkDialogue(input),records=rows(shrunk);
+ const whole=compileDialogue({...input,ranking:{maxBriefChars:Infinity}}).text,shrunk=compileDialogue(input).text,records=rows(shrunk);
  // The dialogue holds no tool record, so no call/result time either; the user turn alone is timed.
  expect(records.some(r=>r.kind==='tool_receipt'||r.kind==='tool_call')).toBe(false);
  expect(records.find(r=>r.role==='user')!.sourceTimes).toEqual([{sourceIndex:5,...sourceTimes[0]}]);

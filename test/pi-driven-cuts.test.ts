@@ -41,7 +41,7 @@ async function manual(latest: number) {
  } finally { await h.cleanup(); }
 }
 
-test('an operator cut reserves the system part and the host input, and takes the room plan when it already lands below the band', async () => {
+test('an operator cut reserves the system part and the host input, and takes the band draft first', async () => {
  const r = await manual(100000);
  const probe = JSON.stringify(r);
  expect(r.outcome, probe).toBe('compacted');
@@ -50,10 +50,10 @@ test('an operator cut reserves the system part and the host input, and takes the
  expect(entry.reason, probe).toBe('manual');
  expect(entry.mandatoryInputTokens, probe).toBe(r.MANDATORY);
  expect(entry.hostInputTokens, probe).toBe(HOST);
- expect(entry.target, probe).toBe('room');
+ expect(entry.target, probe).toBe('band');
  expect(entry.tokensAfter + r.MANDATORY, probe).toBeLessThan(BAND);
  expect(entry.tokensAfter, probe).toBe(r.conversation);
- expect(entry.draftReservedTokens, probe).toBe(WINDOW - ROOM + r.MANDATORY);
+ expect(entry.draftReservedTokens, probe).toBe(WINDOW - BAND + r.MANDATORY);
  expect(r.faults, probe).toEqual([]);
 });
 
@@ -110,9 +110,9 @@ test("Pi's usage threshold cut reserves the system part and the host input too",
  const entry = receiptOf(r.entries[0]!);
  expect(entry.reason, probe).toBe('threshold');
  expect(entry.mandatoryInputTokens, probe).toBe(r.MANDATORY);
- expect(entry.target, probe).toBe('room');
+ expect(entry.target, probe).toBe('band');
  // The reply reported far more input than estimated, so the calibration factor is 250,000 over the estimate of the request that was sent;
  // the planner reserves on that factor, like every other consumer.
  expect(entry.calibrationFactor, probe).toBe(250000 / r.guard[0]!);
- expect(entry.draftReservedTokens, probe).toBe(WINDOW - Math.floor(ROOM / entry.calibrationFactor!) + r.MANDATORY);
+ expect(entry.draftReservedTokens, probe).toBe(WINDOW - Math.floor(BAND / entry.calibrationFactor!) + r.MANDATORY);
 });

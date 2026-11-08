@@ -26,7 +26,7 @@ test(`a recoverable ${kind === 'length' ? 'length stop' : 'provider overflow'}: 
  const entry = receiptOf(r.entries[0]!);
  expect(entry.reason, probe).toBe('overflow');
  expect(entry.responseReserveTokens, probe).toBe(32768);
- expect(entry.target, probe).toBe('room');
+ expect(entry.target, probe).toBe('band');
  expect(entry.calibrationFactor, probe).toBe(1);
  // The system part and the host input are charged (draft reserved, cut arithmetic, the retry as the guard counts it).
  expectParity(r, { host: HOST }, { room: ROOM_EXACT, band: BAND_EXACT });
@@ -46,7 +46,7 @@ test(`recovery at the edge of the larger room: a ${kind === 'length' ? 'length s
  expect(r.cuts, probe).toBe(1);
  const entry = receiptOf(r.entries[0]!);
  expect(entry.reason, probe).toBe('overflow');
- expect(entry.target, probe).toBe('room');
+ expect(entry.target, probe).toBe('band');
  // The recovery cut charges the system part and the host input exactly as the 239,232 room's other cuts do, and lands below the band. A provider
  // overflow also taught the factor: the request exceeded the window by at least a token, so the planner reserved on (window + 1) over the estimate.
  // The package's message_end runs before Pi's recovery check; were it the other way, the receipt would show the factor 1 the request was counted with.

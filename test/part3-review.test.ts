@@ -79,7 +79,7 @@ test('review 4: unpaired lookup results are counted without dead export-pair met
   const messages = [{ role: 'toolResult' as const, toolCallId: 'unpaired', toolName: 'tuck_recall', isError: false, timestamp: 1, content: [{ type: 'text' as const, text: 'LOOKUP_ECHO_BODY' }] }];
   const blocks = filterNoise(normalize(messages, [7]));
   expect(blocks).toEqual([{ kind: 'tool_result', name: 'tuck_recall', sourceIndex: 7 }]);
-  const compiled = tuck.compileDialogue({ messages, sourceIndices: [7], ranking: { maxBriefChars: 10000 } });
+  const compiled = tuck.compileDialogue({ messages, sourceIndices: [7], ranking: { maxBriefChars: 10000 } }).text;
   expect(compiled).not.toContain('LOOKUP_ECHO_BODY');
   expect(recordsOf(compiled)).toEqual([expect.objectContaining({ role: 'toolResult', count: 1, sourceRange: { start: 7, end: 7 } })]);
 });

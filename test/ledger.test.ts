@@ -186,7 +186,7 @@ test('A: an initiating prompt removed by a native edit is not quoted, and no lat
 	try {
 		s.manager.appendContextEdit(s.manager.getBranch().find(e => e.type === 'message' && e.message.role === 'user')!.id, null);
 		// With an empty history view, only the mandatory floor (task contract and ledger) is in the summary.
-		const floorOnly = { ...tuck, compileDialogue: () => '', compileShrunkDialogue: () => '' };
+		const floorOnly = { ...tuck, compileDialogue: () => ({ text: '', step: 'none' as const, size: 0 }) };
 		const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, s.ctx);
 		const draft = tuckObservedDraft(floorOnly, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);

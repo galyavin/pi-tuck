@@ -33,10 +33,6 @@ function session(rounds = 12) {
 	return { manager, ctx, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-// Force one view: for the shrunk view, the dialogue offer is too large to be admitted.
-const forcing = (target: DraftMode): Tuck => ({ ...tuck, compileDialogue: input =>
-	target === 'dialogue' ? tuck.compileDialogue(input) : '' });
-
 test('the existing native-tail offer respects the room before the shared tail amount is applied', () => {
 	const s = session();
 	try {
@@ -57,24 +53,24 @@ test('the existing native-tail offer respects the room before the shared tail am
 	} finally { s.dispose(); }
 });
 
-for (const target of MODES)
-test(`the mode recorded is the view that produced the summary: ${target}`, () => {
+test('one compiler call fills the cut; result-form metadata only changes diagnostics', () => {
 	const s = session();
 	try {
 		const measure = (messages: Parameters<typeof conversationTokens>[0]) => measurableConversationTokens(messages, s.ctx);
-		const draft = tuckObservedDraft(forcing(target), { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
-		if (!draft.compaction) throw new Error(draft.unavailable);
-		const details = draft.compaction.details as { mode: string; view: string; tokensAfter: number };
-		expect(details.mode).toBe(target);
-		expect(details.view).toBe(target === 'shrunk' ? 'shrunk-dialogue' : 'complete-dialogue');
-		const summary = draft.compaction.summary;
-		// Both views are the dialogue: tool output is not in either. Both carry the file ledger (the read calls f0..f11) and the closing.
-		expect(summary).toContain(OMITTED_ACTIONS);
-		expect(summary).not.toContain(BODY);
-		expect(summary).not.toContain('tool_receipt');
-		expect(summary).toContain(LEDGER);
-		expect(summary).toContain('- read f0');
-		expect(summary.endsWith(CLOSING_INSTRUCTION)).toBe(true);
+		const offers = [];
+		for (const [step, mode] of [['whole', 'dialogue'], ['ranked', 'shrunk']] as const) {
+			let calls = 0;
+			const observing: Tuck = { ...tuck, compileDialogue: input => { calls++; return { ...tuck.compileDialogue(input), step }; } };
+			const draft = tuckObservedDraft(observing, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure);
+			if (!draft.compaction) throw new Error(draft.unavailable);
+			expect(calls).toBe(1);
+			expect(draft.mode).toBe(mode);
+			const summary = draft.compaction.summary;
+			expect(summary).toContain(OMITTED_ACTIONS); expect(summary).not.toContain(BODY);
+			expect(summary).toContain(LEDGER); expect(summary.endsWith(CLOSING_INSTRUCTION)).toBe(true);
+			offers.push({ summary, after: draft.after, boundary: draft.compaction.firstKeptEntryId });
+		}
+		expect(offers[0]).toEqual(offers[1]);
 	} finally { s.dispose(); }
 });
 
@@ -106,7 +102,7 @@ test('an empty compiler offer still yields the mandatory floor (initiating promp
 	try {
 		// The strict measure would throw on an empty summary ("unsupported compaction summary"); the floor is never empty.
 		const measure = (messages: Parameters<typeof conversationTokens>[0]) => projectedConversationTokens(messages, s.ctx);
-		const empty: Tuck = { ...tuck, compileDialogue: () => '', compileShrunkDialogue: () => '' };
+		const empty: Tuck = { ...tuck, compileDialogue: () => ({ text: '', step: 'none', size: 0 }) };
 		const draft = tuckObservedDraft(empty, { branchEntries: s.manager.getBranch(), tokensBefore: measure(s.manager.buildSessionProjection().messages) }, s.ctx, 272000 - 120000, measure, {}, true);
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		expect(draft.mode).toBe('shrunk');
