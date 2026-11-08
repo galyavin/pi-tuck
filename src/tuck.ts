@@ -393,6 +393,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const compiledBoundary = boundary;
         // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
         const sourceKey = (record: TranscriptRecord) => current?.type === "custom_message" && record.sourceEntryId === current.id ? current.id : record.sourceIndex;
+        const thinking: TranscriptRecord[] = [];
         const assemble = (compiled: string, at = compiledBoundary) => {
             const split = compiled ? splitSummary(compiled) : undefined;
             if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
@@ -433,11 +434,47 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 }
             }
             orderByOriginalSource(records, sourceIndices, originals.selectedIds);
-            const summary = render([...records, ...ledger]);
-            return { summary, after: price(summary.length, at), records };
+            const thoughtOpenings = thinking.filter(record => !moved.has(record.sourceIndex));
+            const summary = render([...records, ...ledger, ...thoughtOpenings]);
+            return { summary, after: price(summary.length, at), records: [...records, ...thoughtOpenings] };
         };
         const compiled = tuck.compileDialogue(compileInput);
         let offer = assemble(compiled.text);
+        // After the complete dialogue fill, observations spend the remaining
+        // room before the native tail's older end. The pinned tail is untouched.
+        const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
+        const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
+        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
+        for (const item of shownFiles) item.definitions = observations.get(item.path);
+        const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
+        let observationCost = 0;
+        const fitsObservation = (extra: number) => price(offer.summary.length + observationCost + extra, boundary) <= target;
+        // Each kind gives way as whole items, oldest first; an oversized newest
+        // item cannot promote an older one. Pointer lines need no extra omission.
+        for (const item of shownActions) {
+            if (!item.outputTail) continue;
+            const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            outputs.add(item); observationCost += extra;
+        }
+        for (const item of shownFiles) {
+            if (!item.definitions) continue;
+            const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            definitions.add(item); observationCost += extra;
+        }
+        if (outputs.size || definitions.size) {
+            ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
+            offer = assemble(compiled.text, boundary);
+        }
+        // Plain thinking follows output tails and definition maps.
+        let thinkingCost = 0;
+        for (const record of thinkingRecords(entries.slice(0, boundary), indices, openingLength)) {
+            const extra = lineCost([record]);
+            if (price(offer.summary.length + thinkingCost + extra, boundary) > target) break;
+            thinking.push(record); thinkingCost += extra;
+        }
+        if (thinking.length) offer = assemble(compiled.text, boundary);
         // Only capacity left after all higher ranks can extend the native tail
         // beyond its preferred rank boundary. No old allocator is consulted.
         const liveStartId = calibration.ok ? calibration.selectedIds[0] : undefined;
@@ -496,47 +533,6 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 else break;
             }
             if (boundary !== compiledBoundary) offer = assemble(compiled.text, boundary);
-        }
-        // The observations are the very last rank, after the complete dialogue
-        // fill and the native tail's older end. Spend only their leftover room;
-        // no observation can change the selected dialogue or tail boundary.
-        const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
-        const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
-        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
-        for (const item of shownFiles) item.definitions = observations.get(item.path);
-        const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
-        let observationCost = 0;
-        const fitsObservation = (extra: number) => price(offer.summary.length + observationCost + extra, boundary) <= target;
-        // Each kind gives way as whole items, oldest first; an oversized newest
-        // item cannot promote an older one. Pointer lines need no extra omission.
-        for (const item of shownActions) {
-            if (!item.outputTail) continue;
-            const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
-            if (!fitsObservation(extra)) break;
-            outputs.add(item); observationCost += extra;
-        }
-        for (const item of shownFiles) {
-            if (!item.definitions) continue;
-            const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
-            if (!fitsObservation(extra)) break;
-            definitions.add(item); observationCost += extra;
-        }
-        if (outputs.size || definitions.size) {
-            ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
-            offer = assemble(compiled.text, boundary);
-        }
-        // Plain thinking follows both observation kinds and cannot move any
-        // higher-ranked content, including the tail's older end.
-        const thinking: TranscriptRecord[] = [];
-        let thinkingCost = 0;
-        for (const record of thinkingRecords(entries.slice(0, boundary), indices, openingLength)) {
-            const extra = lineCost([record]);
-            if (price(offer.summary.length + thinkingCost + extra, boundary) > target) break;
-            thinking.push(record); thinkingCost += extra;
-        }
-        if (thinking.length) {
-            const summary = render([...offer.records, ...ledger, ...thinking]);
-            offer = { ...offer, summary, after: price(summary.length, boundary) };
         }
         const projection = preview(offer.summary, boundary);
         assertNativeToolRounds(projection);

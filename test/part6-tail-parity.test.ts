@@ -8,9 +8,54 @@ import ts from 'typescript';
 import { SessionManager, type ExtensionContext, type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { conversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft } from '../src/tuck';
+import { parseRecords, splitSummary } from '../src/tuck/core/transcript';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-let directory: string, part6: Pick<typeof import('../src/tuck'), 'tuck' | 'tuckObservedDraft'>;
+type Compiler = Pick<typeof import('../src/tuck'), 'tuck' | 'tuckObservedDraft'>;
+let directory: string, part6: Compiler;
+
+function observe(compiler: Compiler, input: Parameters<typeof tuckObservedDraft>[1], ctx: ExtensionContext, reserve: number) {
+  let compiledIds: readonly string[] | undefined;
+  const observing = { ...compiler.tuck, compileDialogue: (input: Parameters<typeof tuck.compileDialogue>[0]) => {
+    compiledIds = input.sourceEntryIds;
+    return compiler.tuck.compileDialogue(input);
+  } };
+  const draft = compiler.tuckObservedDraft(observing, input, ctx, reserve, conversationTokens);
+  return { draft, compiledIds };
+}
+
+/** Compilation stops at the pinned native boundary, before observations and
+ * older-tail extension. Only that extension may differ from the reference. */
+function assertPinned(input: Parameters<typeof tuckObservedDraft>[1], ctx: ExtensionContext, reserve: number, label: string) {
+  const expected = observe(part6, input, ctx, reserve);
+  const actual = observe({ tuck, tuckObservedDraft }, input, ctx, reserve);
+  expect(Boolean(actual.draft.compaction), label).toBe(Boolean(expected.draft.compaction));
+  if (!expected.draft.compaction || !actual.draft.compaction) return;
+  expect(expected.compiledIds, label).toBeDefined();
+  expect(actual.compiledIds, `${label}: pinned boundary`).toEqual(expected.compiledIds);
+  const branch = ctx.sessionManager.getBranch();
+  const positions = new Map(branch.map((entry, at) => [entry.id, at]));
+  const pinned = (positions.get(expected.compiledIds!.at(-1)!) ?? -1) + 1;
+  const from = (id: string) => id ? positions.get(id)! : branch.length;
+  const expectedFrom = from(expected.draft.compaction.firstKeptEntryId), actualFrom = from(actual.draft.compaction.firstKeptEntryId);
+  expect(expectedFrom, label).toBeLessThanOrEqual(pinned);
+  expect(actualFrom, `${label}: no pinned source displaced`).toBeLessThanOrEqual(pinned);
+  expect(actualFrom, `${label}: only older extension may shrink`).toBeGreaterThanOrEqual(expectedFrom);
+  const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
+  const nativeIndices = new Set(branch.slice(actualFrom).map(entry => indices.get(entry.id)));
+  for (const record of parseRecords(splitSummary(actual.draft.compaction.summary)!.body)) if (record.kind === 'section' && record.title === 'Thinking')
+    expect(nativeIndices.has(record.sourceIndex), `${label}: thinking stays outside the native tail`).toBe(false);
+  const pinnedProjection = (draft: NonNullable<typeof actual.draft.compaction>) => {
+    const manager = SessionManager.inMemory(ctx.cwd, undefined, [ctx.sessionManager.getHeader()!, ...branch]);
+    manager.appendCompaction(draft.summary, draft.firstKeptEntryId, draft.tokensBefore, draft.details, true);
+    return manager.buildSessionProjection().entries.filter(entry => entry.sourceEntry.type !== 'compaction' &&
+      (positions.get(entry.sourceEntry.id) ?? -1) >= pinned && entry.messages.length)
+      .map(entry => ({ entryId: entry.sourceEntry.id, messages: entry.messages }));
+  };
+  expect(pinnedProjection(actual.draft.compaction), `${label}: pinned messages`).toEqual(pinnedProjection(expected.draft.compaction));
+  expect(actual.draft.after, label).toBeLessThanOrEqual((actual.draft.compaction.details as { carriedTarget: number }).carriedTarget);
+  return { draft: actual.draft, pinned, actualFrom, expectedFrom };
+}
 
 beforeAll(async () => {
   // Read the owner's pinned reference; never check out, stage, build in, or
@@ -37,7 +82,7 @@ beforeAll(async () => {
 });
 afterAll(() => { if (directory) rmSync(directory, { recursive: true, force: true }); });
 
-test('plain-thinking openings remain below the complete Part 6 tail at every tested room', () => {
+test('plain-thinking openings preserve the pinned Part 6 tail at every tested room', () => {
   const rows = readFileSync(new URL('./fixtures/regression/prose-heavy.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const manager = SessionManager.inMemory('/part6-plain-thinking', undefined, [rows[0]]);
   for (const [at, row] of rows.filter(e => e.type === 'message').slice(0, 120).entries()) {
@@ -60,40 +105,33 @@ test('plain-thinking openings remain below the complete Part 6 tail at every tes
     const ctx = { sessionManager, cwd: '/part6-plain-thinking', model: { contextWindow: 81920, maxTokens: 16384 } } as unknown as ExtensionContext;
     const input = { branchEntries: sessionManager.getBranch(), tokensBefore: conversationTokens(sessionManager.buildSessionProjection().messages) };
     for (let room = 2000; room <= 20000; room += 250) {
-      const expected = part6.tuckObservedDraft(part6.tuck, input, ctx, 81920 - room, conversationTokens);
-      const actual = tuckObservedDraft(tuck, input, ctx, 81920 - room, conversationTokens);
-      expect(actual.compaction?.firstKeptEntryId, `room ${room}`).toBe(expected.compaction?.firstKeptEntryId);
-      if (actual.compaction) {
-        quoted += Number(actual.compaction.summary.includes(' Thinking:'));
-        expect(actual.after).toBeLessThanOrEqual((actual.compaction.details as { carriedTarget: number }).carriedTarget);
-      }
+      const checked = assertPinned(input, ctx, 81920 - room, `plain thinking, room ${room}`);
+      if (checked) quoted += Number(checked.draft.compaction.summary.includes(' Thinking:'));
     }
   }
   expect(quoted).toBeGreaterThan(0);
 });
 
-test('Part 6 tail boundaries agree near capacity edges', () => {
+test('the pinned Part 6 boundary agrees near capacity edges', () => {
   const rows = readFileSync(new URL('./fixtures/regression/prose-heavy.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const manager = SessionManager.inMemory('/part6-tail-edges', undefined, [rows[0]]);
   for (const row of rows.filter(e => e.type === 'message').slice(0, 120)) manager.appendMessage(row.message);
   const ctx = { sessionManager: manager, cwd: '/part6-tail-edges', model: { contextWindow: 32768, maxTokens: 16384 } } as unknown as ExtensionContext;
   const input = { branchEntries: manager.getBranch(), tokensBefore: conversationTokens(manager.buildSessionProjection().messages) };
-  const boundaries = new Set<string | undefined>();
+  const boundaries = new Set<number>();
   for (let reserve = 12000; reserve < 22000; reserve += 10) {
-    const expected = part6.tuckObservedDraft(part6.tuck, input, ctx, reserve, conversationTokens);
-    const actual = tuckObservedDraft(tuck, input, ctx, reserve, conversationTokens);
-    expect(actual.compaction?.firstKeptEntryId, `reserve ${reserve}`).toBe(expected.compaction?.firstKeptEntryId);
-    boundaries.add(expected.compaction?.firstKeptEntryId);
+    const checked = assertPinned(input, ctx, reserve, `capacity edge, reserve ${reserve}`);
+    if (checked) boundaries.add(checked.pinned);
   }
   expect(boundaries.size).toBeGreaterThan(1);
 });
 
 for (const name of ['prose-heavy', 'low-prose', 'large-tool-output']) {
-  test(`${name}: every scheduled cut keeps exactly Part 6's firstKeptEntryId, including the tail's older end`, () => {
+  test(`${name}: every scheduled cut preserves Part 6's pinned tail and can displace only its older extension`, () => {
     const recording = readFileSync(new URL(`./fixtures/regression/${name}.jsonl`, import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     const header = recording[0] as NonNullable<ReturnType<SessionManager['getHeader']>>;
     const messages = recording.filter((entry: SessionEntry) => entry.type === 'message' && entry.message.role !== 'system') as SessionEntry[];
-    let checked = 0, extended = 0;
+    let checked = 0, extended = 0, displaced = 0;
     for (const window of [32768, 81920, 131072]) {
       const manager = SessionManager.inMemory('/part6-tail-parity', undefined, [header]);
       for (let at = 0; at < messages.length; at++) {
@@ -104,31 +142,21 @@ for (const name of ['prose-heavy', 'low-prose', 'large-tool-output']) {
         const ctx = { sessionManager: manager, cwd: '/part6-tail-parity', model: { contextWindow: window, maxTokens: 16384 } } as unknown as ExtensionContext;
         const input = { branchEntries: manager.getBranch(), tokensBefore: conversationTokens(manager.buildSessionProjection().messages) };
         for (const reserve of [16384, Math.floor(window * 0.6)]) {
-          const expected = part6.tuckObservedDraft(part6.tuck, input, ctx, reserve, conversationTokens);
-          let compiledThrough: string | undefined;
-          const observing = { ...tuck, compileDialogue: (input: Parameters<typeof tuck.compileDialogue>[0]) => {
-            compiledThrough = input.sourceEntryIds?.at(-1);
-            return tuck.compileDialogue(input);
-          } };
-          const actual = tuckObservedDraft(observing, input, ctx, reserve, conversationTokens);
           const label = `${name}, window ${window}, reserve ${reserve}, cut after message ${at}`;
-          expect(Boolean(actual.compaction), label).toBe(Boolean(expected.compaction));
-          if (!expected.compaction || !actual.compaction) continue;
-          expect(actual.compaction.firstKeptEntryId, label).toBe(expected.compaction.firstKeptEntryId);
-          const branch = manager.getBranch();
-          const from = branch.findIndex(e => e.id === actual.compaction!.firstKeptEntryId);
-          const compiledEnd = branch.findIndex(e => e.id === compiledThrough);
-          if (from >= 0 && from <= compiledEnd) extended++;
-          expect(actual.after, label).toBeLessThanOrEqual((actual.compaction.details as { carriedTarget: number }).carriedTarget);
+          const comparison = assertPinned(input, ctx, reserve, label);
+          if (!comparison) continue;
+          extended += Number(comparison.actualFrom < comparison.pinned);
+          displaced += Number(comparison.actualFrom > comparison.expectedFrom);
           checked++;
         }
       }
     }
     expect(checked).toBeGreaterThan(30);
     expect(extended).toBeGreaterThan(0);
+    expect(displaced).toBeGreaterThan(0);
   });
 
-  test(`${name}: successive 81,920-window cuts match Part 6 at the same cut point and input`, () => {
+  test(`${name}: successive 81,920-window cuts preserve Part 6's pinned part at the same cut point and input`, () => {
     const recording = readFileSync(new URL(`./fixtures/regression/${name}.jsonl`, import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     const header = recording[0] as NonNullable<ReturnType<SessionManager['getHeader']>>;
     const messages = recording.filter((entry: SessionEntry) => entry.type === 'message' && entry.message.role !== 'system') as SessionEntry[];
@@ -145,13 +173,11 @@ for (const name of ['prose-heavy', 'low-prose', 'large-tool-output']) {
       const saved = manager.buildSessionProjection().messages;
       const input = { branchEntries: manager.getBranch(), tokensBefore: conversationTokens(saved),
         previousSummary: saved.find(message => message.role === 'compactionSummary')?.summary };
-      const expected = part6.tuckObservedDraft(part6.tuck, input, ctx, 16384, conversationTokens);
-      const actual = tuckObservedDraft(tuck, input, ctx, 16384, conversationTokens);
-      expect(expected.compaction).toBeDefined();
-      expect(actual.compaction?.firstKeptEntryId, `${name}: scheduled cut ${checked + 1} after message ${at}`)
-        .toBe(expected.compaction?.firstKeptEntryId);
-      if (actual.compaction) {
-        manager.appendCompaction(actual.compaction.summary, actual.compaction.firstKeptEntryId, actual.compaction.tokensBefore, actual.compaction.details, true);
+      const comparison = assertPinned(input, ctx, 16384, `${name}: scheduled cut ${checked + 1} after message ${at}`);
+      expect(comparison).toBeDefined();
+      if (comparison) {
+        const actual = comparison.draft.compaction;
+        manager.appendCompaction(actual.summary, actual.firstKeptEntryId, actual.tokensBefore, actual.details, true);
         branch.push(manager.getBranch().at(-1)!);
       }
       checked++;

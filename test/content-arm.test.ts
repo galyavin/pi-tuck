@@ -119,7 +119,7 @@ function rankedFixture(laterEdit = false, olderItems = false) {
   return { ...f, opening, draft };
 }
 
-test('observations spend only leftover room and disappear before protected openings or the whole native tail', () => {
+test('observations use room after dialogue and disappear before protected openings or the pinned native tail', () => {
   const f = rankedFixture(), large = f.draft(1200);
   if (!large.compaction) throw new Error(large.unavailable);
   expect(large.compaction.summary).toContain('(output tail):');
