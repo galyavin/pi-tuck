@@ -207,16 +207,24 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     // use up the budget the task turn needs; the first prompt's head comes before any extension so steering turns can't use up the goal's.
     const quotesFor = (budget: number, headSize: number, withFirst: boolean): TranscriptRecord[] => {
         const turns: { entry: SessionEntry; text: string; take: number }[] = [];
-        for (let at = boundary - 1; at >= 0; at--) {
+        // Only answered turns: a prompt that was refused and never got a reply was never taken up, and quoting it would spend the budget for nothing.
+        let answered = false;
+        for (let at = entries.length - 1; at >= 0; at--) {
             const entry = entries[at]!;
-            if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === firstUser?.id || !isTextOnly(entry.message.content)) continue;
+            if (entry.type === "message" && entry.message.role === "assistant") { answered = true; continue; }
+            if (entry.type !== "message" || entry.message.role !== "user") continue;
+            const replied = answered;
+            answered = false;
+            if (at >= boundary || !replied || entry.id === protectedUser?.id || entry.id === firstUser?.id || !isTextOnly(entry.message.content)) continue;
             const text = textOf(entry.message.content);
             if (text.trim()) turns.push({ entry, text, take: 0 });
         }
+        // headSize 0 quotes the first prompt alone, as before any user turn was quoted: the last step before no quote at all.
+        if (headSize === 0) turns.length = 0;
         let left = budget, heads = Math.floor(budget / 4);
         for (const turn of turns) { if (heads <= 0) break; turn.take = Math.min(turn.text.length, headSize, heads); heads -= turn.take; left -= turn.take; }
         const firstText = withFirst && initiating?.type === "message" && initiating.message.role === "user" && isTextOnly(initiating.message.content) ? textOf(initiating.message.content) : "";
-        let firstTake = Math.min(firstText.length, Math.round(headSize * 20 / 3), Math.max(0, left));
+        let firstTake = Math.min(firstText.length, headSize ? Math.round(headSize * 20 / 3) : budget, Math.max(0, left));
         left -= firstTake;
         for (const turn of turns) { if (left <= 0) break; const more = Math.min(turn.text.length - turn.take, left); turn.take += more; left -= more; }
         firstTake += Math.min(firstText.length - firstTake, Math.max(0, left));
@@ -250,13 +258,14 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
     // When room is tight the newest turns win over the first prompt, which in a long-running session is often a finished task. The floor gives way
     // in this order: the trail and ledger to their headings, the extensions (the budget halved), then the heads, the first prompt's among them
-    // (300 characters, 2,000 for the first prompt; then 100 and 667), and only then every quote. Only a floor with no quote but the current input can refuse the cut.
+    // (300 characters, 2,000 for the first prompt; then 100 and 667), then everything but the first prompt (as before user turns were quoted),
+    // and only then every quote. Only a floor with no quote but the current input can refuse the cut.
     // The budget grows with the room: 15% of it, at least the 12,000 characters a first prompt always had. A long-running session's task can be tens
     // of thousands of characters, and the room is what can afford it.
     const taskBudget = Math.max(MAX_TASK_CONTRACT_CHARACTERS, Math.floor(Math.max(0, (model?.contextWindow ?? 0) - reserveTokens) * charsPerToken * 0.15));
     const budgets = [taskBudget, taskBudget / 2, taskBudget / 4, taskBudget / 8, 1500].map(Math.floor).filter((b, at, all) => b >= 1500 && all.indexOf(b) === at);
     const choices = [{ head: 300, budgets }, { head: 100, budgets: [1500, 600] }]
-        .flatMap(({ head, budgets }) => budgets.map(budget => ({ budget, head, first: true }))).concat([{ budget: 0, head: 0, first: false }]);
+        .flatMap(({ head, budgets }) => budgets.map(budget => ({ budget, head, first: true }))).concat([{ budget: MAX_TASK_CONTRACT_CHARACTERS, head: 0, first: true }, { budget: 0, head: 0, first: false }]);
     let floor = floorAt(Math.max(items.length, actions.length), choices[0]!);
     for (const choice of choices) {
         floor = floorAt(Math.max(items.length, actions.length), choice);

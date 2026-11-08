@@ -352,7 +352,9 @@ async function runCellInner(cell: Cell): Promise<Run> {
    if (requests > 0) answeredPrompts.push({ prompt: i + 1, opening });
    if (h.compactions().length > cutsBefore) {
     const saved = JSON.stringify(h.manager.buildSessionProjection().messages);
-    const watched = answeredPrompts.length > 9 ? [answeredPrompts[0]!, ...answeredPrompts.slice(-8)] : answeredPrompts;
+    // The first answered prompt is the session's first user turn only where the case seeds no opening turn before it.
+    const goal = cell.extra?.noOpening && answeredPrompts[0] ? [answeredPrompts[0]] : [];
+    const watched = [...new Set([...goal, ...answeredPrompts.slice(-8)])];
     const lost = watched.filter(p => !saved.includes(p.opening)).map(p => p.prompt);
     if (lost.length) record(cell, 'task-turn', `after a cut during prompt ${i + 1}, earlier prompts ${lost.join(', ')} are in neither the summary nor the kept tail`, { prompt: i + 1, lost });
    }
