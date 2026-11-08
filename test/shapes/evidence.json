@@ -1,0 +1,2207 @@
+{
+  "reserve": 16384,
+  "keepRecent": 20000,
+  "builds": [
+    {
+      "build": "v1.0.16",
+      "revision": "012ee9053606bd53aa975fa7e037f493251ce46a",
+      "rows": [
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 32768,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 22,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 69,
+            "omissions": 69,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 69
+          },
+          "examples": [
+            {
+              "at": "p1/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p1/r27/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 32768,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 36,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 476,
+            "omissions": 476,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 476
+          },
+          "examples": [
+            {
+              "at": "p2/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p18/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 6 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28"
+            },
+            {
+              "at": "p94/r2/saved-run-end",
+              "rule": "omissions",
+              "detail": "user: 9 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57,61,65"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 32768,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 73,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 513,
+            "omissions": 513,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 513
+          },
+          "examples": [
+            {
+              "at": "p2/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p15/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 13 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p24/r1/request",
+              "rule": "omissions",
+              "detail": "user: 3 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 32768,
+          "prompts": 56,
+          "requests": 102,
+          "cuts": 21,
+          "answered": 52,
+          "refused": 4,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 102,
+            "openings": 121,
+            "omissions": 121,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 114
+          },
+          "examples": [
+            {
+              "at": "p5/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 3 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13"
+            },
+            {
+              "at": "p20/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 11 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,30,32,34"
+            },
+            {
+              "at": "p41/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 8 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57,61"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 32768,
+          "prompts": 56,
+          "requests": 102,
+          "cuts": 47,
+          "answered": 52,
+          "refused": 4,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 102,
+            "openings": 148,
+            "omissions": 148,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 142
+          },
+          "examples": [
+            {
+              "at": "p4/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 2 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9"
+            },
+            {
+              "at": "p13/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 9 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,30,32,34"
+            },
+            {
+              "at": "p21/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 32768,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 38,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 92,
+            "omissions": 92,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 92
+          },
+          "examples": [
+            {
+              "at": "p3/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            },
+            {
+              "at": "p12/r1/saved-prompt",
+              "rule": "omissions",
+              "detail": "assistant: 8 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 32768,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 4,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 9,
+            "omissions": 9,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 2,
+            "omissions": 9
+          },
+          "examples": [
+            {
+              "at": "p2/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p2/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 1"
+            },
+            {
+              "at": "p2/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 2"
+            },
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        },
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 81920,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 9,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 49,
+            "omissions": 49,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 49
+          },
+          "examples": [
+            {
+              "at": "p1/r9/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,5,7,9,11"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 81920,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 11,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 408,
+            "omissions": 408,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 408
+          },
+          "examples": [
+            {
+              "at": "p23/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 22 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p54/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 39 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 81920,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 25,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 445,
+            "omissions": 445,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 445
+          },
+          "examples": [
+            {
+              "at": "p12/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p38/r1/request",
+              "rule": "omissions",
+              "detail": "user: 6 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57"
+            },
+            {
+              "at": "p38/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 47 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 81920,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 8,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 101,
+            "omissions": 101,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 101
+          },
+          "examples": [
+            {
+              "at": "p8/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "omissions",
+              "detail": "user: 8 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57,61"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 69 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 81920,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 13,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 106,
+            "omissions": 106,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 106
+          },
+          "examples": [
+            {
+              "at": "p8/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21"
+            },
+            {
+              "at": "p36/r1/request",
+              "rule": "omissions",
+              "detail": "user: 14 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57,61"
+            },
+            {
+              "at": "p36/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 49 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 81920,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 10,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 44,
+            "omissions": 44,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 44
+          },
+          "examples": [
+            {
+              "at": "p12/r3/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,29,33"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 81920,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        },
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 131072,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 4,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 36,
+            "omissions": 36,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 36
+          },
+          "examples": [
+            {
+              "at": "p1/r17/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 11 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,5,7,9,11,13,15,17"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 131072,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 5,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 356,
+            "omissions": 356,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 356
+          },
+          "examples": [
+            {
+              "at": "p46/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 45 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p99/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 80 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 131072,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 13,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 412,
+            "omissions": 412,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 412
+          },
+          "examples": [
+            {
+              "at": "p22/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 21 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p68/r2/saved-run-end",
+              "rule": "omissions",
+              "detail": "user: 19 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57,61,65"
+            },
+            {
+              "at": "p68/r2/saved-run-end",
+              "rule": "omissions",
+              "detail": "assistant: 91 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 131072,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 4,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 83,
+            "omissions": 83,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 83
+          },
+          "examples": [
+            {
+              "at": "p15/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 12 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31,35"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 131072,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 6,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 94,
+            "omissions": 94,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 94
+          },
+          "examples": [
+            {
+              "at": "p11/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 131072,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 6,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 35,
+            "omissions": 35,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 35
+          },
+          "examples": [
+            {
+              "at": "p12/r8/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 14 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,29,33"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 131072,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "build": "v1.0.15",
+      "revision": "9050ff73a02cf797d9e4c51161e0f9df97cd0ff7",
+      "rows": [
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 32768,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 22,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 69,
+            "omissions": 69,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 69
+          },
+          "examples": [
+            {
+              "at": "p1/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p1/r27/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 32768,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 32,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 472,
+            "omissions": 472,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 472
+          },
+          "examples": [
+            {
+              "at": "p2/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p18/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 13 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p46/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57,61,65"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 32768,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 73,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 513,
+            "omissions": 513,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 513,
+            "openings": 503
+          },
+          "examples": [
+            {
+              "at": "p2/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p6/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 5,9,13"
+            },
+            {
+              "at": "p9/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 2 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20"
+            },
+            {
+              "at": "p12/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 32768,
+          "prompts": 56,
+          "requests": 102,
+          "cuts": 19,
+          "answered": 52,
+          "refused": 4,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 102,
+            "openings": 119,
+            "omissions": 119,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 112,
+            "openings": 52
+          },
+          "examples": [
+            {
+              "at": "p5/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 3 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13"
+            },
+            {
+              "at": "p12/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26"
+            },
+            {
+              "at": "p27/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 8 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57,61"
+            },
+            {
+              "at": "p29/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 75,79,83,87,91,95,99"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 32768,
+          "prompts": 56,
+          "requests": 102,
+          "cuts": 44,
+          "answered": 52,
+          "refused": 4,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 102,
+            "openings": 145,
+            "omissions": 145,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 139,
+            "omissions": 139
+          },
+          "examples": [
+            {
+              "at": "p4/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 3,7"
+            },
+            {
+              "at": "p4/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 2 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9"
+            },
+            {
+              "at": "p11/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 4 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24"
+            },
+            {
+              "at": "p12/r1/request",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 32768,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 37,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 91,
+            "omissions": 91,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 91,
+            "openings": 8
+          },
+          "examples": [
+            {
+              "at": "p3/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            },
+            {
+              "at": "p12/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18"
+            },
+            {
+              "at": "p12/r33/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 15,19,23"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 32768,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        },
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 81920,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 9,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 49,
+            "omissions": 49,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 49
+          },
+          "examples": [
+            {
+              "at": "p1/r9/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,5,7,9,11"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 81920,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 10,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 407,
+            "omissions": 407,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 407
+          },
+          "examples": [
+            {
+              "at": "p23/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 22 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p50/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 47 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p150/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 51 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57,61,65"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 81920,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 24,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 444,
+            "omissions": 444,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 237,
+            "omissions": 444
+          },
+          "examples": [
+            {
+              "at": "p12/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 13,17,21,25,29"
+            },
+            {
+              "at": "p12/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p21/r1/request",
+              "rule": "omissions",
+              "detail": "user: 9 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57,61,65"
+            },
+            {
+              "at": "p21/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 9 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 81920,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 10,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 103,
+            "omissions": 103,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 103,
+            "openings": 49
+          },
+          "examples": [
+            {
+              "at": "p8/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21"
+            },
+            {
+              "at": "p12/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 27"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 16 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "omissions",
+              "detail": "user: 27 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57,61"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 81920,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 15,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 107,
+            "omissions": 107,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 107,
+            "omissions": 107
+          },
+          "examples": [
+            {
+              "at": "p8/r1/saved-run-end",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 3,7,11,15,19"
+            },
+            {
+              "at": "p8/r1/saved-run-end",
+              "rule": "omissions",
+              "detail": "toolResult: 6 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25"
+            },
+            {
+              "at": "p15/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 4 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 17 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 81920,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 9,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 43,
+            "omissions": 43,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 43
+          },
+          "examples": [
+            {
+              "at": "p12/r3/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,29,33"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 81920,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        },
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 131072,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 4,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 36,
+            "omissions": 36,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 36
+          },
+          "examples": [
+            {
+              "at": "p1/r17/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 11 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,5,7,9,11,13,15,17"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 131072,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 5,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 356,
+            "omissions": 356,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 356
+          },
+          "examples": [
+            {
+              "at": "p46/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 45 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p89/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 86 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 131072,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 12,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 411,
+            "omissions": 411,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 70,
+            "omissions": 411
+          },
+          "examples": [
+            {
+              "at": "p22/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 57,61"
+            },
+            {
+              "at": "p22/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 37,41,45,49,53,57,61"
+            },
+            {
+              "at": "p22/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 21 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p40/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 29 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 131072,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 4,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 80,
+            "omissions": 80,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 80,
+            "openings": 24
+          },
+          "examples": [
+            {
+              "at": "p17/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 13 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31,35"
+            },
+            {
+              "at": "p27/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18"
+            },
+            {
+              "at": "p38/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 133"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 131072,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 7,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 95,
+            "omissions": 95,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 76,
+            "omissions": 95
+          },
+          "examples": [
+            {
+              "at": "p11/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 7,11,15,19,23,27"
+            },
+            {
+              "at": "p11/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "omissions",
+              "detail": "user: 4 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45"
+            },
+            {
+              "at": "p30/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 131072,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 5,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 34,
+            "omissions": 34,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 34
+          },
+          "examples": [
+            {
+              "at": "p12/r8/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 14 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,29,33"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 131072,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "build": "7bcd355",
+      "revision": "7bcd3552f900f64cfce676f358795cc9aeef3d39",
+      "rows": [
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 32768,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 22,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 69,
+            "omissions": 69,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 69
+          },
+          "examples": [
+            {
+              "at": "p1/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p1/r27/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 32768,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 35,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 475,
+            "omissions": 475,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 475,
+            "openings": 340
+          },
+          "examples": [
+            {
+              "at": "p2/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p18/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 6 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28"
+            },
+            {
+              "at": "p64/r2/saved-run-end",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p98/r2/saved-run-end",
+              "rule": "omissions",
+              "detail": "user: 4 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 32768,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 73,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 513,
+            "omissions": 513,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 513,
+            "openings": 503
+          },
+          "examples": [
+            {
+              "at": "p2/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3"
+            },
+            {
+              "at": "p6/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p10/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 4 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24"
+            },
+            {
+              "at": "p22/r1/request",
+              "rule": "omissions",
+              "detail": "user: 2 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 32768,
+          "prompts": 56,
+          "requests": 102,
+          "cuts": 20,
+          "answered": 52,
+          "refused": 4,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 102,
+            "openings": 120,
+            "omissions": 120,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 113,
+            "openings": 107
+          },
+          "examples": [
+            {
+              "at": "p5/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 3 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13"
+            },
+            {
+              "at": "p9/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p12/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26"
+            },
+            {
+              "at": "p29/r1/request",
+              "rule": "omissions",
+              "detail": "user: 12 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 1,3,7,11,15,19,23,27"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 32768,
+          "prompts": 56,
+          "requests": 102,
+          "cuts": 45,
+          "answered": 52,
+          "refused": 4,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 102,
+            "openings": 146,
+            "omissions": 146,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 140,
+            "omissions": 140
+          },
+          "examples": [
+            {
+              "at": "p4/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p4/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 2 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9"
+            },
+            {
+              "at": "p10/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 3 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22"
+            },
+            {
+              "at": "p20/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 29"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 32768,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 38,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 92,
+            "omissions": 92,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 92
+          },
+          "examples": [
+            {
+              "at": "p3/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            },
+            {
+              "at": "p12/r1/saved-prompt",
+              "rule": "omissions",
+              "detail": "assistant: 8 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 32768,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 4,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 9,
+            "omissions": 9,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 2,
+            "omissions": 9
+          },
+          "examples": [
+            {
+              "at": "p2/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p2/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 1"
+            },
+            {
+              "at": "p2/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 2"
+            },
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        },
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 81920,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 9,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 49,
+            "omissions": 49,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 49
+          },
+          "examples": [
+            {
+              "at": "p1/r9/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,5,7,9,11"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 81920,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 10,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 407,
+            "omissions": 407,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 407,
+            "openings": 196
+          },
+          "examples": [
+            {
+              "at": "p23/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 22 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p54/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 39 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p126/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 81920,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 25,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 430,
+            "omissions": 430,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "openings": 430,
+            "omissions": 430
+          },
+          "examples": [
+            {
+              "at": "p19/r1/saved-tool-loop",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p19/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p19/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 18 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p38/r1/request",
+              "rule": "omissions",
+              "detail": "user: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 81920,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 9,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 102,
+            "omissions": 102,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 102,
+            "openings": 84
+          },
+          "examples": [
+            {
+              "at": "p8/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 5 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 16 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "omissions",
+              "detail": "user: 9 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 29,33,37,41,45,49,53,57"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 81920,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 13,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 102,
+            "omissions": 102,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 102,
+            "openings": 88
+          },
+          "examples": [
+            {
+              "at": "p10/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p17/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 18 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            },
+            {
+              "at": "p31/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "user: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 29"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 81920,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 10,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 44,
+            "omissions": 44,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 44
+          },
+          "examples": [
+            {
+              "at": "p12/r3/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 10 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,29,33"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 81920,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        },
+        {
+          "shape": "one-prompt-tool-run",
+          "window": 131072,
+          "prompts": 1,
+          "requests": 49,
+          "cuts": 4,
+          "answered": 1,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 49,
+            "openings": 36,
+            "omissions": 36,
+            "refusal": 1
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 36
+          },
+          "examples": [
+            {
+              "at": "p1/r17/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 11 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,5,7,9,11,13,15,17"
+            }
+          ]
+        },
+        {
+          "shape": "spec-short-steering",
+          "window": 131072,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 5,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 356,
+            "omissions": 356,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 356
+          },
+          "examples": [
+            {
+              "at": "p46/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 45 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p99/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "assistant: 80 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "spec-long-steering",
+          "window": 131072,
+          "prompts": 221,
+          "requests": 442,
+          "cuts": 13,
+          "answered": 221,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 442,
+            "openings": 411,
+            "omissions": 411,
+            "refusal": 221
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 411,
+            "openings": 327
+          },
+          "examples": [
+            {
+              "at": "p23/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 22 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 3,7,11,15,19,23,27,31"
+            },
+            {
+              "at": "p63/r2/saved-run-end",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p63/r2/saved-run-end",
+              "rule": "omissions",
+              "detail": "user: 15 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 33,37,41,45,49,53,57,61"
+            },
+            {
+              "at": "p63/r2/saved-run-end",
+              "rule": "omissions",
+              "detail": "assistant: 81 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-short-steps",
+          "window": 131072,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 3,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 82,
+            "omissions": 82,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 82
+          },
+          "examples": [
+            {
+              "at": "p15/r1/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 12 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31,35"
+            }
+          ]
+        },
+        {
+          "shape": "tasks-long-steps",
+          "window": 131072,
+          "prompts": 56,
+          "requests": 106,
+          "cuts": 4,
+          "answered": 56,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 106,
+            "openings": 92,
+            "omissions": 92,
+            "refusal": 56
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 92,
+            "openings": 24
+          },
+          "examples": [
+            {
+              "at": "p11/r1/request",
+              "rule": "omissions",
+              "detail": "toolResult: 7 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,31"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "openings",
+              "detail": "first 80 characters missing for user indices 1"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "omissions",
+              "detail": "user: 12 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 29,33,37,41,45,49,53,57"
+            },
+            {
+              "at": "p45/r1/request",
+              "rule": "omissions",
+              "detail": "assistant: 54 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 18,20,22,24,26,28,30,32"
+            }
+          ]
+        },
+        {
+          "shape": "tool-heavy-step",
+          "window": 131072,
+          "prompts": 12,
+          "requests": 58,
+          "cuts": 6,
+          "answered": 12,
+          "refused": 0,
+          "clips": 0,
+          "checks": {
+            "current-prompt": 58,
+            "openings": 35,
+            "omissions": 35,
+            "refusal": 12
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 35
+          },
+          "examples": [
+            {
+              "at": "p12/r8/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 14 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5,9,13,17,21,25,29,33"
+            }
+          ]
+        },
+        {
+          "shape": "huge-tool-results",
+          "window": 131072,
+          "prompts": 3,
+          "requests": 7,
+          "cuts": 3,
+          "answered": 3,
+          "refused": 0,
+          "clips": 3,
+          "checks": {
+            "current-prompt": 7,
+            "openings": 7,
+            "omissions": 7,
+            "refusal": 3
+          },
+          "errors": [],
+          "failedObservations": {
+            "omissions": 7
+          },
+          "examples": [
+            {
+              "at": "p2/r2/saved-tool-loop",
+              "rule": "omissions",
+              "detail": "toolResult: 1 dropped/clipped unit(s) lack a counted omission with their pointer; first indices 5"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
