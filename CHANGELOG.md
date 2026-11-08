@@ -3,6 +3,16 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.15] - 2026-11-08
+
+### Fixed
+
+- `tuck_search` no longer fails a whole search over one bad `priorResults` entry. An entry that does not match the history, such as a made-up hash or an id that is not an entry's, is now ignored, and the notice says how many were. Before, the search returned "Invalid explicit prior source range", and the agent fell back to word search.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.14:** 13,946 requests on 29 recordings, 0 differ, 0 dead tasks, the same 28 clips. Tests; CI; the stress test on Pi 1.2.0 and the newest Pi, with the same 3 of 274 cells.
+
 ## [1.0.14] - 2026-11-07
 
 ### Changed
