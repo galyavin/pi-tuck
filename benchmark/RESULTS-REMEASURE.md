@@ -1,6 +1,6 @@
 # Re-measure of retention on pi-tuck 1.0.11 (`PREREG-REMEASURE.md`): closed, stopped at 8 of 190 answer sets
 
-**No result.** The test was registered on 2026-11-06 for 190 answer sets (95 cuts, arms `tuck` and `tuck-lexical`) at a 128,000-token window on the model setup that `mac-studio/main` served until that day. It was stopped after 8 sets and will not be resumed, because the setup it was registered for no longer exists. None of its bars was read, no accuracy was scored, and no retention claim past cut 4 comes from it. The registration stands as written; this file only records how far it got and why it ended.
+**No result.** The test was registered on 2026-11-06 for 190 answer sets (95 cuts, arms `tuck` and `tuck-lexical`) at a 128,000-token window on the model setup in place when it was registered. It was stopped after 8 sets and will not be resumed, because the setup it was registered for no longer exists. None of its bars was read, no accuracy was scored, and no retention claim past cut 4 comes from it. The registration stands as written; this file only records how far it got and why it ended.
 
 ## Why it ended
 
