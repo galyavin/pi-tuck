@@ -67,7 +67,7 @@ test('disabled, or a recovery retry pending: a cut starts nothing', async()=>{
 test('through installCompaction: the cut handler does not wait for indexing, and a failure goes to recovery', async()=>{
  const f=fixture();f.append('first decision');await searchBeforeAnyCut(f);cutAll(f);f.failEmbed=true;
  const handlers=new Map<string,((event:unknown,ctx:unknown)=>unknown)[]>();
- const pi={on:(name:string,handler:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,[...(handlers.get(name)??[]),handler]);},registerCommand:()=>{},registerTool:()=>{}} as unknown as ExtensionAPI;
+ const pi={on:(name:string,handler:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,[...(handlers.get(name)??[]),handler]);},registerCommand:()=>{},registerTool:()=>{},getAllTools:()=>[],getActiveTools:()=>[]} as unknown as ExtensionAPI;
  const handle=await installCompaction(pi,{semanticRecall:f.c});
  try{
   const ctx={cwd:f.cwd,sessionManager:f.manager};

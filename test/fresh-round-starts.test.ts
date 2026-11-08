@@ -13,7 +13,8 @@ import { harness } from './budget-fixture';
 const WINDOW = 32768, RESPONSE = 16384;
 const refused = { limits: { contextWindow: WINDOW, maxTokens: RESPONSE }, reserveTokens: RESPONSE, cutAtDefault: true, liveTools: true,
 	compaction: { requestReserve: () => ({ response: RESPONSE, responseExact: true as const }) },
-	system: 1500, host: 100, at: 'tool' as const, history: 1000, complete: 31300, fresh: 15000,
+	// The recovery cut now activates history tools too. Leave room for their schemas beside the protected input of a manual cut.
+	system: 1500, host: 100, at: 'tool' as const, history: 1000, complete: 31000, fresh: 15000,
 	replyTokens: (request: number) => request === 1 ? 1000 : 0 };
 const isDiscarded = (entry: SessionEntry) => entry.type === 'message' && entry.message.role === 'assistant' && ['error', 'aborted'].includes((entry.message as { stopReason?: string }).stopReason ?? '');
 const isPrompt = (entry: SessionEntry) => entry.type === 'message' && entry.message.role === 'user';
