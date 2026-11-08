@@ -201,6 +201,24 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 reason: `Initiating prompt continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
         }
     }
+    // The newest user turns, newest first, within the same budget as the initiating prompt: in a session that runs task after task, the current task
+    // is an older user turn followed by short steps, and the dialogue below clips user turns oldest first down to a few words, so without this the
+    // summary kept the first task whole and lost the one being worked on. The oldest turn that does not fit keeps its head and a locator.
+    const recent: TranscriptRecord[] = [];
+    let recentLeft = MAX_TASK_CONTRACT_CHARACTERS;
+    for (let at = boundary - 1; at >= 0 && recentLeft > 0; at--) {
+        const entry = entries[at]!;
+        if (entry.type !== "message" || entry.message.role !== "user" || entry.id === protectedUser?.id || entry.id === initiating?.id) continue;
+        const content = entry.message.content;
+        if (!isTextOnly(content)) continue;
+        const text = textOf(content), index = indices.get(entry.id);
+        if (!text.trim() || index === undefined) continue;
+        const quoted = head(text, recentLeft), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(entry) }];
+        recentLeft -= quoted.length;
+        if (quoted.length < text.length) recent.unshift({ kind: "omission", role: "user", sourceIndex: index,
+            reason: `User turn continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes });
+        recent.unshift({ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes });
+    }
     if (protectedUser?.type === "message" && protectedUser.message.role === "user")
         mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, text: textOf(protectedUser.message.content), sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }] });
     // The file ledger and the action trail of the compacted history are mandatory, so they are charged in base like the quotes above.
@@ -218,21 +236,26 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     };
     const before = measure(projected.messages);
     const model = ctx.model;
-    const floorAt = (keep: number) => {
+    const quotes = (withRecent: boolean) => withRecent ? [...mandatory, ...recent] : mandatory;
+    const floorAt = (keep: number, withRecent: boolean) => {
         const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        const messages = preview(serializeTranscript([...mandatory, ...ledger]) + DIALOGUE_SUFFIX);
-        return { ledger, messages, base: measure(messages) };
+        const messages = preview(serializeTranscript([...quotes(withRecent), ...ledger]) + DIALOGUE_SUFFIX);
+        return { ledger, messages, base: measure(messages), withRecent };
     };
     const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
-    // When the whole floor cannot fit, the trail and the ledger keep only their headings and counts; only that can refuse the cut.
-    let floor = floorAt(Math.max(items.length, actions.length));
-    if (!fits(floor.base) && (items.length || actions.length)) floor = floorAt(0);
+    // When the whole floor cannot fit, the trail and the ledger keep only their headings and counts, then the recent user turns go; only the
+    // floor without them can refuse the cut, as before they were quoted.
+    let floor = floorAt(Math.max(items.length, actions.length), true);
+    if (!fits(floor.base) && (items.length || actions.length)) floor = floorAt(0, true);
+    if (!fits(floor.base) && recent.length) floor = floorAt(Math.max(items.length, actions.length), false);
+    if (!fits(floor.base) && recent.length && (items.length || actions.length)) floor = floorAt(0, false);
     const { ledger, base } = floor;
+    const kept = quotes(floor.withRecent);
     if (!model || !fits(base))
         return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorMessages: floor.messages };
     const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
     const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entryById.get(id)!)), receiptContext,
-        ranking: { maxBriefChars, mandatorySourceIndices: new Set(mandatory.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },
+        ranking: { maxBriefChars, mandatorySourceIndices: new Set(kept.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },
     };
     // Both views use the same parser, mandatory insertion, native preview and guard, and end with the same closing section.
     const assemble = (compiled: string) => {
@@ -240,7 +263,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const split = compiled ? splitSummary(compiled) : { body: "", version: 2 as const };
         if (!split) throw new Error("pi-tuck returned an invalid summary");
         const records = parseRecords(split.body, split.version);
-        for (const record of mandatory) {
+        for (const record of kept) {
             const insertion = records.findIndex(row => row.sourceIndex !== undefined && row.sourceIndex > record.sourceIndex!);
             records.splice(insertion < 0 ? records.length : insertion, 0, record);
         }
