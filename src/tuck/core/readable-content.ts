@@ -6,12 +6,14 @@ export interface ReadableContentPart {
   arguments?: unknown;
 }
 
-/** Pi stores opaque/encrypted reasoning in thinkingSignature. Also refuse
- * explicit redaction/encryption markers in imported session blocks. */
+/** Pi stores opaque/encrypted reasoning in thinkingSignature. The one exception: pi-ai's openai-completions adapter stores only the name of the
+ * response field the plain reasoning came from (OPENAI_COMPLETIONS_REASONING_FIELDS), which signs or encrypts nothing. Also refuse explicit
+ * redaction/encryption markers in imported session blocks. */
+const PLAIN_REASONING_FIELDS: ReadonlySet<unknown> = new Set(["reasoning", "reasoning_content", "reasoning_text"]);
 export function isPlainThinking(block: unknown): block is { type: "thinking"; thinking: string } {
   if (!block || typeof block !== "object") return false;
   const value = block as Record<string, unknown>;
-  return value.type === "thinking" && typeof value.thinking === "string" && value.thinkingSignature === undefined &&
+  return value.type === "thinking" && typeof value.thinking === "string" && (value.thinkingSignature === undefined || PLAIN_REASONING_FIELDS.has(value.thinkingSignature)) &&
     (value.redacted === undefined || value.redacted === false) &&
     (value.encrypted === undefined || value.encrypted === false) &&
     value.encryptedContent === undefined && value.encrypted_content === undefined;

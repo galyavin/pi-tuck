@@ -153,3 +153,10 @@ test('the registered recall description explains plain thinking and excluded rea
   await installCompaction(pi);
   expect(tool!.description).toContain('Plain thinking is readable; signed, redacted or encrypted reasoning and system records are excluded.');
 });
+
+import { isPlainThinking } from '../src/tuck/core/readable-content';
+test('openai-completions marks plain reasoning with its field name, which is not a signature', () => {
+  for (const field of ['reasoning', 'reasoning_content', 'reasoning_text']) expect(isPlainThinking({ type: 'thinking', thinking: 'plan', thinkingSignature: field })).toBe(true);
+  expect(isPlainThinking({ type: 'thinking', thinking: 'x', thinkingSignature: '[{"type":"reasoning.encrypted","data":"abc"}]' })).toBe(false);
+  expect(isPlainThinking({ type: 'thinking', thinking: 'x', thinkingSignature: 'EqQBCkgIAxABGAIiQL' })).toBe(false);
+});
