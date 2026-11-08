@@ -1,7 +1,7 @@
 import type { CompilerMessage } from "../types";
 import { normalize } from "./normalize";
 import { filterNoise } from "./filter-noise";
-import { shrinkDialogue, wholeDialogue, type DialogueInput } from "./shrink";
+import { shrinkDialogue, wholeDialogue, omittedDialogue, type DialogueInput } from "./shrink";
 
 export interface CompileInput {
   messages: CompilerMessage[];
@@ -23,14 +23,22 @@ export interface CompileInput {
 // A cut offers the whole dialogue and then, when it does not fit, the shrunk one, from the same input: normalize it once. The blocks are
 // never mutated, and keeping the same objects also keeps their cached passage analyses.
 const inputs = new WeakMap<CompileInput, DialogueInput>();
+const normalized = new WeakMap<NonNullable<CompileInput["sourceIndices"]>, {
+  messages: CompileInput["messages"]; sourceTimes: CompileInput["sourceTimes"]; sourceEntryIds: CompileInput["sourceEntryIds"];
+  receiptContext: CompileInput["receiptContext"]; blocks: DialogueInput["blocks"];
+}>();
 const dialogueInput = (input: CompileInput): DialogueInput => {
   let prepared = inputs.get(input);
-  if (!prepared) inputs.set(input, prepared = {
-    blocks: filterNoise(normalize(input.messages, input.sourceIndices, input.receiptContext, input.sourceEntryIds, input.sourceTimes)),
-    mandatorySourceIndices: input.ranking?.mandatorySourceIndices,
-    sourceIndices: input.sourceIndices ?? input.messages.map((_, index) => index),
-    sourceEntryIds: input.sourceEntryIds,
-  });
+  if (!prepared) {
+    const cached = input.sourceIndices && normalized.get(input.sourceIndices);
+    const blocks = cached?.messages === input.messages && cached.sourceTimes === input.sourceTimes &&
+      cached.sourceEntryIds === input.sourceEntryIds && cached.receiptContext === input.receiptContext ? cached.blocks :
+      normalize(input.messages, input.sourceIndices, input.receiptContext, input.sourceEntryIds, input.sourceTimes).filter(block =>
+        block.kind === "tool_result" || filterNoise([block]).length > 0);
+    if (input.sourceIndices) normalized.set(input.sourceIndices, { messages: input.messages, sourceTimes: input.sourceTimes, sourceEntryIds: input.sourceEntryIds, receiptContext: input.receiptContext, blocks });
+    inputs.set(input, prepared = { blocks, mandatorySourceIndices: input.ranking?.mandatorySourceIndices,
+      sourceIndices: input.sourceIndices ?? input.messages.map((_, index) => index), sourceEntryIds: input.sourceEntryIds });
+  }
   return prepared;
 };
 
@@ -38,6 +46,8 @@ const dialogueInput = (input: CompileInput): DialogueInput => {
  * This disposable view grants neither present authority nor native tool execution. */
 export const compileDialogue = (input: CompileInput): string => wholeDialogue(dialogueInput(input));
 
-/** The dialogue shrunk to `ranking.maxBriefChars`, oldest assistant text first (see `shrinkDialogue`); "" when nothing fits. */
+/** The lower ranks within `ranking.maxBriefChars`; "" when the counted omission floor cannot fit. */
 export const compileShrunkDialogue = (input: CompileInput & { ranking: { maxBriefChars: number } }): string =>
   shrinkDialogue(dialogueInput(input), input.ranking.maxBriefChars).text;
+
+export const compileOmissions = (input: CompileInput): string => omittedDialogue(dialogueInput(input));

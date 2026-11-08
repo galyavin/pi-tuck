@@ -21,12 +21,20 @@ interface RecordFields {
   role?: "user" | "assistant" | "custom" | "bashExecution" | "toolResult";
   sourceIndex?: number;
   sourceIndices?: number[];
+  /** Inclusive original message-index bounds of a counted omission. */
+  sourceRange?: { start: number; end: number };
   text?: string;
   span?: { coordinateSpace: "sanitized-block"; start: number; end: number; totalCharacters: number };
   reason?: string;
   count?: number;
   title?: string;
 }
+const validSourceRange = (value: unknown): value is { start: number; end: number } => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const range = value as { start: number; end: number };
+  return Object.keys(range).length === 2 && Object.keys(range).every(key => key === "start" || key === "end") &&
+    Number.isSafeInteger(range.start) && range.start >= 0 && Number.isSafeInteger(range.end) && range.start <= range.end;
+};
 /** The tool_call, tool_receipt, tool_excerpt and bash kinds are v1 only: summaries saved by earlier builds hold them, and this build no longer writes them. */
 export type TranscriptRecord = RecordFields & (
   { kind: "excerpt"; role: "user" | "assistant" | "custom"; text: string } |
@@ -73,15 +81,19 @@ const LEGACY_RECEIPT_RANGE_NOTICE = RECEIPT_RANGE_NOTICE.replace("tuck_recall", 
  *   record    = [ locator " " ] role [ " " id ] [ " " time ] [ " " span ] ":" ...                      excerpt
  *             | [ locator " " ] [ role [ " " id ] " " ] "omitted" [ " " time ] [ " " span ] ":" ...      omission of part of one source,
  *                                                                                                         or, with no role, of the tool history
+ *             | role " omitted " count " #" index "-#" index ":" ...                             counted inclusive index range
  *             | role " omitted " count [ " " locator-time { " " locator-time } ] ":" ...               omission of unselected text blocks
  *             | [ locator " " ] title ":" ...                                                          section (file ledger, action trail)
  *   locator   = "#" index                      the source's session-wide index, as tuck_recall {"index"} takes it
  *   locator-time = locator [ "@" time-value ]  every locator of a record has a time, or none does
- *   role      = "user" | "assistant" | "custom"
+ *   role      = "user" | "assistant" | "custom" | "toolResult" (omissions only)
  *   id        = a JSON string                  the native entry id of a custom notice (role "custom" only)
  *   time      = "@" time-value                 the recorded time of the locator that precedes the role (a record that has one)
  *   time-value = UTC | "journal:" UTC | "unknown"   UTC is the message time, "journal:" UTC the session file's time of the entry
  *   span      = "[chars " start "-" end " of " total "]"     the characters of the source text block the text covers or the omission leaves out
+ *   // New grouped omissions carry a count and inclusive index bounds. The count
+ *   // is dropped units of that role inside the bounds, not the width of the range.
+ *   // Older per-source pointer lists and generic tool notices remain readable.
  *   count     = index                          how many text blocks the omission counts
  *   title     = capital letter, then letters, digits, "_" and "-"
  *   index     = "0" | nonzero digit, then digits   a safe integer, no sign, no leading zero
@@ -137,11 +149,16 @@ export const serializeRecord = (record: TranscriptRecord): string => {
   }
   if (record.kind !== "excerpt" && record.kind !== "omission") return refuse(record);
   const { role, sourceIndex, sourceEntryId, span } = record, omission = record.kind === "omission";
-  if (role !== undefined && !["user", "assistant", "custom"].includes(role) || role === undefined && (!omission || sourceEntryId !== undefined) ||
+  if (role !== undefined && !["user", "assistant", "custom", ...(omission ? ["toolResult"] : [])].includes(role) || role === undefined && (!omission || sourceEntryId !== undefined) ||
     sourceEntryId !== undefined && (role !== "custom" || typeof sourceEntryId !== "string")) refuse(record);
   const who = (sourceEntryId === undefined ? "" : ` ${JSON.stringify(sourceEntryId)}`);
   if (omission && record.count !== undefined) {
-    only("kind", "role", "count", "sourceIndices", "reason", "sourceTimes");
+    only("kind", "role", "count", "sourceIndices", "sourceRange", "reason", "sourceTimes");
+    if (record.sourceRange !== undefined) {
+      const range = record.sourceRange;
+      if (!validSourceRange(range) || record.sourceIndices !== undefined || record.sourceTimes !== undefined || role === undefined || typeof record.reason !== "string") refuse(record);
+      return line(`${role} omitted ${index(record.count)} #${index(range.start)}-#${index(range.end)}`, record.reason);
+    }
     const locators = record.sourceIndices ?? [], stamped = times(locators);
     if (role === undefined || typeof record.reason !== "string") refuse(record);
     return line(`${role} omitted ${index(record.count)}` + locators.map((n, i) => ` #${index(n)}${stamped ? "@" + stamped[i] : ""}`).join(""), record.reason);
@@ -163,8 +180,9 @@ const unescapeText = (text: string): string => text.replace(/\\([\\nr])?/g, (_, 
 // Sticky patterns: each is matched at the position the line has been read up to.
 const INDEX = "(0|[1-9]\\d*)";
 const TIME = "(unknown|(?:journal:)?\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z)";
-const LOCATOR = new RegExp(`#${INDEX} `, "y"), ROLE = /user|assistant|custom/y, OMITTED = /omitted/y;
+const LOCATOR = new RegExp(`#${INDEX} `, "y"), ROLE = /user|assistant|custom|toolResult/y, OMITTED = /omitted/y;
 const ID = / ("(?:[^"\\\u0000-\u001f]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*")/y, SPACE_OMITTED = / omitted/y, COUNT = new RegExp(` ${INDEX}`, "y");
+const INDEX_RANGE = new RegExp(` #${INDEX}-#${INDEX}`, "y");
 const LOCATOR_TIME = new RegExp(` #${INDEX}(?:@${TIME})?`, "y"), TIME_TOKEN = new RegExp(` @${TIME}`, "y");
 const SPAN = new RegExp(` \\[chars ${INDEX}-${INDEX} of ${INDEX}\\]`, "y"), TITLE_TOKEN = /[A-Z][A-Za-z0-9_-]*/y;
 
@@ -197,6 +215,8 @@ const parseLine = (line: string): unknown => {
     text = end();
     record = { kind: "section", title, text, ...common };
   } else if (count) {
+    const range = take(INDEX_RANGE);
+    if (range) return { kind: "omission", role, count: integer(count[1]!), sourceRange: { start: integer(range[1]!), end: integer(range[2]!) }, reason: end() };
     const items: { sourceIndex: number; time?: SourceTime }[] = [];
     for (let item; (item = take(LOCATOR_TIME));) items.push({ sourceIndex: integer(item[1]!), ...(item[2] !== undefined ? { time: timeOf(item[2]) } : {}) });
     const stamped = items.filter(item => item.time).length;
@@ -231,6 +251,8 @@ const validate = (r: unknown): TranscriptRecord => {
     (v.sourceIndex !== undefined && !integer(v.sourceIndex)) ||
     (v.sourceEntryId !== undefined && (typeof v.sourceEntryId !== "string" || !v.sourceEntryId || v.sourceEntryId.length > 200 ||
       v.role !== "custom" || !["excerpt", "omission"].includes(v.kind))) ||
+    (v.sourceRange !== undefined && (v.kind !== "omission" || v.count === undefined || v.sourceIndices !== undefined || v.sourceTimes !== undefined ||
+      v.role === undefined || !validSourceRange(v.sourceRange))) ||
     (v.sourceIndices !== undefined && (!Array.isArray(v.sourceIndices) || !v.sourceIndices.every(integer))) ||
     (v.kind !== "omission" && typeof v.text !== "string") ||
     (v.kind === "omission" && typeof v.reason !== "string") ||

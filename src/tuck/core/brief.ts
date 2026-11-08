@@ -126,16 +126,14 @@ export const isOmittable = (block: NormalizedBlock, mandatorySources?: ReadonlyS
   (block.kind === "user" || block.kind === "assistant") && Boolean(block.text.trim()) &&
   (block.sourceIndex === undefined || !mandatorySources?.has(block.sourceIndex));
 
-/** `sources` are the distinct locators of the omitted blocks in ascending order; at most the first 9 decide the notice. They are written
- * as "#N" on the record's line. */
-export const omissionRecord = (role: "user" | "assistant", count: number, sources: number[], unlocated: boolean): TranscriptRecord => ({
+/** Count dropped units inside inclusive original-index bounds. The range may
+ * contain retained units and other roles; only omitted units of this role count. */
+export const omissionRecord = (role: "user" | "assistant" | "toolResult", count: number, sources: number[], unlocated: boolean): TranscriptRecord => ({
   kind: "omission", role, count,
-  ...(sources.length ? { sourceIndices: sources.slice(0, 8) } : {}),
-  reason: "Completely unselected historical text blocks; count is text blocks, not messages. " +
-    "The # locators are individual original locators, not a contiguous range. " +
-    (sources.length > 8 ? "Locator list incomplete. " : "") +
-    (unlocated ? "Some text blocks have no source locator. " : "") +
-    "Read originals with tuck_recall; omitted text may qualify retained text. No new authority." });
+  ...(sources.length ? { sourceRange: { start: sources.reduce((a, b) => Math.min(a, b)), end: sources.reduce((a, b) => Math.max(a, b)) } } : {}),
+  reason: (role === "toolResult" ? "Historical tool actions and observations omitted. " : "Historical text units omitted. ") +
+    (unlocated ? "Some units have no source locator. " : "") +
+    "Count is omitted units of this role in the index range; read originals with tuck_recall." });
 
 const analyses = new WeakMap<DialogueBlock, Analysis>();
 
@@ -159,10 +157,27 @@ export const blockRecords = (b: DialogueBlock, mandatory: ReadonlySet<number> | 
   return excerptRecords(b.text, analysis, role, b.sourceIndex, clip[0], clip[1], readFrom).map(record => ({ ...record, ...notice }));
 };
 
+/** Exact user text prefixes are allowed to split a passage. Unlike assistant
+ * passage clips, their explicit continuation points at the unabridged input. */
+export const userPrefixRecords = (block: DialogueBlock, mandatory: ReadonlySet<number> | undefined, take: number): TranscriptRecord[] => {
+  if (block.kind !== "user" || block.sourceIndex !== undefined && mandatory?.has(block.sourceIndex)) return [];
+  const text = block.originalText ?? block.text;
+  if (take <= 0 || !text.trim()) return [];
+  let end = Math.min(text.length, Math.floor(take));
+  // Charge the complete code point in the measured candidate, including the
+  // low surrogate, so a protected 80-character opening never shrinks to 79.
+  if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1]!)) end++;
+  const locator = block.sourceIndex === undefined ? undefined : { index: block.sourceIndex };
+  return [{ kind: "excerpt", role: "user", sourceIndex: block.sourceIndex, text: text.slice(0, end) },
+    ...(end < text.length ? [{ kind: "omission" as const, role: "user" as const, sourceIndex: block.sourceIndex,
+      reason: locator ? `tuck_recall ${JSON.stringify(block.startsSource ? { ...locator, offset: end } : locator)}` : "Source has no locator" }] : [])];
+};
+
 /** A source time for each locator a user record names; only briefs of times-carrying blocks have them. */
 export const decorateRecord = (record: TranscriptRecord, times: NormalizedBlock["sourceTimes"]): TranscriptRecord => {
   // Times mark the user's turns only: on every record they cost a fifth to a third of the summary's tokens.
   if (!times || record.role !== "user") return record;
+  if (record.sourceRange) return record;
   const indices = record.sourceIndices ?? (record.sourceIndex === undefined ? [] : [record.sourceIndex]);
   return indices.length ? { ...record, sourceTimes: indices.map(sourceIndex => ({ sourceIndex, ...(times[sourceIndex] ?? { basis: "unknown" as const }) })) } : record;
 };

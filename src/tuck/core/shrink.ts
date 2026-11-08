@@ -1,5 +1,5 @@
 import type { NormalizedBlock } from "../types";
-import { blockRecords, decorateRecord, isDialogue, isOmittable, omissionRecord, type Clip, type DialogueBlock } from "./brief";
+import { blockRecords, decorateRecord, isDialogue, isOmittable, omissionRecord, userPrefixRecords, type Clip, type DialogueBlock } from "./brief";
 import { DIALOGUE_SUFFIX } from "./format";
 import { orderByOriginalSource } from "./source-order";
 import { serializeRecord, serializeTranscript, TRANSCRIPT_HEADER, type TranscriptRecord } from "./transcript";
@@ -10,10 +10,9 @@ const ROLES: readonly Role[] = ["user", "assistant", "notice"];
 /** The lossy variants of a unit, least clipped first: the words kept from the start of its text and from its end. */
 const TIERS: Record<Role, readonly Clip[]> = {
   assistant: [[80, 120], [40, 40], [16, 0]],
-  user: [[256, 0], [64, 0], [24, 0]],
+  user: [],
   notice: [[256, 0]],
 };
-const TOOLS_OMITTED: TranscriptRecord = { kind: "omission", reason: "Historical tool actions and observations omitted; read original sources with tuck_recall" };
 
 export interface DialogueInput {
   /** Normalized, noise-filtered blocks of the pre-cut history in chronological order: dialogue and tool blocks alike. */
@@ -25,13 +24,13 @@ export interface DialogueInput {
   sourceEntryIds?: readonly string[];
 }
 
-/** The configurations the ladder tries, in order; "none" is no configuration that fits. */
-export type Step = "whole" | `A${1 | 2 | 3}` | "B" | `C${1 | 2 | 3}` | "D" | "E1" | "E2" | "none";
+/** Whether the ranked view is whole, selected, or cannot fit its omission metadata. */
+export type Step = "whole" | "ranked" | "none";
 export interface Shrunk {
   /** The summary text, or "" when nothing fits. */
   text: string;
   step: Step;
-  /** The length the ladder computed from per-unit lengths before it rendered `text`. */
+  /** The serialized size of the selected view. */
   size: number;
 }
 
@@ -40,7 +39,7 @@ interface Rendered { records: TranscriptRecord[]; cost: number }
 const rendered = (records: TranscriptRecord[]): Rendered => ({ records, cost: records.reduce((n, r) => n + serializeRecord(r).length + 1, 0) });
 
 /** Units [0, drop) of a role are dropped, [drop, end) are clipped to `tier`, and the rest stay whole. */
-interface Setting { drop: number; tier: number; end: number }
+interface Setting { drop: number; tier: number; end: number; take?: number }
 type Config = Record<Role, Setting>;
 const WHOLE: Setting = { drop: 0, tier: 0, end: 0 };
 
@@ -55,7 +54,6 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
   // nothing and its unit is counted in the role's one omission notice, like a dropped unit: a notice per empty clip would cost more than text.
   const NONE: Rendered = { records: [], cost: 0 };
   const emptied: Uint8Array[] = [new Uint8Array(n)];
-  const emptyCounts: Int32Array[] = [new Int32Array(n + 1)];
   /** Level t holds each unit's tier-t variant. A clip that would not make the unit smaller is not taken, so sizes never grow with t. */
   const level = (t: number): Rendered[] => {
     while (levels.length <= t) {
@@ -67,51 +65,27 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
         if (role !== "notice" && isOmittable(block, mandatory) && !clipped.records.some(record => record.kind === "excerpt")) { empty[i] = 1; return NONE; }
         return clipped.cost < previous[i]!.cost ? clipped : previous[i]!;
       });
-      const counts = new Int32Array(n + 1);
-      empty.forEach((e, i) => counts[i + 1] = counts[i]! + e);
-      levels.push(next); sums.push(prefix(next)); emptied.push(empty); emptyCounts.push(counts);
+      levels.push(next); sums.push(prefix(next)); emptied.push(empty);
     }
     return levels[t]!;
   };
   const sum = (t: number) => { level(t); return sums[t]!; };
 
-  // The notice for a dropped prefix of p units: how many unselected text blocks, the first locators, and whether some have none.
-  let tally: { counts: Int32Array; unlocated: Uint8Array; smallest: number[][] } | undefined;
-  /** The notice for the units a setting omits: the dropped prefix, and the clips in [drop, end) that kept no text. */
+  /** All dropped units, including clips that retained no passage. Count units,
+   * retain one locator per unit, and never truncate the pointer list. */
   const omission = ({ drop, tier, end }: Setting): TranscriptRecord | undefined => {
     if (role === "notice") return undefined;
-    if (!tally) {
-      tally = { counts: new Int32Array(n + 1), unlocated: new Uint8Array(n + 1), smallest: new Array(n + 1) };
-      let smallest: number[] = [], count = 0, unlocated = 0;
-      tally.smallest[0] = smallest;
-      units.forEach((block, i) => {
-        if (isOmittable(block, mandatory)) {
-          count++;
-          const source = block.sourceIndex;
-          if (source === undefined) unlocated = 1;
-          else if (!smallest.includes(source) && (smallest.length < 9 || source < smallest[8]!)) {
-            smallest = [...smallest, source].sort((a, b) => a - b).slice(0, 9);
-          }
-        }
-        tally!.counts[i + 1] = count; tally!.unlocated[i + 1] = unlocated; tally!.smallest[i + 1] = smallest;
-      });
+    if (tier > 0) level(tier);
+    let count = 0, unlocated = false;
+    const sources: number[] = [];
+    for (let i = 0; i < Math.max(drop, end); i++) {
+      if (i >= drop && !(tier > 0 && emptied[tier]![i])) continue;
+      const block = units[i]!;
+      if (!isOmittable(block, mandatory)) continue;
+      count++;
+      if (block.sourceIndex === undefined) unlocated = true; else sources.push(block.sourceIndex);
     }
-    let count = tally.counts[drop]!, unlocated = tally.unlocated[drop] === 1, sources = tally.smallest[drop]!;
-    if (end > drop && tier > 0) {
-      level(tier);
-      const empty = emptied[tier]!, counts = emptyCounts[tier]!;
-      count += counts[end]! - counts[drop]!;
-      if (counts[end]! > counts[drop]!) {
-        // Text blocks of one message share a locator: collect distinct ones, enough to tell whether the shown list is complete.
-        const extra = new Set<number>();
-        for (let i = drop; i < end && (extra.size < 9 || !unlocated); i++) if (empty[i]) {
-          const source = units[i]!.sourceIndex;
-          if (source === undefined) unlocated = true; else if (extra.size < 9) extra.add(source);
-        }
-        sources = [...new Set([...sources, ...extra])].sort((a, b) => a - b).slice(0, 9);
-      }
-    }
-    return count ? decorate(omissionRecord(role, count, sources, unlocated)) : undefined;
+    return count ? decorate(omissionRecord(role, count, sources.sort((a, b) => a - b), unlocated)) : undefined;
   };
   const omissionCosts = new Map<string, number>();
   const omissionCost = (setting: Setting) => {
@@ -121,9 +95,12 @@ const createLane = (role: Role, units: DialogueBlock[], mandatory: ReadonlySet<n
     return cost;
   };
 
+  const prefixAt = (at: number, take: number) => rendered(userPrefixRecords(units[at]!, mandatory, take).map(decorate));
   return {
-    n, level, sum, omission,
-    cost: ({ drop, tier, end }: Setting) => sums[0]![n]! - sums[0]![Math.max(drop, end)]! + (end > drop ? sum(tier)[end]! - sum(tier)[drop]! : 0) + omissionCost({ drop, tier, end }),
+    n, level, sum, omission, prefixAt,
+    cost: ({ drop, tier, end, take }: Setting) => take !== undefined
+      ? sums[0]![n]! - sums[0]![drop + 1]! + prefixAt(drop, take).cost + omissionCost({ drop, tier: 0, end: 0 })
+      : sums[0]![n]! - sums[0]![Math.max(drop, end)]! + (end > drop ? sum(tier)[end]! - sum(tier)[drop]! : 0) + omissionCost({ drop, tier, end }),
   };
 };
 
@@ -136,7 +113,11 @@ const createDialogue = (input: DialogueInput) => {
     Record<Role, ReturnType<typeof createLane>>;
   const seen: Record<Role, number> = { user: 0, assistant: 0, notice: 0 };
   const order = dialogue.map(block => ({ role: block.kind, i: seen[block.kind]++ }));
-  const tools = input.blocks.length > dialogue.length ? rendered([TOOLS_OMITTED]) : undefined;
+  const receipts = input.blocks.filter(block => block.kind === "tool_result" &&
+    (block.sourceIndex === undefined || !input.mandatorySourceIndices?.has(block.sourceIndex)));
+  const tools = receipts.length ? rendered([omissionRecord("toolResult", receipts.length,
+    [...new Set(receipts.flatMap(block => block.sourceIndex === undefined ? [] : [block.sourceIndex]))],
+    receipts.some(block => block.sourceIndex === undefined))]) : undefined;
   const overhead = TRANSCRIPT_HEADER.length + DIALOGUE_SUFFIX.length;
 
   /** The length of the summary text of a configuration: its header, one line per record, and the closing section; 0 when it has no record. */
@@ -148,7 +129,8 @@ const createDialogue = (input: DialogueInput) => {
     const records: TranscriptRecord[] = [];
     for (const { role, i } of order) {
       const { drop, tier, end } = config[role];
-      if (i >= drop) records.push(...lanes[role].level(i < end ? tier : 0)[i]!.records);
+      if (i >= drop) records.push(...(i === drop && config[role].take !== undefined
+        ? lanes[role].prefixAt(i, config[role].take!).records : lanes[role].level(i < end ? tier : 0)[i]!.records));
     }
     for (const role of ROLES) { const record = lanes[role].omission(config[role]); if (record) records.push(record); }
     if (tools) records.push(...tools.records);
@@ -164,54 +146,78 @@ export const wholeDialogue = (input: DialogueInput): string => {
   return text({ user: WHOLE, assistant: WHOLE, notice: WHOLE });
 };
 
-/**
- * The same dialogue shrunk until its summary text is at most `limit` characters, oldest first. The first configuration that fits wins:
- *   A. the newest k assistant units whole, the older ones clipped to tier 1, 2, 3 (the largest k that fits, for each tier in turn);
- *   B. the newest assistant units that fit a third of the limit whole, the older ones at tier 3 with the oldest d dropped;
- *   C. the newest assistant units that fit a third of the limit at tier 3, the rest dropped; then the oldest u user units clipped to tier 1, 2, 3;
- *   D. every user unit at tier 3, the oldest dropped;
- *   E. the oldest notices dropped, then the oldest of the remaining assistant units.
- * Every step is a one-parameter family whose size is read from prefix sums of the per-unit lengths, so a step costs O(units). A notice is clipped
- * to its one tier in every configuration but the whole dialogue. The size is arithmetic over unit lengths; the rendered text has the last say:
- * a configuration whose text is over the limit is passed over.
- */
+/** The fixed omission cost of this cut, charged before any optional text. */
+export const omittedDialogue = (input: DialogueInput): string => {
+  const records: TranscriptRecord[] = [];
+  for (const role of ["user", "assistant", "toolResult"] as const) {
+    const blocks = input.blocks.filter(block => block.kind === (role === "toolResult" ? "tool_result" : role) &&
+      (block.sourceIndex === undefined || !input.mandatorySourceIndices?.has(block.sourceIndex)) &&
+      (!("text" in block) || Boolean(block.text.trim())));
+    if (!blocks.length) continue;
+    const sources = blocks.flatMap(block => block.sourceIndex === undefined ? [] : [block.sourceIndex]);
+    records.push(decorateRecord(omissionRecord(role, blocks.length, sources, blocks.some(block => block.sourceIndex === undefined)), blocks[0]?.sourceTimes));
+  }
+  return records.length ? serializeTranscript(records) + DIALOGUE_SUFFIX : "";
+};
+
+/** Lower ranks of the single fill: the existing recent assistant third, then
+ * more user turns newest first, then the remaining dialogue newest first.
+ * Each lane grows only from its recent end; complete passages remain atomic. */
 export const shrinkDialogue = (input: DialogueInput, limit: number): Shrunk => {
   const { lanes, size, text } = createDialogue(input);
   const { user, assistant, notice } = lanes;
-  const clipped: Setting = { drop: 0, tier: 1, end: notice.n };
-  const found = (step: Step, config: Config): Shrunk | undefined => {
-    const length = size(config);
-    if (length > limit) return undefined;
+  const gone = (lane: { n: number }): Setting => ({ drop: lane.n, tier: 0, end: 0 });
+  const config: Config = { user: gone(user), assistant: gone(assistant), notice: gone(notice) };
+  const result = (step: Step): Shrunk => {
     const summary = text(config);
-    return summary.length <= limit ? { text: summary, step, size: length } : undefined;
+    return summary.length <= limit ? { text: summary, step, size: summary.length } : { text: "", step: "none", size: 0 };
   };
-  const gone = (lane: { n: number }): Setting => ({ drop: lane.n, tier: 3, end: lane.n });
-  const tiers = [1, 2, 3] as const;
-
-  let hit = found("whole", { user: WHOLE, assistant: WHOLE, notice: WHOLE });
-  if (hit) return hit;
-  for (const t of tiers) for (let k = assistant.n; k >= 0; k--)
-    if (hit = found(`A${t}`, { user: WHOLE, assistant: { drop: 0, tier: t, end: assistant.n - k }, notice: clipped })) return hit;
-  // The newest assistant units that fit a third of the limit whole are kept until users have given way: B clips and drops only older ones.
-  // A clip can keep no text at all, so the third is sized on whole units; when the newest alone is over the third, it keeps its largest clip
-  // that fits and still has text.
+  if (size({ user: WHOLE, assistant: WHOLE, notice: WHOLE }) <= limit) {
+    Object.assign(config, { user: WHOLE, assistant: WHOLE, notice: WHOLE });
+    return result("whole");
+  }
+  if (size(config) > limit) return { text: "", step: "none", size: 0 };
+  // Preserve exactly shrinkDialogue's recent-third definition: newest whole
+  // units that fit a third, or the newest unit's largest nonempty passage clip.
   let kept = 0;
   while (kept < assistant.n && assistant.sum(0)[assistant.n]! - assistant.sum(0)[kept]! > limit / 3) kept++;
-  let recent: Setting = { drop: kept, tier: 3, end: kept };
-  if (kept === assistant.n && assistant.n > 0) for (const t of tiers) {
-    const cost = assistant.level(t)[assistant.n - 1]!.cost;
-    if (cost > 0 && cost <= limit / 3) { recent = { drop: assistant.n - 1, tier: t, end: assistant.n }; break; }
+  let recent: Setting = { drop: kept, tier: 0, end: 0 };
+  if (kept === assistant.n && assistant.n > 0) for (const tier of [1, 2, 3]) {
+    const cost = assistant.level(tier)[assistant.n - 1]!.cost;
+    if (cost > 0 && cost <= limit / 3) { recent = { drop: assistant.n - 1, tier, end: assistant.n }; break; }
   }
-  for (let d = 0; d <= recent.drop; d++)
-    if (hit = found("B", { user: WHOLE, assistant: { ...recent, drop: d }, notice: clipped })) return hit;
-  // From here users give way, and the assistant keeps only that recent third.
-  for (const t of tiers) for (let u = 0; u <= user.n; u++)
-    if (hit = found(`C${t}`, { user: { drop: 0, tier: t, end: u }, assistant: recent, notice: clipped })) return hit;
-  for (let d = 0; d <= user.n; d++)
-    if (hit = found("D", { user: { drop: d, tier: 3, end: user.n }, assistant: recent, notice: clipped })) return hit;
-  for (let d = 0; d <= notice.n; d++)
-    if (hit = found("E1", { user: gone(user), assistant: recent, notice: { drop: d, tier: 1, end: notice.n } })) return hit;
-  for (let d = recent.drop; d <= assistant.n; d++)
-    if (hit = found("E2", { user: gone(user), assistant: { ...recent, drop: d }, notice: gone(notice) })) return hit;
-  return { text: "", step: "none", size: 0 };
+  const trySetting = (role: Role, setting: Setting): boolean => {
+    const previous = config[role]; config[role] = setting;
+    if (size(config) <= limit) return true;
+    config[role] = previous; return false;
+  };
+  if (!trySetting("assistant", recent)) {
+    for (let drop = recent.drop + 1; drop <= assistant.n; drop++)
+      if (trySetting("assistant", { ...recent, drop })) break;
+  }
+  // The user lane is filled before older assistant units. If its next whole
+  // unit cannot fit, keep its largest exact prefix that fits, then continue
+  // with the lower ranks. No fixed task/head character cap participates.
+  for (let drop = user.n - 1; drop >= 0; drop--) {
+    if (trySetting("user", { drop, tier: 0, end: 0 })) continue;
+    const block = input.blocks.filter(isDialogue).filter(block => block.kind === "user")[drop]!;
+    let low = 0, high = (block.originalText ?? block.text).length - 1;
+    while (low < high) {
+      const take = Math.ceil((low + high) / 2);
+      if (trySetting("user", { drop, tier: 0, end: 0, take })) low = take; else high = take - 1;
+    }
+    if (low > 0) trySetting("user", { drop, tier: 0, end: 0, take: low });
+    break;
+  }
+  for (let drop = config.assistant.drop - 1; drop >= 0; drop--) {
+    if (trySetting("assistant", { drop, tier: 0, end: 0 })) continue;
+    for (const tier of [1, 2, 3]) if (assistant.level(tier)[drop]!.records.some(record => record.kind === "excerpt") &&
+      trySetting("assistant", { drop, tier, end: Math.max(drop + 1, recent.end) })) break;
+    break;
+  }
+  for (let drop = notice.n - 1; drop >= 0; drop--) {
+    if (trySetting("notice", { drop, tier: 0, end: 0 })) continue;
+    trySetting("notice", { drop, tier: 1, end: drop + 1 }); break;
+  }
+  return result("ranked");
 };

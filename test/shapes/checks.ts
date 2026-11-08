@@ -76,6 +76,18 @@ function omissions(units: Unit[], records: TranscriptRecord[], native: readonly 
       ...ids.map(id => indexById.get(id)!),
       ...Array.from((record.reason ?? '').matchAll(/"index"\s*:\s*(\d+)/g), match => Number(match[1]))])];
     if (locators.some(index => index < 0 || index >= sourceCount)) { failures.push('omission points outside original message indices'); continue; }
+    // A counted inclusive range covers dropped units of its named role, even
+    // with retained units or other roles between its endpoints. Exact counts
+    // are required; a broad range with a plausible-looking total is not enough.
+    if (record.sourceRange) {
+      const { start, end } = record.sourceRange;
+      if (start < 0 || end >= sourceCount || start > end) { failures.push('omission range points outside original message indices'); continue; }
+      if (!record.role || record.count === undefined) { failures.push('omission range needs a role and count'); continue; }
+      const ranged = missing.filter(unit => unit.role === record.role && unit.index >= start && unit.index <= end);
+      if (record.count !== ranged.length) { failures.push(`omission range count ${record.count} does not equal ${ranged.length} dropped ${record.role} unit(s)`); continue; }
+      for (const unit of ranged) covered.add(unit);
+      continue;
+    }
     const candidates = missing.filter(unit => !covered.has(unit) && locators.includes(unit.index) && (!record.role || record.role === unit.role));
     const count = record.count ?? (locators.length === 1 ? 1 : 0);
     for (const unit of candidates.slice(0, count)) covered.add(unit);

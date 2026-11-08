@@ -571,7 +571,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                         const fresh = new Set(event.toolResults.map(result => result.toolCallId));
                         const kept = measure(draft.floorMessages.filter(message =>
                             !(message.role === "toolResult" && fresh.has((message as ToolResultMessage).toolCallId))));
-                        floorKept = Math.min(floorKept ?? kept, kept);
+                        // Both targets must leave their protected openings beside the clip.
+                        floorKept = Math.max(floorKept ?? kept, kept);
                     }
                     return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 }
@@ -596,7 +597,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const branch = ctx.sessionManager.getBranch();
             const entryIdOf = (toolCallId: string) => branch.findLast(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === toolCallId)?.id;
             const fresh = new Set(event.toolResults.map(result => result.toolCallId));
-            const kept = previews.length ? Math.min(...previews.map(preview => measure(preview.filter(message =>
+            const kept = previews.length ? Math.max(...previews.map(preview => measure(preview.filter(message =>
                 !(message.role === "toolResult" && fresh.has((message as ToolResultMessage).toolCallId)))))) : floorKept;
             for (const budget of clipBudgets(room, factor, mandatory, kept)) {
                 const round = clipFor(event.toolResults, entryIdOf, budget);

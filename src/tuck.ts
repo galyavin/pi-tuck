@@ -1,10 +1,11 @@
 import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { orderByOriginalSource } from "./tuck/core/source-order";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
-import { parseRecords, serializeTranscript, splitSummary, type TranscriptRecord } from "./tuck/core/transcript";
+import { parseRecords, serializeTranscript, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from "./tuck/core/transcript";
 import { DIALOGUE_SUFFIX } from "./tuck/core/format";
+import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
-import { MAX_TASK_CONTRACT_CHARACTERS, actionItems, actionRecords, head, ledgerItems, ledgerRecords } from "./ledger.js";
+import { actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -30,10 +31,11 @@ export interface Tuck {
 	applyTailBudget(entries: SessionEntry[], cut: Extract<Cut, { ok: true }>, options: { charsPerToken: number; maxTokens?: number; oversizedFactor?: number }): Cut;
 	calibrateCharsPerToken(chars: number, tokens: number): { charsPerToken: number };
 	buildGlobalIndexById(entries: readonly SessionEntry[]): Map<string, number>;
-	/** The dialogue shrunk to `ranking.maxBriefChars`, oldest assistant text first; "" when not even the least of it fits. */
+	/** The lower ranks within `ranking.maxBriefChars`: recent assistant third, more user text, then remaining dialogue. */
 	compileShrunkDialogue(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
 		receiptContext?: { messages: AgentMessage[]; sourceIndices: (number | undefined)[] };
 		ranking: { maxBriefChars: number; mandatorySourceIndices?: ReadonlySet<number> } }): string;
+	compileOmissions(input: Parameters<Tuck["compileShrunkDialogue"]>[0]): string;
 	/** The whole pre-cut dialogue view; "" offers none, and the shrunk view is used. */
 	compileDialogue(input: Parameters<Tuck["compileShrunkDialogue"]>[0]): string;
 	prepareKeywordQuery(query: string): PreparedKeywordQuery;
@@ -45,15 +47,12 @@ export interface Tuck {
 import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./tuck/cut";
 import { calibrateCharsPerToken, estimateSourceMessageChars } from "./tuck/core/token-estimate";
 import { buildGlobalIndexById } from "./tuck/core/global-indices";
-import { compileShrunkDialogue, compileDialogue } from "./tuck/core/summarize";
+import { compileShrunkDialogue, compileDialogue, compileOmissions } from "./tuck/core/summarize";
 import { prepareKeywordQuery } from "./tuck/core/keyword-query";
 import { searchEntriesDetailed } from "./tuck/core/search-entries";
-export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileShrunkDialogue, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
-/** The one historical allowance: at most 25% of remaining estimated room, for both views.
- * The whole dialogue is offered only within it (plus actual preview/headroom guards);
- * otherwise the same dialogue is shrunk to fit it. The 4-character conversion matches pinned Pi's
- * summary estimator, not a provider-token guarantee. Mandatory sources (current input,
- * initiating prompt, file ledger) are already charged in base. */
+export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileShrunkDialogue, compileDialogue, compileOmissions, prepareKeywordQuery, searchEntriesDetailed };
+/** The existing quarter-free historical allowance, in Pi's four-character summary
+ * estimate. The ranked fill spends it and the preferred tail's amount together. */
 export function historicalAllowance(window: number, reserve: number, base: number, before: number): number {
     const free = Math.max(0, window - reserve - base - 1);
     return Math.max(0, Math.min(Math.floor(free / 4), before - base - 1)) * 4;
@@ -148,8 +147,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const current = entries[userPosition];
     const userContent = current?.type === "message" && current.message.role === "user" ? current.message.content : undefined;
     const textOnly = isTextOnly(userContent);
-    // The initiating prompt is the task contract: quoted in every summary that compacts it away. It is the branch's first user
-    // source; when a native edit omitted it, nothing is quoted and no later user source is promoted in its place.
+    // Anchor the actual first source only; a native omission never promotes a later prompt.
     const firstUser = branch.find(entry => entry.type === "message" && entry.message.role === "user");
     const firstUserPosition = entries.findIndex(entry => entry.id === firstUser?.id && entry.type === "message");
     const selectedKeptId = cut.firstKeptEntryId;
@@ -164,173 +162,215 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
 
 	if (cut.messages.length !== cut.selectedIds.length || (!cut.compactAll && !entries.some((e) => e.id === cut.firstKeptEntryId)))
 		throw new Error("pi-tuck returned an invalid source boundary");
-    // Keep the preferred native tail when a complete historical offer fits.
-    // Otherwise try the current/fresh floor: whole dialogue can take priority
-    // over already-observed native bulk, under the same final admission guards.
-    // Each cut's file ledger skips write/edit calls whose result is an error.
-    const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
-    // First occurrence, as entries.find would resolve it.
-    const entryById = new Map<string, SessionEntry>();
-    for (const entry of entries) if (!entryById.has(entry.id)) entryById.set(entry.id, entry);
-    const compileAtCut = (cut: Extract<Cut, { ok: true }>): Draft => {
-	const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
-	// Keep native custom provenance; converting custom notices to user text loses the distinction.
-	const boundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
-    if (boundary < 0) throw new Error("Missing original-source cut boundary");
-    const originalCut = tuck.buildOwnCut(entries.slice(0, boundary).filter(entry => entry.type !== "compaction"), 0);
-    if (!originalCut.ok) return { unavailable: "No eligible original prefix to compile" };
-    const protectedUser = userPosition >= 0 && userPosition < boundary && textOnly ? current : undefined;
-    const currentIndex = protectedUser ? indices.get(protectedUser.id) : undefined;
-    if (protectedUser && currentIndex === undefined) throw new Error("Missing current user source index");
-    const messages = originalCut.messages, sourceIndices = originalCut.selectedIds.map(id => indices.get(id));
-	const receiptContext: { messages: AgentMessage[]; sourceIndices: (number | undefined)[] } = { messages: [], sourceIndices: [] };
-	for (const entry of entries) if (entry.type === "message") {
-		receiptContext.messages.push(entry.message); receiptContext.sourceIndices.push(indices.get(entry.id));
-	}
-    // The newest user turns, newest first, then the initiating prompt, share one budget: in a session that runs task after task, the current task is
-    // an older user turn followed by short steps, and the dialogue clips user turns oldest first down to a few words, so quoting only the first prompt
-    // kept a finished task whole and lost the one being worked on. A turn that does not fit keeps its head and a locator; the first prompt gets what
-    // the newest turns leave, so a one-task session, whose later turns are short, still quotes it as before.
-    const initiating = firstUserPosition >= 0 && firstUserPosition < boundary && entries[firstUserPosition]!.id !== protectedUser?.id ? entries[firstUserPosition] : undefined;
-    const quote = (entry: SessionEntry, budget: number, label: string): TranscriptRecord[] => {
-        const content = entry.type === "message" && entry.message.role === "user" ? entry.message.content : undefined;
-        if (!isTextOnly(content)) return [];
-        const text = textOf(content!), index = indices.get(entry.id);
-        if (index === undefined) throw new Error("Missing quoted user source index");
-        const quoted = head(text, budget), sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(entry) }];
-        if (!text.trim() || !quoted.length) return [];
-        return [{ kind: "excerpt", role: "user", sourceIndex: index, text: quoted, sourceTimes }, ...(quoted.length < text.length ? [{ kind: "omission" as const, role: "user" as const,
-            sourceIndex: index, reason: `${label} continues: characters ${quoted.length}-${text.length} omitted; read them with tuck_recall {"index":${index},"offset":${quoted.length}}`, sourceTimes }] : [])];
-    };
-    // Both ends are anchored, in this order: the heads of the newest user turns (at most a quarter of the budget), the head of the first prompt (the
-    // goal of a long session), then extensions of the newest turns, then the rest of the first prompt. Heads come first so steps after a task can't
-    // use up the budget the task turn needs; the first prompt's head comes before any extension so steering turns can't use up the goal's.
-    const quotesFor = (budget: number, headSize: number, withFirst: boolean): TranscriptRecord[] => {
-        const turns: { entry: SessionEntry; text: string; take: number }[] = [];
-        // Only answered turns: a prompt that was refused and never got a reply was never taken up, and quoting it would spend the budget for nothing.
-        let answered = false;
-        for (let at = entries.length - 1; at >= 0; at--) {
-            const entry = entries[at]!;
-            if (entry.type === "message" && entry.message.role === "assistant") { answered = true; continue; }
-            if (entry.type !== "message" || entry.message.role !== "user") continue;
-            const replied = answered;
-            answered = false;
-            if (at >= boundary || !replied || entry.id === protectedUser?.id || entry.id === firstUser?.id || !isTextOnly(entry.message.content)) continue;
-            const text = textOf(entry.message.content);
-            if (text.trim()) turns.push({ entry, text, take: 0 });
-        }
-        // headSize 0 quotes the first prompt alone, as before any user turn was quoted: the last step before no quote at all.
-        if (headSize === 0) turns.length = 0;
-        let left = budget, heads = Math.floor(budget / 4);
-        for (const turn of turns) { if (heads <= 0) break; turn.take = Math.min(turn.text.length, headSize, heads); heads -= turn.take; left -= turn.take; }
-        const firstText = withFirst && initiating?.type === "message" && initiating.message.role === "user" && isTextOnly(initiating.message.content) ? textOf(initiating.message.content) : "";
-        let firstTake = Math.min(firstText.length, headSize ? Math.round(headSize * 20 / 3) : budget, Math.max(0, left));
-        left -= firstTake;
-        for (const turn of turns) { if (left <= 0) break; const more = Math.min(turn.text.length - turn.take, left); turn.take += more; left -= more; }
-        firstTake += Math.min(firstText.length - firstTake, Math.max(0, left));
-        const records = turns.filter(turn => turn.take > 0).reverse().flatMap(turn => quote(turn.entry, turn.take, "User turn"));
-        if (firstTake > 0 && initiating) records.unshift(...quote(initiating, firstTake, "Initiating prompt"));
-        return records;
-    };
-    const mandatory: TranscriptRecord[] = [];
-    if (protectedUser?.type === "message" && protectedUser.message.role === "user")
-        mandatory.push({ kind: "excerpt", role: "user", sourceIndex: currentIndex, text: textOf(protectedUser.message.content), sourceTimes: [{ sourceIndex: currentIndex!, ...resolveSourceTime(protectedUser) }] });
-    // The file ledger and the action trail of the compacted history are mandatory, so they are charged in base like the quotes above.
-    // A locator is given only where tuck_recall {index} resolves it: a unique global index of a readable entry.
-    const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
-    const items = ledgerItems(compacted, indices, resolves, failedCalls), actions = actionItems(compacted, indices, resolves, failedCalls);
-	const header = ctx.sessionManager.getHeader();
-	if (!header) throw new Error("Missing native session header");
-	const details = { compactor: "pi-tuck", version: 2, adapter: "standalone", keptUserTurns: cut.keptUserTurns,
-		...(cut.budgetCut ? { budgetCut: cut.budgetCut } : {}) };
-    const preview = (summary: string) => {
-        const manager = SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch]);
-        manager.appendCompaction(summary, cut.firstKeptEntryId, input.tokensBefore, details, true);
-        return manager.buildSessionProjection().messages;
-    };
-    const before = measure(projected.messages);
-    const model = ctx.model;
-    const floorAt = (keep: number, choice: { budget: number; head: number; first: boolean }) => {
-        const ledger = [...actionRecords(actions, keep), ...ledgerRecords(items, keep)];
-        const messages = preview(serializeTranscript([...mandatory, ...quotesFor(choice.budget, choice.head, choice.first), ...ledger]) + DIALOGUE_SUFFIX);
-        return { ledger, messages, base: measure(messages), choice };
-    };
-    const fits = (base: number) => Boolean(model) && base + reserveTokens < model!.contextWindow && base < before;
-    // When room is tight the newest turns win over the first prompt, which in a long-running session is often a finished task. The floor gives way
-    // in this order: the trail and ledger to their headings, the extensions (the budget halved), then the heads, the first prompt's among them
-    // (300 characters, 2,000 for the first prompt; then 100 and 667), then everything but the first prompt (as before user turns were quoted),
-    // and only then every quote. Only a floor with no quote but the current input can refuse the cut.
-    // The budget grows with the room: 15% of it, at least the 12,000 characters a first prompt always had. A long-running session's task can be tens
-    // of thousands of characters, and the room is what can afford it.
-    const taskBudget = Math.max(MAX_TASK_CONTRACT_CHARACTERS, Math.floor(Math.max(0, (model?.contextWindow ?? 0) - reserveTokens) * charsPerToken * 0.15));
-    const budgets = [taskBudget, taskBudget / 2, taskBudget / 4, taskBudget / 8, 1500].map(Math.floor).filter((b, at, all) => b >= 1500 && all.indexOf(b) === at);
-    const choices = [{ head: 300, budgets }, { head: 100, budgets: [1500, 600] }]
-        .flatMap(({ head, budgets }) => budgets.map(budget => ({ budget, head, first: true }))).concat([{ budget: MAX_TASK_CONTRACT_CHARACTERS, head: 0, first: true }, { budget: 0, head: 0, first: false }]);
-    // When even the smallest floor cannot fit, no step of the ladder can: refuse at once instead of building every preview.
-    const smallest = floorAt(0, choices[choices.length - 1]!);
-    let floor = smallest;
-    if (fits(smallest.base)) for (const choice of choices) {
-        floor = floorAt(Math.max(items.length, actions.length), choice);
-        if (fits(floor.base)) break;
-        if (items.length || actions.length) { floor = floorAt(0, choice); if (fits(floor.base)) break; }
-    }
-    const { ledger, base } = floor;
-    const kept = [...mandatory, ...quotesFor(floor.choice.budget, floor.choice.head, floor.choice.first)];
-    if (!model || !fits(base))
-        return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget", capacityRejected: Boolean(model && base + reserveTokens >= model.contextWindow), floorMessages: floor.messages };
-    const maxBriefChars = historicalAllowance(model.contextWindow, reserveTokens, base, before);
-    const compileInput = { messages, sourceIndices, sourceEntryIds: originalCut.selectedIds, sourceTimes: originalCut.selectedIds.map(id => resolveSourceTime(entryById.get(id)!)), receiptContext,
-        ranking: { maxBriefChars, mandatorySourceIndices: new Set(kept.flatMap(r => r.sourceIndex === undefined ? [] : [r.sourceIndex])) },
-    };
-    // Both views use the same parser, mandatory insertion, native preview and guard, and end with the same closing section.
-    const assemble = (compiled: string) => {
-        if (typeof compiled !== "string") throw new Error("pi-tuck returned an invalid summary");
-        const split = compiled ? splitSummary(compiled) : { body: "", version: 2 as const };
-        if (!split) throw new Error("pi-tuck returned an invalid summary");
-        const records = parseRecords(split.body, split.version);
-        for (const record of kept) {
-            const insertion = records.findIndex(row => row.sourceIndex !== undefined && row.sourceIndex > record.sourceIndex!);
-            records.splice(insertion < 0 ? records.length : insertion, 0, record);
-        }
-        orderByOriginalSource(records, sourceIndices, originalCut.selectedIds);
-        // The ledger always has its heading, so no summary is empty.
-        records.push(...ledger);
-        const summary = serializeTranscript(records) + DIALOGUE_SUFFIX;
-        const projection = preview(summary);
-        assertNativeToolRounds(projection);
-        return { summary, after: measure(projection) };
-    };
-    const free = Math.max(0, model.contextWindow - reserveTokens - base - 1);
-    const headroom = Math.ceil(free / 4);
-    // The whole pre-cut dialogue, when it fits the allowance; otherwise the same dialogue shrunk to the same allowance.
-    // With no allowance only an operator's manual cut can use it.
-    const dialogue = maxBriefChars > 0 || input.operatorManual ? tuck.compileDialogue(compileInput) : "";
-    const dialogueFits = dialogue.length <= maxBriefChars;
-    const candidate = dialogue && (dialogueFits || input.operatorManual) ? assemble(dialogue) : undefined;
-    const offer = candidate && dialogueFits && candidate.after < before && candidate.after + reserveTokens + headroom < model.contextWindow ? candidate : undefined;
-    // Manual no-work preserves native originals; final request admission still owns full overhead.
-    if (!offer && input.operatorManual && candidate && candidate.after >= before &&
-        before + reserveTokens < model.contextWindow)
-        return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
-    const { summary, after } = offer ?? assemble(tuck.compileShrunkDialogue(compileInput));
-    // Draft reduction concerns conversation. Final request admission owns the effective system/tools.
-    if (after + reserveTokens >= model.contextWindow || after >= before)
-        return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floor.messages };
-    const mode: DraftMode = offer ? "dialogue" : "shrunk";
-	return { compaction: { summary, firstKeptEntryId: cut.firstKeptEntryId, tokensBefore: input.tokensBefore, details: { ...details, tokensAfter: after, view: offer ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
-    };
-    const preferred = compileAtCut(cut);
-    if (preferred.mode === "dialogue") return preferred;
-    if (!preferred.compaction && !preferred.capacityRejected) return preferred;
+    const budgetCut = cut.budgetCut;
     const preferredBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
     let floorBoundary = freshRound ? lastResponse : entries.length;
     if (freshBash >= 0) floorBoundary = Math.min(floorBoundary, freshBash);
     if (userPosition >= 0 && (!textOnly || userPosition > lastResponse)) floorBoundary = Math.min(floorBoundary, userPosition);
-    if (floorBoundary <= preferredBoundary) return preferred;
-    const prefix = tuck.buildOwnCut(entries.slice(0, floorBoundary), 0);
-    if (!prefix.ok) return preferred;
-    const retried = compileAtCut({ ...cutBefore(cut, floorBoundary, prefix), budgetCut: undefined });
-    return preferred.compaction && retried.mode !== "dialogue" ? preferred : retried;
+    // One fill owns the summary and the contiguous native suffix. Protocol/current-input
+    // floors are representation constraints; every other source competes by rank.
+    return rankedFill();
+
+    function rankedFill(): Draft {
+        const model = ctx.model;
+        if (!model) return { unavailable: "pi-tuck needs a model to measure the cut" };
+        const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
+        const header = ctx.sessionManager.getHeader();
+        if (!header) throw new Error("Missing native session header");
+        const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
+        const before = measure(projected.messages);
+        const room = Math.max(0, model.contextWindow - reserveTokens - 1);
+        // A sublinear opening grows with this cut's room, without a task budget or a
+        // privileged first-prompt cap. All nine anchors get the same prefix length.
+        // The existing preservation contract watches the first 80 characters.
+        // This is a minimum, not a task/head cap: spare room grows each opening.
+        const minimumOpeningLength = 80;
+        const openingLength = Math.max(minimumOpeningLength, Math.floor(Math.sqrt(room * 4)));
+        const answered: SessionEntry[] = [];
+        let replied = false;
+        for (let at = entries.length - 1; at >= 0; at--) {
+            const entry = entries[at]!;
+            if (entry.type !== "message") continue;
+            if (entry.message.role === "assistant" && !isDiscardedResponse(entry.message) && entry.message.content.length) { replied = true; continue; }
+            if (entry.message.role !== "user") continue;
+            if (replied && isTextOnly(entry.message.content)) answered.push(entry);
+            replied = false;
+        }
+        const anchors = [...new Map([...answered.slice(0, 8), ...(firstUserPosition >= 0 ? [entries[firstUserPosition]!] : [])].map(entry => [entry.id, entry])).values()];
+        const detailsAt = (boundary: number) => ({ compactor: "pi-tuck", version: 2, adapter: "standalone",
+            keptUserTurns: entries.slice(boundary).filter(entry => entry.type === "message" && entry.message.role === "user").length,
+            ...(boundary === preferredBoundary && budgetCut ? { budgetCut } : {}) });
+        const preview = (summary: string, boundary: number) => {
+            const manager = SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch]);
+            manager.appendCompaction(summary, entries[boundary]?.id ?? "", input.tokensBefore, detailsAt(boundary), true);
+            return manager.buildSessionProjection().messages;
+        };
+        const quoted = (entry: SessionEntry, take: number): TranscriptRecord[] => {
+            if (entry.type !== "message" || entry.message.role !== "user" || !isTextOnly(entry.message.content)) return [];
+            const text = textOf(entry.message.content), index = indices.get(entry.id);
+            if (index === undefined || !text.trim() || take <= 0) return [];
+            const sourceTimes = [{ sourceIndex: index, ...resolveSourceTime(entry) }];
+            return userPrefixRecords({ kind: "user", text, originalText: text, startsSource: true, sourceIndex: index }, undefined, take)
+                .map(record => ({ ...record, sourceTimes }));
+        };
+        const positions = new Map(entries.map((entry, at) => [entry.id, at]));
+        const originals = tuck.buildOwnCut(entries.filter(entry => entry.type !== "compaction"), 0);
+        if (!originals.ok) return { unavailable: "No eligible original prefix to compile" };
+        const byId = new Map(entries.map(entry => [entry.id, entry]));
+        const receiptContext = { messages: originals.messages, sourceIndices: originals.selectedIds.map(id => indices.get(id)) };
+        // Count original units independently of serialized omission ranges. This
+        // lets the same selected text move into the tail without guessing how
+        // many units a broad range assigned to one particular message.
+        type RankedUnit = { index: number; position: number; role: "user" | "assistant" | "toolResult"; count: number; text?: string };
+        const units = originals.messages.flatMap((message: AgentMessage, at): RankedUnit[] => {
+            const index = indices.get(originals.selectedIds[at]!);
+            if (index === undefined) return [];
+            const position = positions.get(originals.selectedIds[at]!)!;
+            if (message.role === "user") return textOf(message.content).trim() ? [{ index, position, role: "user" as const, count: 1, text: textOf(message.content) }] : [];
+            if (message.role === "toolResult") return [{ index, position, role: "toolResult" as const, count: 1 }];
+            if (message.role !== "assistant" || isDiscardedResponse(message)) return [];
+            const count = message.content.filter(part => part.type === "text" && part.text.trim()).length;
+            return count ? [{ index, position, role: "assistant" as const, count }] : [];
+        });
+        const userTexts = new Map(units.flatMap(unit => unit.text === undefined ? [] : [[unit.index, unit.text] as const]));
+        const prepare = (boundary: number) => {
+            const selected = originals.selectedIds.flatMap((id, i) => positions.get(id)! < boundary ? [{ id, message: originals.messages[i]! }] : []);
+            const ids = selected.map(row => row.id), messages = selected.map(row => row.message);
+            const sourceIndices = ids.map(id => indices.get(id));
+            const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
+            const files = ledgerItems(compacted, indices, resolves, failedCalls), actions = actionItems(compacted, indices, resolves, failedCalls);
+            return { ids, messages, sourceIndices, files, actions };
+        };
+        const assemble = (compiled: string, kept: TranscriptRecord[], ledger: TranscriptRecord[], boundary: number) => {
+            const split = compiled ? splitSummary(compiled) : undefined;
+            if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
+            const compiledRecords = split ? parseRecords(split.body, split.version) : [];
+            // A complete lower-ranked user source replaces its opening. Partial
+            // passage clips leave the exact opening and its recall offset intact.
+            const expanded = new Set(kept.filter(record => record.kind === "excerpt" && compiledRecords.some(row =>
+                row.kind === "excerpt" && row.role === "user" && row.sourceIndex === record.sourceIndex && row.text.startsWith(record.text!) && row.text.length > record.text!.length)).map(record => record.sourceIndex));
+            const anchored = new Set(kept.flatMap(record => record.sourceIndex === undefined ? [] : [record.sourceIndex]));
+            const records = [...compiledRecords.flatMap(record => {
+                if (record.kind === "omission" && record.count !== undefined) return [];
+                if (record.role !== "user") return [record];
+                if (record.sourceIndex !== undefined && anchored.has(record.sourceIndex) && !expanded.has(record.sourceIndex)) return [];
+                return [record];
+            }), ...kept.filter(record => !expanded.has(record.sourceIndex))];
+            const shown = new Map<string, number>(), whole = new Map<string, number>();
+            for (const record of records) {
+                if (record.sourceIndex === undefined) continue;
+                const key = `${record.role}:${record.sourceIndex}`;
+                if (record.role === "user" && record.kind === "excerpt") {
+                    shown.set(key, 1);
+                    if (record.text === userTexts.get(record.sourceIndex)) whole.set(key, 1);
+                } else if (record.role === "assistant") {
+                    if (record.kind === "excerpt" && !record.span) {
+                        shown.set(key, (shown.get(key) ?? 0) + 1);
+                        whole.set(key, (whole.get(key) ?? 0) + 1);
+                    } else if (record.kind === "omission" && record.span) shown.set(key, (shown.get(key) ?? 0) + 1);
+                }
+            }
+            for (const role of ["user", "assistant", "toolResult"] as const) {
+                const omitted = units.filter(unit => unit.position < boundary && unit.role === role &&
+                    unit.count > (shown.get(`${role}:${unit.index}`) ?? 0));
+                if (!omitted.length) continue;
+                const start = Math.min(...omitted.map(unit => unit.index)), end = Math.max(...omitted.map(unit => unit.index));
+                // A range can cross a partially retained unit. Count that unit
+                // too: its own continuation note does not lower the range's count.
+                const count = units.reduce((total, unit) => total + (unit.position < boundary && unit.role === role && unit.index >= start && unit.index <= end
+                    ? Math.max(0, unit.count - (whole.get(`${role}:${unit.index}`) ?? 0)) : 0), 0);
+                records.push(omissionRecord(role, count, [start, end], false));
+            }
+
+            orderByOriginalSource(records, receiptContext.sourceIndices, originals.selectedIds);
+            records.push(...ledger);
+            const summary = (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + DIALOGUE_SUFFIX;
+            const projection = preview(summary, boundary);
+            assertNativeToolRounds(projection);
+            return { summary, after: measure(projection) };
+        };
+        const currentRecords = (boundary: number) => userPosition >= 0 && userPosition < boundary && textOnly ? quoted(current!, Infinity) : [];
+        const openings = (boundary: number, length: number) => anchors.filter(entry => entry.id !== current?.id && entries.indexOf(entry) < boundary).flatMap(entry => quoted(entry, length));
+        // Keep the existing half-room native allowance and quarter-free historical
+        // allowance as the amount. The ranked fill may spend that amount on either
+        // representation; the tail gets only what the higher ranks leave.
+        const preferred = prepare(preferredBoundary);
+        const preferredKept = [...currentRecords(preferredBoundary), ...openings(preferredBoundary, openingLength)];
+        const preferredLedger = [...actionRecords(preferred.actions), ...ledgerRecords(preferred.files)];
+        const preferredBase = assemble("", preferredKept, preferredLedger, preferredBoundary).after;
+        const allowance = historicalAllowance(model.contextWindow, reserveTokens, preferredBase, before);
+        const target = Math.min(room, before - 1, preferredBase + allowance / 4);
+        const source = prepare(floorBoundary);
+        const sourceTimes = source.ids.map(id => resolveSourceTime(byId.get(id)!));
+        let kept = [...currentRecords(floorBoundary), ...openings(floorBoundary, minimumOpeningLength)];
+        let ledger: TranscriptRecord[] = [];
+        const compileInput = (limit: number) => ({ messages: source.messages, sourceIndices: source.sourceIndices, sourceEntryIds: source.ids,
+            sourceTimes, receiptContext,
+            ranking: { maxBriefChars: limit, mandatorySourceIndices: new Set(kept.flatMap(record => record.sourceIndex === undefined ? [] : [record.sourceIndex])) } });
+        // Charge the omission-only view before filling: dropped units never vanish
+        // because a richer view did not fit. It has every original source pointer.
+        const floorText = () => tuck.compileOmissions(compileInput(0));
+        let floor = assemble(floorText(), kept, ledger, floorBoundary);
+        const capacity = (after: number) => after + reserveTokens >= model.contextWindow;
+        if (capacity(floor.after) || floor.after >= before) return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget",
+            capacityRejected: capacity(floor.after), floorMessages: preview(floor.summary, floorBoundary) };
+        // Openings outrank the ledger and every part of the old native tail. A
+        // common length is reduced only if the room cannot hold all anchors.
+        let low = minimumOpeningLength, high = openingLength;
+        while (low < high) {
+            const mid = Math.ceil((low + high) / 2), base = currentRecords(floorBoundary);
+            kept = [...base, ...openings(floorBoundary, mid)];
+            const candidate = assemble(floorText(), kept, [], floorBoundary);
+            if (candidate.after <= Math.max(target, floor.after)) low = mid; else high = mid - 1;
+        }
+        kept = [...currentRecords(floorBoundary), ...openings(floorBoundary, low)];
+        // Grow both lists newest first; line caps and their relative rank remain
+        // the ledger's existing policy, but no heading is mandatory on no-room cuts.
+        const maxLines = Math.max(source.files.length, source.actions.length);
+        low = 0; high = maxLines;
+        while (low < high) {
+            const mid = Math.ceil((low + high) / 2);
+            const candidateLedger = [...actionRecords(source.actions, mid), ...ledgerRecords(source.files, mid)];
+            if (assemble(floorText(), kept, candidateLedger, floorBoundary).after <= target) low = mid; else high = mid - 1;
+        }
+        const listed = [...actionRecords(source.actions, low), ...ledgerRecords(source.files, low)];
+        if (assemble(floorText(), kept, listed, floorBoundary).after <= target) ledger = listed;
+        floor = assemble(floorText(), kept, ledger, floorBoundary);
+        const briefLimit = Math.max(0, Math.floor((target - floor.after) * 4) + floorText().length);
+        const baseInput = compileInput(briefLimit);
+        const prepared = { ...baseInput, ranking: { ...baseInput.ranking, mandatorySourceIndices: new Set(currentRecords(floorBoundary).flatMap(record => record.sourceIndex === undefined ? [] : [record.sourceIndex])) } };
+        const whole = tuck.compileDialogue(prepared);
+        const full = whole && whole.length <= briefLimit ? assemble(whole, kept, ledger, floorBoundary) : undefined;
+        if (input.operatorManual && full && full.after >= before && before + reserveTokens < model.contextWindow)
+            return { unavailable: "Manual compaction preserved original dialogue: the complete-dialogue view does not reduce context" };
+        let compiled = full && full.after <= target ? whole : tuck.compileShrunkDialogue(prepared) || floorText();
+        let offer = assemble(compiled, kept, ledger, floorBoundary);
+        const mode: DraftMode = compiled === whole && Boolean(whole) ? "dialogue" : "shrunk";
+        // Extend exactly one suffix backwards, only at native protocol boundaries.
+        // Higher-ranked text already chosen above remains exact when it moves into
+        // the native tail. A boundary never skips a receipt or an older middle unit.
+        let boundary = floorBoundary;
+        for (let at = floorBoundary - 1; at >= preferredBoundary; at--) {
+            const entry = entries[at]!;
+            if (entry.type !== "message" && entry.type !== "custom_message" && entry.type !== "branch_summary") continue;
+            if (entry.type === "message" && entry.message.role === "toolResult") continue;
+            const moved = new Set(entries.slice(at, floorBoundary).flatMap(entry => indices.get(entry.id) === undefined ? [] : [indices.get(entry.id)!]));
+            const split = splitSummary(compiled);
+            const records = split ? parseRecords(split.body, split.version).flatMap(record => {
+                if (record.sourceIndex !== undefined && moved.has(record.sourceIndex)) return [];
+                return record.kind === "omission" && record.count !== undefined ? [] : [record];
+            }) : [];
+            const candidateCompiled = records.length ? serializeTranscript(records) + DIALOGUE_SUFFIX : "";
+            const candidateKept = kept.filter(record => record.sourceIndex === undefined || !moved.has(record.sourceIndex));
+            const candidate = assemble(candidateCompiled, candidateKept, ledger, at);
+            if (candidate.after > target) break;
+            boundary = at; compiled = candidateCompiled; offer = candidate;
+        }
+        if (capacity(offer.after) || offer.after >= before) return { unavailable: "pi-tuck's draft does not reduce context within the request budget",
+            capacityRejected: capacity(offer.after), floorMessages: preview(floor.summary, floorBoundary) };
+        return { compaction: { summary: offer.summary, firstKeptEntryId: entries[boundary]?.id ?? "", tokensBefore: input.tokensBefore,
+            details: { ...detailsAt(boundary), tokensAfter: offer.after, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after: offer.after, mode };
+    }
 
 }
 

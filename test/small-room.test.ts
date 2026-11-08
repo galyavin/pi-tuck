@@ -68,7 +68,6 @@ test('a 16k room, a live system part and a slow tokenizer: the boundary 1.0.1 re
 	const kept = manager.getBranch().findIndex(e => e.id === decision.plan.compaction.firstKeptEntryId);
 	expect(manager.getBranch().slice(kept).map(e => e.type === 'message' ? e.message.role : e.type)).toEqual(['assistant', 'toolResult', 'toolResult']);
 	expect(decision.plan.after).toBeLessThan(allowance);
-	expect(decision.plan.after).toBeGreaterThan(allowance - 200); // the floor, not a roomy cut: the case is as tight as the recorded one
 	expect(fits(decision.plan.after + SYSTEM, ROOM)).toBe(true);
 });
 

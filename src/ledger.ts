@@ -4,8 +4,6 @@ import { isDiscardedResponse } from "./protocol";
 import { extractPath } from "./tuck/core/tool-args";
 import type { TranscriptRecord } from "./tuck/core/transcript";
 
-/** The initiating prompt is quoted whole up to this many characters; the rest stays readable through tuck_recall. */
-export const MAX_TASK_CONTRACT_CHARACTERS = 12000;
 /** Owner default; older distinct paths are counted, not listed. */
 export const MAX_LEDGER_LINES = 60;
 const LEDGER_TITLE = "Files";

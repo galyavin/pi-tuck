@@ -62,6 +62,37 @@ test('a count and source pointer account for a clipped turn; a tool heading cann
   expect(checkCut(request(records), manager.getEntries())).toEqual([]);
 });
 
+test('a counted range covers all dropped units of its role and rejects wrong counts or bounds', () => {
+  const { manager, first, request } = fixture();
+  manager.appendMessage({ role: 'user', content: 'Kept intervening source.', timestamp: 1 });
+  manager.appendMessage({ role: 'toolResult', toolName: 'effect', toolCallId: 'another', isError: false, timestamp: 1,
+    content: [{ type: 'text', text: 'Another result.' }] });
+  const retained: TranscriptRecord[] = [
+    { kind: 'excerpt', role: 'user', sourceIndex: 0, text: first },
+    { kind: 'excerpt', role: 'user', sourceIndex: 2, text: 'Kept intervening source.' },
+  ];
+  const range = (count: number, end = 3): TranscriptRecord => ({ kind: 'omission', role: 'toolResult', count,
+    sourceRange: { start: 1, end }, reason: 'Historical tool results omitted; read the index range with tuck_recall.' });
+  expect(checkCut(request([...retained, range(2)]), manager.getEntries())).toEqual([]);
+  expect(checkCut(request([...retained, range(1)]), manager.getEntries()).some(finding => finding.detail.includes('does not equal 2'))).toBe(true);
+  expect(checkCut(request([...retained, range(3)]), manager.getEntries()).some(finding => finding.detail.includes('does not equal 2'))).toBe(true);
+  expect(checkCut(request([...retained, range(2, 900)]), manager.getEntries()).some(finding => finding.detail.includes('outside'))).toBe(true);
+});
+
+test('a range count includes partial units already named by an individual continuation note', () => {
+  const { manager, first, request } = fixture();
+  manager.appendMessage({ role: 'user', content: 'Another dropped input.', timestamp: 1 });
+  const records: TranscriptRecord[] = [
+    { kind: 'excerpt', role: 'user', sourceIndex: 0, text: first.slice(0, 80) },
+    { kind: 'omission', role: 'user', sourceIndex: 0, reason: 'tuck_recall {"index":0,"offset":80}' },
+    { kind: 'omission', role: 'toolResult', count: 1, sourceRange: { start: 1, end: 1 }, reason: 'tuck_recall' },
+    { kind: 'omission', role: 'user', count: 2, sourceRange: { start: 0, end: 2 }, reason: 'tuck_recall' },
+  ];
+  expect(checkCut(request(records), manager.getEntries())).toEqual([]);
+  records.at(-1)!.count = 1;
+  expect(checkCut(request(records), manager.getEntries()).some(finding => finding.detail.includes('does not equal 2'))).toBe(true);
+});
+
 test('a user omission cannot cover a tool result, and a pointer outside the session fails', () => {
   const { manager, first, request } = fixture();
   manager.appendMessage({ role: 'user', content: text('third', 100), timestamp: 1 });

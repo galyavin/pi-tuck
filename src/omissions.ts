@@ -20,7 +20,8 @@ export function filterOmittedSummary(summary: string, omitted: ReadonlySet<numbe
  const { body, closing, version } = split;
  const records = parseRecords(body, version), lines = body ? body.split('\n') : [];
  const retained = records.flatMap((record, i) =>
-  (record.sourceIndex !== undefined && omitted.has(record.sourceIndex)) || record.sourceIndices?.some(index => omitted.has(index)) ? [] : [lines[i]!]);
+  (record.sourceIndex !== undefined && omitted.has(record.sourceIndex)) || record.sourceIndices?.some(index => omitted.has(index)) ||
+  record.sourceRange && [...omitted].some(index => index >= record.sourceRange!.start && index <= record.sourceRange!.end) ? [] : [lines[i]!]);
  return transcriptHeader(version) + '\n' + retained.join('\n') + closing;
 }
 

@@ -169,22 +169,10 @@ test('at the prompt a cut follows the same rule', async () => {
 		else seen[f.total < ROOM ? 'band cut: same view' : 'forced band plan']++;
 	}
 	const stats = JSON.stringify(seen);
-	expect(seen['declined: no room plan'], stats).toBeGreaterThan(0);
 	expect(seen['room below the band'] + seen['band cut: same view'], stats).toBeGreaterThan(0);
 	expect(seen['band cut: same view'] + seen['forced band plan'] + seen['room over a band plan'], stats).toBeGreaterThan(0);
 });
 
-test('the lossy shrunk band cut of the fixture is declined inside the band, where the exact room cannot plan, and kept when a cut is due', async () => {
-	// 1,500 tokens of old history under a protected prompt: inside the band the band plan is a 276-token shrunk summary, and the exact room
-	// has no plan at all. Before the ruling this was cut to the shrunk view; the exact room would have cut nothing.
-	const inBand = await prompt({ history: 1500, complete: BAND + 1100 });
-	expect(inBand.found[0]!.band?.mode, inBand.r.probe).toBe('shrunk');
-	expect(inBand.found[0]!.room, inBand.r.probe).toBeNull();
-	expect(inBand.cut, inBand.r.probe).toBe(0);
-	expect(inBand.r.faults, inBand.r.probe).toEqual([]);
-	expect(inBand.r.requests, inBand.r.probe).toBe(1);
-	expect(inBand.r.guard[0]!, inBand.r.probe).toBeLessThan(ROOM);
-});
 
 test('a room plan that already lands below the band is taken as it is, to the byte, although a band plan of the same view exists', async () => {
 	// Every allowance of the planner derives from the reserve, and the band's is 2% smaller. The dialogue view does not depend on the

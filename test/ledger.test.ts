@@ -8,7 +8,7 @@ import { projectedMessages } from '../src/omissions';
 import { tuck, tuckObservedDraft, tuckRecall } from '../src/tuck';
 import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
 import { parseRecords, serializeTranscript, splitSummary } from '../src/tuck/core/transcript';
-import { ACTIONS_HEADING, LEDGER_HEADING, MAX_ACTION_CHARACTERS, MAX_ACTION_LINES, MAX_LEDGER_LINES, MAX_TASK_CONTRACT_CHARACTERS, actionRecords, ledgerItems, ledgerRecords } from '../src/ledger';
+import { ACTIONS_HEADING, LEDGER_HEADING, MAX_ACTION_CHARACTERS, MAX_ACTION_LINES, MAX_LEDGER_LINES, actionRecords, ledgerItems, ledgerRecords } from '../src/ledger';
 import { buildGlobalIndexById } from '../src/tuck/core/global-indices';
 
 // Every summary carries the task contract (the initiating prompt), the file ledger and the closing instruction, in both views.
@@ -55,16 +55,16 @@ test('A: the initiating prompt is quoted verbatim in the summary', () => {
 	} finally { s.dispose(); }
 });
 
-test('A: an initiating prompt over the task budget keeps its head and says how to recall the rest', () => {
-	const first = 'Task line.\n'.repeat(25000); // longer than the task budget at this window
-	expect(first.length).toBeGreaterThan(MAX_TASK_CONTRACT_CHARACTERS);
+test('A: a long first prompt keeps its head and says how to recall the rest', () => {
+	const first = 'Task line.\n'.repeat(25000); // longer than the room at this window
+	expect(first.length).toBeGreaterThan(120000);
 	const s = session(first, []);
 	try {
 		const draft = draftOf(s);
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		const rows = records(draft.compaction.summary);
 		const excerpt = rows.find(r => r.kind === 'excerpt' && r.role === 'user' && r.text!.startsWith('Task line.'))!;
-		// The newest user turns share the budget (15% of the room, at least 12,000 characters) and come first; the head is what they leave.
+		// First and recent answered prompts use the same room-derived opening.
 		const kept = excerpt.text!.length;
 		expect(kept).toBeGreaterThan(0); expect(kept).toBeLessThan(first.length); expect(first.startsWith(excerpt.text!)).toBe(true);
 		const note = rows.find(r => r.kind === 'omission' && r.sourceIndex === excerpt.sourceIndex)!;

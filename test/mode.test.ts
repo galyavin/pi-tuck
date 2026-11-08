@@ -112,7 +112,7 @@ test('an empty compiler offer still yields the mandatory floor (initiating promp
 		expect(draft.mode).toBe('shrunk');
 		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 0$/m);
 		expect(draft.compaction.summary).toContain(LEDGER);
-		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 1$/m); // the newest user turns are quoted too
+		expect(draft.compaction.summary).toMatch(/^#\d+ user @\S+: Earlier request 11$/m); // the newest eight answered turns keep their openings
 	} finally { s.dispose(); }
 });
 
@@ -158,3 +158,14 @@ test('a history whose dialogue exceeds the allowance is cut to the shrunk view, 
 	expect(entry.summary).toContain(LEDGER);
 	expect(entry.summary.endsWith(CLOSING_INSTRUCTION)).toBe(true);
 }, 60000); // hundreds of turns, drafted at the room
+
+test('a call-only prefix with no dialogue or results is admitted or declined without an invalid empty summary', () => {
+  const manager = SessionManager.inMemory('/call-only');
+  manager.appendMessage({ role: 'assistant', content: [{ type: 'toolCall', id: 'pending', name: 'read', arguments: { path: 'a.ts' } }],
+    stopReason: 'toolUse', api: 'openai-completions', provider: 'probe', model: 'probe', timestamp: 1,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  const ctx = { sessionManager: manager, cwd: '/call-only', model: { contextWindow: 32768 } } as unknown as ExtensionContext;
+  const measure = (messages: Parameters<typeof conversationTokens>[0]) => projectedConversationTokens(messages, ctx);
+  const draft = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: measure(manager.buildSessionProjection().messages) }, ctx, 4096, measure);
+  expect(draft.unavailable).toContain('cannot fit or reduce');
+});

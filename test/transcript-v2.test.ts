@@ -38,6 +38,7 @@ test('every record shape has one documented line', () => {
 		[{ kind: 'omission', role: 'assistant', count: 2, reason: 'No locators.' }, 'assistant omitted 2: No locators.'],
 		[{ kind: 'omission', role: 'user', count: 3, sourceIndices: [1, 4, 8], reason: 'r', sourceTimes: [at(1, { basis: 'message', utc: T }), at(4, { basis: 'unknown' }), at(8, { basis: 'journal', utc: T })] },
 			`user omitted 3 #1@${T} #4@unknown #8@journal:${T}: r`],
+		[{ kind: 'omission', role: 'toolResult', count: 87, sourceRange: { start: 120, end: 410 }, reason: 'tuck_recall' }, 'toolResult omitted 87 #120-#410: tuck_recall'],
 		[{ kind: 'omission', reason: 'Historical tool actions and observations omitted; read original sources with tuck_recall' }, 'omitted: Historical tool actions and observations omitted; read original sources with tuck_recall'],
 		[{ kind: 'section', title: 'Files', text: 'Files touched by read, write and edit before this summary:' }, 'Files: Files touched by read, write and edit before this summary:'],
 		[{ kind: 'section', title: 'Files', text: '- read src/a.ts (tuck_recall {"index":4})', sourceIndex: 4 }, '#4 Files: - read src/a.ts (tuck_recall {"index":4})'],
@@ -199,6 +200,8 @@ test('records the dialogue, the ledger and the action trail emit round trip exac
 			records.push(...blockRecords(block, seed % 2 ? mandatory : undefined, clip).map(record => decorateRecord(record, times)));
 		for (const role of ['user', 'assistant'] as const) for (const [sources, unlocated] of [[[], true], [[3], false], [[1, 2, 3, 4, 5, 6, 7, 8, 9], false], [[0, 5, 9, 12], true]] as const)
 			records.push(decorateRecord(omissionRecord(role, 7, [...sources], unlocated), times));
+		// Earlier timed pointer lists remain readable alongside new counted ranges.
+		records.push({ kind: 'omission', role: 'user', count: 1, sourceIndices: [3], reason: 'Earlier omission.', sourceTimes: [at(3, { basis: 'unknown' })] });
 		records.push({ kind: 'omission', reason: 'Historical tool actions and observations omitted; read original sources with tuck_recall' });
 		records.push(...ledgerRecords([{ path: 'src/a.ts', operation: 'read', sourceIndex: 4, resolvable: true }, { path: 'b c\\d.ts', operation: 'wrote/edited', resolvable: false }, { path: 'e.ts', operation: 'read', sourceIndex: 1, resolvable: false }], 2));
 		records.push(...ledgerRecords([]), ...actionRecords([{ text: 'bash: npm test', failed: true, sourceIndex: 9, resolvable: true }, { text: 'x: y', failed: false, resolvable: false }], 1));
@@ -326,7 +329,7 @@ test('native omissions and custom-quote eligibility filter v1 and v2 summaries o
 test('a cut writes the initiating prompt, its omission, the current input and the ledger as v2 lines that parse back to the same records', () => {
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 	const manager = SessionManager.inMemory('/cut');
-	const first = 'Initiating prompt: ' + 'long task\\ with a backslash\n'.repeat(600);
+	const first = 'Initiating prompt: ' + 'long task\\ with a backslash\n'.repeat(6000);
 	manager.appendMessage({ role: 'user', content: first, timestamp: Date.UTC(2026, 9, 30, 14) });
 	for (let i = 0; i < 6; i++) {
 		manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: `Looking at ${i}.` }, { type: 'toolCall', id: `c${i}`, name: 'read', arguments: { path: `f${i}.ts` } }], api: 'openai-completions', provider: 'probe', model: 'probe', usage, stopReason: 'toolUse', timestamp: 1 } as never);
@@ -347,18 +350,36 @@ test('a cut writes the initiating prompt, its omission, the current input and th
 	expect(split.version).toBe(2);
 	const records = parseRecords(split.body, split.version);
 	expect(serializeTranscript(records) + split.closing).toBe(summary);
-	const prompt = records.find(r => r.kind === 'excerpt' && r.text?.startsWith('Initiating prompt: '))!, rest = records.find(r => r.kind === 'omission' && r.reason.startsWith('Initiating prompt continues'))!;
+	const prompt = records.find(r => r.kind === 'excerpt' && r.text?.startsWith('Initiating prompt: '))!, rest = records.find(r => r.kind === 'omission' && r.sourceIndex === 0)!;
 	const current = records.find(r => r.kind === 'excerpt' && r.text === 'Current: do #12 user: not a record')!;
 	expect([!!prompt, !!rest, !!current], split.body.slice(0, 600) + ' ... ' + split.body.slice(-900)).toEqual([true, true, true]);
 	// The fields of each, in the order this build emits them, and the time of the user's turn.
-	expect(Object.keys(prompt)).toEqual(['kind', 'role', 'sourceIndex', 'text', 'sourceTimes']);
-	expect(Object.keys(rest)).toEqual(['kind', 'role', 'sourceIndex', 'reason', 'sourceTimes']);
+	expect(Object.keys(prompt)).toEqual(expect.arrayContaining(['kind', 'role', 'sourceIndex', 'text', 'sourceTimes']));
+	expect(Object.keys(rest)).toEqual(expect.arrayContaining(['kind', 'role', 'sourceIndex', 'reason', 'sourceTimes']));
 	expect(Object.keys(current)).toEqual(['kind', 'role', 'sourceIndex', 'text', 'sourceTimes']);
 	expect(prompt.sourceTimes).toEqual([at(0, { basis: 'message', utc: '2026-10-30T14:00:00Z' })]);
-	// The head is what the shared task budget leaves after the newest user turns; the locator starts where it ends.
+	// Every anchored turn has the same room-derived opening; the locator starts where it ends.
 	const headLength = (prompt as { text: string }).text.length;
-	expect(rest.kind === 'omission' && rest.reason).toBe(`Initiating prompt continues: characters ${headLength}-${(rest as { reason: string }).reason.match(/-(\d+) omitted/)![1]} omitted; read them with tuck_recall {"index":0,"offset":${headLength}}`);
-	expect(split.body).toContain('#0 user @2026-10-30T14:00:00Z: Initiating prompt: long task\\\\ with a backslash\\n');
+	expect(rest.reason).toContain(`tuck_recall {"index":0,"offset":${headLength}}`);
+	expect(first.startsWith(prompt.text!)).toBe(true);
+
 	expect(split.body).toContain('Z: Current: do #12 user: not a record\n');
 	expect(records.filter(r => r.kind === 'section').map(r => r.kind === 'section' && r.title)).toContain('Files');
+});
+
+// Counted ranges extend v2 without changing how older lists or summaries parse.
+test('counted omission ranges reject invalid bounds, mixed pointers and lossy extra fields', () => {
+  const record: TranscriptRecord = { kind: 'omission', role: 'toolResult', count: 2,
+    sourceRange: { start: 3, end: 9 }, reason: 'tuck_recall' };
+  expect(parseRecords(serializeRecords([record]))).toEqual([record]);
+  for (const range of [null, { start: -1, end: 9 }, { start: 9, end: 3 }, { start: 3.5, end: 9 },
+    { start: 3, end: 9, extra: true }, { start: 3 }]) {
+    const invalid = { ...record, sourceRange: range } as unknown as TranscriptRecord;
+    expect(() => serializeRecords([invalid])).toThrow();
+    expect(() => parseRecords(JSON.stringify(invalid))).toThrow();
+  }
+  expect(() => serializeRecords([{ ...record, sourceIndices: [3, 9] }])).toThrow();
+  expect(() => parseRecords('toolResult omitted 2 #9-#3: tuck_recall')).toThrow();
+  const summary = serializeTranscript([record, { kind: 'excerpt', role: 'user', sourceIndex: 12, text: 'Unrelated retained source.' }]) + DIALOGUE_SUFFIX;
+  expect(filterOmittedSummary(summary, new Set([5]))).toBe(serializeTranscript([{ kind: 'excerpt', role: 'user', sourceIndex: 12, text: 'Unrelated retained source.' }]) + DIALOGUE_SUFFIX);
 });

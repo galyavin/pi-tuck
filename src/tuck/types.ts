@@ -18,7 +18,7 @@ export type NormalizedBlock = { sourceTimes?: Record<number, import("./core/sour
   | { kind: "user"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
   | { kind: "assistant"; text: string; originalText?: string; sourceIndex?: number; startsSource?: true }
   | { kind: "notice"; text: string; originalText?: string; sourceIndex?: number; sourceEntryId?: string; startsSource?: true }
-  // Tool history renders only as one omission notice, so its blocks keep what lookup-echo filtering reads.
+  // Tool results render as counted omissions with original pointers; calls feed the ledger and noise filtering.
   | { kind: "tool_call"; name: string; args: Record<string, unknown>; sourceIndex?: number }
   | { kind: "tool_result"; name: string; sourceIndex?: number; recallExport?: true }
   | { kind: "bash"; sourceIndex?: number });

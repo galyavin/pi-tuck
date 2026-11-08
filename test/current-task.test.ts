@@ -36,13 +36,13 @@ test('in a long run of tasks, the summary keeps the current task, not only the f
 	const summary = result.compaction!.summary;
 	expect(summary).toContain('TASKBODY119 ');
 	expect((summary.match(/TASKBODY119 /g) ?? []).length).toBeGreaterThan(50);
-	// The first task shares the budget and gives way first: what the newest turns leave goes to it.
+	// The task body follows all protected openings and the recent assistant third.
 });
 
 test('a current task longer than the budget keeps its head and a locator to the rest', () => {
 	const summary = draft(40, 52000, 81920, 64000).compaction!.summary;
 	expect(summary).toContain('TASKBODY39 ');
-	expect(summary).toMatch(/User turn continues: characters \d+-\d+ omitted; read them with tuck_recall/);
+	expect(summary).toMatch(/tuck_recall \{"index":\d+,"offset":\d+\}/);
 });
 
 test('where the extra quote leaves no room, the cut still lands as before', () => {
