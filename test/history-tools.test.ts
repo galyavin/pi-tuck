@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { Type } from 'typebox';
 import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage, type Context } from '@earendil-works/pi-ai';
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { installCompaction } from '../src/compaction';
+import { installCompaction, type CompactionOptions } from '../src/compaction';
+import * as historyTools from '../src/history-tools';
 import { serializeTranscript } from '../src/tuck/core/transcript';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { scriptedModelRuntime } from './model-fixture';
@@ -17,18 +18,18 @@ const summary = serializeTranscript([{ kind: 'omission', reason: 'Earlier conver
 const cut = (manager: SessionManager, native = false) => manager.appendCompaction(summary, '', 10000,
     native ? { readFiles: [], modifiedFiles: [] } : { compactor: 'pi-tuck', version: 2, adapter: 'standalone' }, !native);
 
-async function fixture(dir: string, manager: SessionManager, installed = true, search = true) {
+async function fixture(dir: string, manager: SessionManager, installed = true, search = true, options: CompactionOptions = {}, result = 'foreign result') {
     const runtime = await scriptedModelRuntime({ contextWindow: 32768, maxTokens: 4096 });
     const model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
-    const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 4096, keepRecentTokens: 0 } });
+    const settings = options.settings ?? SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 4096, keepRecentTokens: 0 } });
     let pi: ExtensionAPI | undefined, handle: Awaited<ReturnType<typeof installCompaction>> | undefined;
     const faults: string[] = [], requests: Context[] = [];
     const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true,
         noContextFiles: true, noPromptTemplates: true, noThemes: true, systemPrompt: 'Follow the current task.', extensionFactories: [async api => {
             pi = api;
             api.registerTool({ name: 'foreign', label: 'Foreign', description: 'Another extension tool.', parameters: Type.Object({}),
-                execute: async () => ({ content: [{ type: 'text', text: 'foreign result' }], details: {} }) });
-            if (installed) handle = await installCompaction(api, { search, settings, cutAt: 1, fail: error => faults.push(String(error)) });
+                execute: async () => ({ content: [{ type: 'text', text: result }], details: {} }) });
+            if (installed) handle = await installCompaction(api, { search, settings, cutAt: 1, fail: error => faults.push(String(error)), ...options });
         }] });
     await loader.reload();
     const { session } = await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: manager,
@@ -51,18 +52,104 @@ test('before any cut every request is byte-identical to Pi without pi-tuck, acro
     const dir = mkdtempSync(join(tmpdir(), 'tuck-tools-parity-'));
     const time = vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
     try {
-        const captured: string[][] = [];
+        const captured: Context[][] = [];
         for (const installed of [false, true]) {
             const f = await fixture(dir, SessionManager.inMemory(dir), installed);
             try {
                 await f.session.prompt('First task'); await f.session.prompt('Continue exactly');
                 expect(f.faults).toEqual([]);
                 expect(f.session.sessionManager.getBranch().some(entry => entry.type === 'compaction')).toBe(false);
-                captured.push(f.requests.map(request => JSON.stringify(request)));
+                captured.push(f.requests);
             } finally { await f.close(); }
         }
         expect(captured[1]).toEqual(captured[0]);
+        expect(JSON.stringify(captured[1])).toBe(JSON.stringify(captured[0]));
     } finally { time.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('both request hooks return undefined and preserve every pre-cut request object, including a native summary', async () => {
+    const handlers: Record<string, ((event: { messages: unknown[] }, ctx: unknown) => unknown)[]> = {};
+    const tools: { name: string }[] = [];
+    const pi = { on: (name: string, handler: (event: { messages: unknown[] }, ctx: unknown) => unknown) => { (handlers[name] ??= []).push(handler); },
+        registerCommand: () => {}, registerTool: (tool: { name: string }) => tools.push(tool), getAllTools: () => tools, getActiveTools: () => [] } as unknown as ExtensionAPI;
+    const handle = await installCompaction(pi, { requestReserve: () => ({ response: 16384, responseExact: true }) });
+    try {
+        for (const native of [false, true]) {
+            const manager = SessionManager.inMemory('/unchanged-request');
+            manager.appendMessage({ role: 'user', content: 'Earlier task', timestamp: 1 });
+            if (native) manager.appendCompaction('A native Pi summary with its own format.', '', 10, { readFiles: [], modifiedFiles: [] });
+            const messages = [{ role: 'system', content: 'Original system', timestamp: 123, sections: { original: 'Keep this section' } },
+                ...manager.buildSessionProjection().messages];
+            const event = { messages }, original = structuredClone(messages), serialized = JSON.stringify(messages);
+            const ctx = { sessionManager: manager, cwd: '/unchanged-request', model: { provider: 'test', id: 'test', contextWindow: 32768, maxTokens: 16384 },
+                getSystemPrompt: () => 'Original system', abort: () => { throw Error('Unexpected refusal'); } };
+            for (const hook of ['context', 'context_with_system']) for (const handler of handlers[hook] ?? []) {
+                expect(await handler(event, ctx), hook).toBeUndefined();
+                expect(event.messages).toBe(messages);
+                expect(messages, hook).toEqual(original);
+                expect(JSON.stringify(messages), hook).toBe(serialized);
+                expect(messages[0]).toHaveProperty('timestamp', 123);
+            }
+        }
+    } finally { await handle.close(); }
+});
+
+for (const legacy of [false, true]) for (const cutAt of [undefined, 1])
+test(`cut positions and complete post-cut requests equal the always-declared tools protocol (cutAt=${cutAt ?? 'adaptive'}, legacy=${legacy})`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tuck-tools-cut-parity-'));
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] }); vi.setSystemTime(1700000000000);
+    const fullNames = historyTools.historyToolNames;
+    try {
+        let seed: Parameters<typeof SessionManager.inMemory>[2];
+        if (legacy) {
+            const apply = vi.spyOn(historyTools, 'applyHistoryTools').mockImplementation(() => {});
+            const names = vi.spyOn(historyTools, 'historyToolNames').mockImplementation((pi, selected) => fullNames(pi, selected, true));
+            const manager = SessionManager.inMemory(dir), f = await fixture(dir, manager);
+            try {
+                await f.session.prompt('Earlier task'); cut(manager);
+                seed = structuredClone([manager.getHeader()!, ...manager.getEntries()]);
+            } finally { await f.close(); names.mockRestore(); apply.mockRestore(); }
+        }
+        const runs: { cutRequests: number[]; cuts: unknown[]; requests: Context[] }[] = [];
+        for (const alwaysDeclared of [true, false]) {
+            vi.setSystemTime(1700000000000);
+            // The reference keeps the pre-change protocol: our tools stay declared from the first request. The planner, Pi runtime,
+            // messages and settings are otherwise identical, so this detects a split between trigger and post-cut accounting.
+            const apply = alwaysDeclared ? vi.spyOn(historyTools, 'applyHistoryTools').mockImplementation(() => {}) : undefined;
+            const names = alwaysDeclared ? vi.spyOn(historyTools, 'historyToolNames').mockImplementation((pi, selected) => fullNames(pi, selected, true)) : undefined;
+            const f = await fixture(dir, SessionManager.inMemory(dir, undefined, seed && structuredClone(seed)), true, true,
+                { cutAt, requestReserve: () => ({ response: 16384, responseExact: true }),
+                    settings: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 0 } }) },
+                'Observed result. '.repeat(450));
+            let request = 0;
+            const requests: Context[] = [], cutRequests: number[] = [];
+            f.session.agent.streamFunction = (_model, ctx) => {
+                request++;
+                vi.setSystemTime(1700000000000 + request * 1000);
+                const hasSummary = f.session.sessionManager.getBranch().some(entry => entry.type === 'compaction');
+                if (hasSummary) { requests.push(structuredClone(ctx)); cutRequests.push(request); }
+                // Cross Pi's no-usage threshold on the final reply too: it runs before agent_before_settle and supplies a different
+                // density estimate than a tool-loop/run-end draft, even though both must use the same budget.
+                const message = { ...f.answer('Final recorded observation. '.repeat(1600)), ...(request <= 18 ? { content: [{ type: 'toolCall' as const, id: `result-${request}`, name: 'foreign', arguments: {} }], stopReason: 'toolUse' as const } : {}) };
+                const stream = createAssistantMessageEventStream(); stream.push({ type: 'done', reason: message.stopReason === 'toolUse' ? 'toolUse' : 'stop', message }); stream.end(message); return stream;
+            };
+            try {
+                await f.session.prompt('Inspect all observations and report the outcome.');
+                expect(f.faults).toEqual([]);
+                const manager = f.session.sessionManager;
+                const sourceMessages = manager.getEntries().filter(entry => entry.type === 'message' && entry.message.role !== 'system');
+                const cuts = manager.getBranch().filter(entry => entry.type === 'compaction').map(entry => ({
+                    summary: entry.summary, firstKept: sourceMessages.findIndex(source => source.id === entry.firstKeptEntryId),
+                }));
+                expect(cuts.length).toBeGreaterThan(1); expect(requests.length).toBeGreaterThan(0);
+                runs.push({ cutRequests, cuts, requests });
+            } finally { await f.close(); names?.mockRestore(); apply?.mockRestore(); }
+        }
+        expect(runs[1]!.cutRequests).toEqual(runs[0]!.cutRequests);
+        expect(runs[1]!.cuts).toEqual(runs[0]!.cuts);
+        expect(runs[1]!.requests).toEqual(runs[0]!.requests);
+        expect(JSON.stringify(runs[1]!.requests)).toBe(JSON.stringify(runs[0]!.requests));
+    } finally { vi.useRealTimers(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 for (const native of [false, true]) for (const search of [false, true])

@@ -19,6 +19,16 @@ export function applyHistoryTools(pi: ExtensionAPI, enabled: boolean): void {
     if (current.length !== next.length || current.some((name, index) => name !== next[index])) pi.setActiveTools(next);
 }
 
+/** Match only our part of Pi's saved declaration snapshot, so its loop records no activation/removal message. Legacy sessions can
+ * already declare our tools; new sessions declare them only in the request projection. Executable tools are restored at turn_start. */
+export function stageHistoryTools(pi: ExtensionAPI, messages: Messages): string[] {
+    const declared = new Set(getCurrentTools(convertToLlm(messages)).map(tool => tool.name));
+    const current = pi.getActiveTools();
+    const next = historyToolNames(pi, current, true).filter(name => !own(name) || declared.has(name));
+    if (current.length !== next.length || current.some((name, index) => name !== next[index])) pi.setActiveTools(next);
+    return next;
+}
+
 /** Pi has already declared the request's tools before queued user messages are appended. A prompt cut planned on such a message needs its declarations
  * in that very request. Change only our declarations, leaving all other system content and tools in their original places. */
 export function historyToolDeclarations(messages: Messages, tools: readonly ToolShape[], enabled: boolean): Messages {
