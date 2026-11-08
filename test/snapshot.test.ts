@@ -3,14 +3,15 @@ import { BAND, HOST, ROOM, harness, scenario } from './budget-fixture';
 
 // One snapshot per decision: the host messages, the system part and the queued messages are taken once and reused for the whole
 // decision (the trigger, the planner, the post-cut check). A prompt's cut is planned like a tool boundary's, on one snapshot.
-// The counter is a spy on the host builder.
+// A prompt that has not already cut is checked again on message_end, before Pi snapshots executable tools: late prompt/host changes
+// can require the first cut there. This is a new decision with its own snapshot. The counter is a spy on the host builder.
 const cases: { name: string; at: 'prompt' | 'tool'; complete: number; calls: number }[] = [
- { name: 'prompt, no cut: one decision', at: 'prompt', complete: BAND - 5000, calls: 1 },
+ { name: 'prompt, no cut: input and final prompt admission', at: 'prompt', complete: BAND - 5000, calls: 2 },
  { name: 'prompt, opportunistic cut: one decision', at: 'prompt', complete: BAND + 100, calls: 1 },
  { name: 'prompt, forced cut: one decision', at: 'prompt', complete: ROOM + 500, calls: 1 },
- { name: 'tool boundary, no cut: the prompt and the tool boundary, one each', at: 'tool', complete: BAND - 5000, calls: 2 },
- { name: 'tool boundary, opportunistic cut: planning and the post-cut check use the same snapshot', at: 'tool', complete: BAND + 100, calls: 2 },
- { name: 'tool boundary, forced cut', at: 'tool', complete: ROOM + 500, calls: 2 },
+ { name: 'tool boundary, no cut: input, final prompt admission and the tool boundary', at: 'tool', complete: BAND - 5000, calls: 3 },
+ { name: 'tool boundary, opportunistic cut: planning and the post-cut check use the same snapshot', at: 'tool', complete: BAND + 100, calls: 3 },
+ { name: 'tool boundary, forced cut', at: 'tool', complete: ROOM + 500, calls: 3 },
 ];
 for (const c of cases)
 test(`the host builder is called once per decision: ${c.name}`, async () => {
@@ -22,7 +23,7 @@ test(`the host builder is called once per decision: ${c.name}`, async () => {
 test('the host builder is called once for a tool boundary where the cut falls back from the band to the room (two plans, one snapshot)', async () => {
  const r = await scenario({ at: 'tool', host: HOST, history: 1500, fresh: 3500, complete: ROOM + 200 });
  expect(r.cuts, r.probe).toBe(1);
- expect(r.hostCalls, r.probe).toBe(2);
+ expect(r.hostCalls, r.probe).toBe(3);
 });
 
 test('an operator cut takes one snapshot', async () => {
@@ -41,7 +42,7 @@ test('a snapshot is not reused across decisions: host input that grows between b
  expect(r.faults, r.probe).toEqual([]);
  expect(r.cuts, r.probe).toBe(1);
  expect(r.entries.map(e => (e.details as { diagnosticReceipt: { settings: { hostInputTokens: number } } }).diagnosticReceipt.settings.hostInputTokens), r.probe).toEqual([HOST + 4000]);
- expect(r.hostCalls, r.probe).toBe(3); // the prompt, and one for each tool boundary
+ expect(r.hostCalls, r.probe).toBe(4); // input, final prompt admission, and one for each tool boundary
 });
 
 test('standalone Pi: without hostMessages the triggers count no host input, and the guard still counts the request as it is', async () => {

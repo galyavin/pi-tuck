@@ -169,7 +169,7 @@ test('after a cut, conversation is indexed right away (not full) and tool output
 });
 test('a cut makes the package schedule indexing at once; a session that is not searching leaves it to the next search',async()=>{
  const f=fixture();const handlers:Record<string,((event:unknown,ctx:unknown)=>unknown)[]>={};
- const pi={on:(name:string,handler:(event:unknown,ctx:unknown)=>unknown)=>{(handlers[name]??=[]).push(handler);},registerCommand:()=>{},registerTool:()=>{}} as never;
+ const pi={on:(name:string,handler:(event:unknown,ctx:unknown)=>unknown)=>{(handlers[name]??=[]).push(handler);},registerCommand:()=>{},registerTool:()=>{},getAllTools:()=>[],getActiveTools:()=>[]} as never;
  await installCompaction(pi,{semanticRecall:f.c});
  const ctx={cwd:join(tmpdir(),'cut-project'),sessionManager:f.manager,ui:{notify:()=>{}}} as never,schedule=vi.spyOn(f.c,'schedule');
  for(const handler of handlers.session_compact??[])handler({type:'session_compact'},ctx);

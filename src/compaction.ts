@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
 import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
-import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, decideCut, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
+import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, requestTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
 import { isContextOverflow, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -18,6 +18,7 @@ import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY
 import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { eligibilityKey, eligibilityKeyMoved, memoizedEligibleSources } from "./eligibility-cache";
+import { applyHistoryTools, hasTuckCut, historyToolDeclarations, historyToolNames } from "./history-tools.js";
 
 const query = Type.String({ minLength: 1, maxLength: MAX_RECALL_QUERY_CHARACTERS });
 const entryId = Type.String({ minLength: 1, maxLength: MAX_RECALL_ENTRY_ID_CHARACTERS });
@@ -302,6 +303,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const selected = new Set(names);
         return pi.getAllTools().filter(tool => selected.has(tool.name)).map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
     };
+    const cutSystemPart = (observedPrompt: string, names: readonly string[], saved: Messages, guardPrompt: string) => {
+        const shapes = toolShapes(historyToolNames(pi, names, true));
+        // Keep the guard's observed schemas (Pi may enrich a host tool's schema), and add our future declarations to that same view.
+        // Taking max(current guard, future raw shapes) alone could lose the enrichment when the future shapes are larger.
+        const future = saved.some(message => message.role === "system") ? historyToolDeclarations(saved, shapes, true) : saved;
+        return systemPart(observedPrompt, shapes, future, guardPrompt);
+    };
     // Pi reports a manual cut with nothing to do as a failed compaction; the thrown error lacks the event's "Compaction failed: " prefix.
     const isNoWork = (message: string | undefined) => ["Already compacted", "Nothing to compact (session too small)"].includes(message?.replace(/^Compaction failed: /, "") ?? "");
     // A missing model is configuration, not capacity.
@@ -352,7 +360,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (!ctx.isIdle() || phase === "starting") return; // a steering or follow-up message joins the running request
         forgetFailure();
         phase = "decided";
-        try { await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); }
+        try { syncHistoryTools(ctx); await preflight(ctx, incomingTokens(event.text, event.images), ctx.getSystemPrompt(), pi.getActiveTools()); syncHistoryTools(ctx); }
         catch (error) { fail(error, ctx); }
     });
 	pi.registerTool({
@@ -425,8 +433,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // cut: the system part and the host input. A prompt's cut is pi-tuck's own and never comes here.
             const saved = ctx.sessionManager.buildSessionProjection().messages;
             const host = hostTokens(ctx);
-            const system = systemPart(ctx.getSystemPrompt(), toolShapes(pi.getActiveTools()), saved, ctx.getSystemPrompt());
-            const mandatory = system + host, band = decisionBand(ctx, room, system);
+            const currentSystem = systemPart(ctx.getSystemPrompt(), toolShapes(pi.getActiveTools()), saved, ctx.getSystemPrompt());
+            const system = cutSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
+            const mandatory = system + host, band = decisionBand(ctx, room, currentSystem);
             const before = plannerMeasureFor(ctx)(saved);
             // Pi's own usage threshold (reason "threshold") counts the last reply's output tokens, reasoning included, plus the messages after
             // it: a basis this compactor does not plan on. It may ask for a cut on a request that fits. This compactor cuts only where its own
@@ -434,7 +443,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // cancel (Pi reports it as aborted), never a failure.
             let thresholdOpportunistic = false;
             if (event.reason === "threshold") {
-                const gate = gateCut({ total: before + mandatory, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+                const gate = gateCut({ total: before + currentSystem + host, mandatory: currentSystem + host, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
                 if (gate.kind !== "plan") return { cancel: true };
                 thresholdOpportunistic = gate.opportunistic;
             }
@@ -466,6 +475,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	});
 	pi.on("session_before_tree", (event) => event.preparation.userWantsSummary ? { cancel: true } : undefined);
     pi.on("session_start", () => { clips.clear(); promptCut = undefined; recorder.stop("session-transition"); proposalId = undefined; failure = undefined; admittedRun = false; pendingBoundaryCommit = false; identity = ""; factor = 1; pending = undefined; phase = "idle"; });
+    const historyToolsEnabled = (ctx: ExtensionContext) => Boolean(promptCut) || hasTuckCut(ctx.sessionManager.getBranch());
+    const syncHistoryTools = (ctx: ExtensionContext) => { if (active()) applyHistoryTools(pi, historyToolsEnabled(ctx)); };
+    pi.on("session_start", (_event, ctx) => syncHistoryTools(ctx));
+    pi.on("session_tree", (_event, ctx) => syncHistoryTools(ctx));
+    pi.on("session_compact", (_event, ctx) => syncHistoryTools(ctx));
+    pi.on("turn_start", (_event, ctx) => syncHistoryTools(ctx));
     // The session as it will be once a cut that is not saved yet is saved, and its conversation as the next request carries it.
     const cutSession = (ctx: ExtensionContext, cut: CutEntry) => {
         const header = ctx.sessionManager.getHeader();
@@ -479,7 +494,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // custom message starts). The cut is pi-tuck's own, planned as at a tool boundary. It is not Pi's: Pi's cut finder keeps the last
     // keepRecentTokens, and where those are the whole conversation it has nothing to cut, so every later prompt was refused for good (t06 at
     // Pi's defaults on a 32k window). Each request of the run carries the cut, and the run's first boundary saves it.
-    const preflight = (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[]) => {
+    const preflight = (ctx: ExtensionContext, incomingPart: number, observedPrompt: string, tools: readonly string[], hostSnapshot?: number) => {
         promptCut = undefined;
         promptCutAt = ctx.sessionManager.getBranch().length;
         if (!active()) return;
@@ -489,15 +504,17 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const { response, room } = limits(ctx);
         // Public early view only: later handlers, image normalization and tool-loop growth remain the complete-context guard's responsibility.
         const saved = ctx.sessionManager.buildSessionProjection().messages;
-        const system = systemPart(observedPrompt, toolShapes(tools), saved, ctx.getSystemPrompt());
-        const band = decisionBand(ctx, room, system);
-        const host = hostTokens(ctx), measure = measureFor(ctx), before = measure(saved);
+        const currentSystem = systemPart(observedPrompt, toolShapes(tools), saved, ctx.getSystemPrompt());
+        const system = cutSystemPart(observedPrompt, tools, saved, ctx.getSystemPrompt());
+        const band = decisionBand(ctx, room, currentSystem);
+        const host = hostSnapshot ?? hostTokens(ctx), measure = measureFor(ctx), before = measure(saved);
         const incoming = incomingPart + system, mandatory = incoming + host;
-        if (!fits(incoming, room, ctx))
+        if (!fits(incomingPart + currentSystem, room, ctx))
             throw new CapacityError("Incoming Pi prompt and response reserve cannot fit the estimated request budget");
         // A cut removes only conversation. If the mandatory request, host input included, does not fit by itself, no cut can
         // help: leave it to the complete-context guard, which fails closed.
-        const gate = gateCut({ total: before + mandatory, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+        const currentMandatory = incomingPart + currentSystem + host;
+        const gate = gateCut({ total: before + currentMandatory, mandatory: currentMandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
         if (gate.kind !== "plan") return;
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
         const decision = chooseCut({
@@ -525,8 +542,30 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const prompted = phase === "decided";
         phase = "starting";
         try {
+            syncHistoryTools(ctx);
             if (prompted) access(); // decided on input; a failure latched there still stops the run
-            else await preflight(ctx, incomingEventTokens(event), event.systemPrompt, event.systemPromptOptions.selectedTools);
+            else await preflight(ctx, incomingEventTokens(event), event.systemPrompt,
+                historyToolNames(pi, event.systemPromptOptions.selectedTools, historyToolsEnabled(ctx)));
+            syncHistoryTools(ctx);
+            event.systemPromptOptions.selectedTools = historyToolNames(pi, event.systemPromptOptions.selectedTools, historyToolsEnabled(ctx));
+        } catch (error) { fail(error, ctx); }
+    });
+    // The incoming user message is about to be appended (including steering inside a run), and later before_agent_start/turn_start
+    // handlers have run. Pi's prepareRequest has not yet snapshotted executable tools. A first cut discovered in context_with_system
+    // would be too late for that snapshot, even if its declarations were repaired there, so make the late prompt decision here.
+    pi.on("message_end", (event, ctx) => {
+        if (event.message.role !== "user" || !active() || !admittedRun || promptCut) return;
+        try {
+            access();
+            if (!ctx.model) throw missingModel();
+            const message = event.message;
+            const incoming = incomingTokens(typeof message.content === "string" ? message.content : message.content.flatMap(b => b.type === "text" ? [b.text] : []).join("\n"),
+                typeof message.content === "string" ? [] : message.content.filter((b): b is ImageContent => b.type === "image"));
+            const saved = ctx.sessionManager.buildSessionProjection().messages;
+            const host = hostTokens(ctx);
+            if (fits(requestTokens(saved, ctx.getSystemPrompt()) + incoming + host, limits(ctx).room, ctx)) return;
+            preflight(ctx, incoming, ctx.getSystemPrompt(), pi.getActiveTools(), host);
+            syncHistoryTools(ctx);
         } catch (error) { fail(error, ctx); }
     });
     // A cut at a public boundary, drafted against the boundary's own preview: "tool-loop" between the rounds of a run, "run-end" once its
@@ -545,8 +584,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // One snapshot per decision. Messages queued for the next request (steering, follow-ups) are in that request but not in the
         // saved conversation. Pi's peek returns the steering queue, else the follow-up queue; a follow-up is not in the very next
         // request while tools still run, so it can be counted early: conservative, and nothing else would cut at that later boundary.
-        const system = systemPart(ctx.getSystemPrompt(), toolShapes(pi.getActiveTools()), saved, ctx.getSystemPrompt());
-        const band = decisionBand(ctx, room, system);
+        const currentSystem = systemPart(ctx.getSystemPrompt(), toolShapes(pi.getActiveTools()), saved, ctx.getSystemPrompt());
+        const system = cutSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
+        const band = decisionBand(ctx, room, currentSystem);
         const host = hostTokens(ctx);
         const queued = event.context.pendingMessages.length ? conversationTokens(event.context.pendingMessages as Messages) : 0;
         const mandatory = system + host + queued;
@@ -559,8 +599,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             previews = [];
             floorKept = undefined;
             const before = measure(saved);
-            return decideCut({
-            total: before + mandatory, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
+            const currentMandatory = currentSystem + host + queued;
+            const gate = gateCut({ total: before + currentMandatory, mandatory: currentMandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+            if (gate.kind !== "plan") return gate;
+            return chooseCut({
+            opportunistic: gate.opportunistic, mandatory, before, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                 const reserve = planReserve(target, room, band, mandatory, ctx);
@@ -639,7 +682,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 settingsFor().getCompactionSettings(ctx.model).enabled;
             if (!promptCut && !decide) return;
             const result = atBoundary(event, ctx, "tool-loop", decide);
-            if (result) pendingBoundaryCommit = true;
+            if (result) {
+                pendingBoundaryCommit = true;
+                // Both supported Pi versions refresh executable tools and declarations after this boundary, within the same run.
+                applyHistoryTools(pi, hasTuckCut(result.entries) || historyToolsEnabled(ctx));
+            }
             return result;
         } catch (error) { fail(error, ctx); }
     });
@@ -700,21 +747,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 			if (!ctx.model) throw missingModel();
 			// The complete request, counted after Pi's conversion (summary/custom/bash envelopes), with the effective system once.
 			// Pi applies a forced prompt after this hook; the public prompt already observes it.
-            let messages = event.messages, tokens = requestTokens(messages, ctx.getSystemPrompt());
-            // The run's first request is over the room although the prompt's decision found it fit: something changed the request after that decision
-            // (another extension patching the system prompt in before_agent_start, whatever the load order). Reduce here rather than refuse: plan the
-            // prompt's cut against the request as it now is, carry it in memory, and save it at the first boundary, as any prompt's cut is saved.
-            if (!fits(tokens, limits(ctx).room, ctx) && !promptCut) {
-                const branch = ctx.sessionManager.getBranch(), last = branch.at(-1);
-                if (last?.type === "message" && last.message.role === "user") {
-                    const header = ctx.sessionManager.getHeader();
-                    const before = header && SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch.slice(0, -1)]);
-                    if (before) {
-                        preflight(Object.create(ctx, { sessionManager: { value: before } }), incomingTokens(typeof last.message.content === "string" ? last.message.content : last.message.content.flatMap(b => b.type === "text" ? [b.text] : []).join("\n"), typeof last.message.content === "string" ? [] : last.message.content.filter((b): b is ImageContent => b.type === "image")), ctx.getSystemPrompt(), pi.getActiveTools());
-                        if (promptCut) { messages = cutRequest(event.messages, ctx, promptCut); tokens = requestTokens(messages, ctx.getSystemPrompt()); }
-                    }
-                }
-            }
+            syncHistoryTools(ctx);
+            const messages = historyToolDeclarations(event.messages, toolShapes(pi.getActiveTools()), historyToolsEnabled(ctx));
+            const tokens = requestTokens(messages, ctx.getSystemPrompt());
 			if (!fits(tokens, limits(ctx).room, ctx))
 				throw new CapacityError("Complete Pi context and response reserve exceed the estimated request budget");
             if (recorder.enabled && !recorder.waitingForCut) recorder.measureInline(() => {
