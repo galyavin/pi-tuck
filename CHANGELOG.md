@@ -3,6 +3,56 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.18] - 2026-11-08
+
+### Fixed
+
+- **A summary could drop the task a session was working on (1.0.13 to 1.0.17).** Separate rules decided what a summary quoted and what the kept tail
+  held. In a session with many turns, the prompt that set the current task, or the first prompt, could lose its opening after a cut. The settings stress
+  test found it 40 times in 32 of its cells on 1.0.16 and 1.0.17. A cut now fills its room by one ranked list, across the summary and the kept tail
+  together:
+  1. the current prompt, whole;
+  2. the openings of the first prompt and the newest answered prompts, sized to the room;
+  3. the newest part of the conversation, kept as it is;
+  4. the file and action lists;
+  5. the rest of the conversation.
+
+  The stress test now finds no lost opening in 287 cells. Dropped turns and tool results are counted with index ranges you can read back with
+  `tuck_recall`.
+
+### Changed
+
+- **One number sets how much a cut carries, and the decision to cut reads only amounts.** The quote budget and its fallback steps are gone, and so are
+  the rules that compared two versions of a summary. The kept tail is at most half of the 25,000-token tail cap, the size the cut point already assumed.
+- **pi-tuck's tools appear only after its first cut.** Before that, there is nothing out of view to recall. Until then a request is byte-identical to one
+  without pi-tuck: 254 of 254 requests on replay. Every cut plans room for the tools the requests after it carry.
+- **A prompt's late cut is planned when the prompt joins the session,** after other extensions have changed the system prompt and before Pi fixes the
+  request's tools. It replaces 1.0.17's reduction in the final guard and keeps its effect: a host section added in any load order is cut, not refused.
+- **Cuts compute faster:** about half the time of 1.0.17 on the regression sessions, and 76 ms against 159 ms at 3,888 entries.
+- An answered prompt with an image keeps its text opening, and a current prompt of only spaces is kept.
+
+### Correction to 1.0.16
+
+- 1.0.16's notes said its cut rate and cost were unchanged. That held on replay of single-task sessions, but not in live 30-task chains at 81,920
+  against 1.0.13. There it took 1.48 times the turns (95% interval 1.34 to 1.64), 74% more cuts and 1.66 times the tokens, with resolved 56 against 55
+  ([benchmark/RESULTS-V1016.md](benchmark/RESULTS-V1016.md)). Most of the extra cuts follow from the extra turns. Replay cannot show this cost:
+  replay puts 1.0.13 and 1.0.17 within 0.1% of each other.
+
+### Known issues
+
+- On replay of 17 recordings, estimated request time against 1.0.13 is 2.2% higher quiet and 4.2% loaded at 81,920, and 1.1% and 1.9% lower at
+  131,072. Billed input moves the same way. At 81,920 each cut carries about 600 more tokens.
+- Two stress findings from earlier versions remain: a cut that frees little with a 40,000-token setup at 65,536, and a fresh assistant reply larger than
+  the free room.
+- Sessions that are open keep the build they started with until they are restarted.
+
+### Release gates
+
+- **Shipped before its live gate, as a fix for lost work.** The gate runs right after release; if it fails, npm and this version are rolled back to
+  1.0.17.
+- Replay on 29 recordings: 0 lost tasks, 0 dead tasks, 0 faults, every clip read back.
+- Tests, CI, the settings stress test (287 cells, no cut over its target), and the shape checks (21 cells at 32,768, 81,920 and 131,072).
+
 ## [1.0.17] - 2026-11-08
 
 ### Fixed
