@@ -3,7 +3,7 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.19] - 2026-11-09
 
 ### Added
 
@@ -17,6 +17,13 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 
 - **`/compact` with text after it now cuts.** pi-tuck builds its summary from the session itself, so the text cannot steer it. Before, the cut was
   cancelled, which Pi showed as an error; now pi-tuck makes the cut plain `/compact` makes and says the text was not used.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.18:** 13,946 requests on 29 recordings, 0 differ, 0 lost and 0 dead tasks, the same
+  17 clips. It changes nothing the model sees: `/tuck`, the setup notice and the `/compact` notice are for the operator only. Tests (662), CI, and
+  the settings stress test (287 cells, none worse than 1.0.18, no cut over its target).
+- Sessions that are open keep the build they started with until they are restarted.
 
 ## [1.0.18] - 2026-11-08
 
