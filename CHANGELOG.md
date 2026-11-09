@@ -3,6 +3,21 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`/tuck` says in words what pi-tuck is doing in this session:** the version the session loaded (an open session keeps it until Pi restarts),
+  how many cuts pi-tuck made and the last one's size before and after, whether the cut point adapts or is fixed by `cutAt`, and how search works
+  here. It is a command for the operator; the model sees nothing new.
+- **The first-time semantic setup says when it is done.** It announced its download and then said nothing; now it says once that semantic
+  recall is set up.
+
+### Changed
+
+- **`/compact` with text after it now cuts.** pi-tuck builds its summary from the session itself, so the text cannot steer it. Before, the cut was
+  cancelled, which Pi showed as an error; now pi-tuck makes the cut plain `/compact` makes and says the text was not used.
+
 ## [1.0.18] - 2026-11-08
 
 ### Fixed

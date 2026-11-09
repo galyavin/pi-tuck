@@ -16,6 +16,7 @@ import type { RecallPolicy } from "./recall.js";
 import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY_CHARACTERS } from "./recall.js";
 
 import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
+import { LOADED_VERSION, statusText } from "./status.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { eligibilityKey, eligibilityKeyMoved, memoizedEligibleSources } from "./eligibility-cache";
 import { applyHistoryTools, hasTuckCut, historyToolDeclarations, historyToolNames, stageHistoryTools } from "./history-tools.js";
@@ -201,6 +202,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         }
         ctx.ui.notify(JSON.stringify({...semanticStatus(),...(errors.length?{errors}:{})}),errors.length?"warning":"info");
     }});
+    pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
+        const { state, lastError } = semantic.status();
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, search, semantic: { state, lastError } }), "info");
+    } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let admittedRun = false;
     // One serial request, one accounting identity; observations never certify new content. A new identity (the first request after a session
@@ -425,11 +430,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const operatorManual = event.reason === "manual";
             if (operatorManual && !admittedRun) forgetFailure();
 			access();
-			if (event.customInstructions?.trim()) {
-				recorder.stop("no-cut-custom-instructions");
-                ctx.ui.notify("pi-tuck does not accept summarization instructions; use /compact without arguments.", "warning");
-				return { cancel: true };
-			}
+			// pi-tuck's summary is built from the session itself, so text after /compact cannot steer it. The operator asked for a cut: make the one
+			// plain /compact makes and say the text was not used, rather than cancel (which Pi shows as an error, with no cut).
+			if (event.customInstructions?.trim()) ctx.ui.notify("pi-tuck: /compact ignores the text after it, since pi-tuck builds its summary from the session itself. Cutting as plain /compact does.", "info");
             const { response, room } = limits(ctx);
             const retain = operatorManual || admittedRun;
             // A cut Pi asks for (an operator's /compact, Pi's threshold or overflow recovery) charges what the request must carry whatever is

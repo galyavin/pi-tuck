@@ -47,7 +47,7 @@ export default async function (pi: ExtensionAPI) {
 	const appleSilicon = process.platform === "darwin" && process.arch === "arm64";
 	const handle = await installCompaction(pi, { semanticRecall, search: appleSilicon, cutAt: settings.cutAt, onSemanticSetting: async enabled => { off = !enabled; } });
 	if (settings.semanticRecall === false) return;
-	let session = 0, said = "", setup: Promise<unknown> | undefined;
+	let session = 0, said = "", setup: Promise<unknown> | undefined, announced = false;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
 	const say = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { try { ctx.ui.notify(message, level); } catch { /* ended */ } };
 	const once = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { if (said !== message) { said = message; say(ctx, message, level); } };
@@ -64,11 +64,13 @@ export default async function (pi: ExtensionAPI) {
 			return once(ctx, "pi-tuck: semantic recall is off here because Pi's agent folder is inside this folder; open Pi in a project folder to use it.", "info");
 		if (!ctx.hasUI) return; // a one-shot run (pi -p) would end before a first-time setup could
 		if (!semanticRecall.status().configured) semanticRecall.refuse("Semantic recall is being set up; word recall works meanwhile");
-		setup ??= ensureSemanticRuntime(defaultRoot(), message => say(ctx, message, "info"));
+		setup ??= ensureSemanticRuntime(defaultRoot(), message => { announced = true; say(ctx, message, "info"); });
 		setup.then(async () => {
 			if (current !== session || off) return;
 			try {
 				await handle.setSemanticEnabled(true, ctx); // reads the runtime's configuration through the outside-project check
+				// The download was announced, so its end is too: once, when semantic recall first starts on it.
+				if (announced && current === session) { announced = false; say(ctx, "pi-tuck: semantic recall is set up. Search by meaning works from the first cut on.", "info"); }
 			} catch (error) {
 				if (current === session) say(ctx, `pi-tuck: semantic recall could not start (${reason(error)}); it tries again when a session starts.`, "warning");
 			}
