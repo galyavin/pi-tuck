@@ -1,10 +1,10 @@
 import { VERSION, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { installCompaction } from "./src/compaction";
 import { validCutAt } from "./src/budget";
 import { createSemanticRecall } from "./src/semantic-recall";
-import { defaultRoot } from "./src/assets";
+import { defaultRoot, runtimeConfigPath } from "./src/assets";
 import { ensureSemanticRuntime } from "./src/setup";
 
 export type { CompactionOptions } from "./src/compaction";
@@ -62,8 +62,15 @@ export default async function (pi: ExtensionAPI) {
 		// agent folder, such as the home folder.
 		if (within(real(getAgentDir()), real(ctx.cwd)))
 			return once(ctx, "pi-tuck: semantic recall is off here because Pi's agent folder is inside this folder; open Pi in a project folder to use it.", "info");
-		if (!ctx.hasUI) return; // a one-shot run (pi -p) would end before a first-time setup could
-		if (!semanticRecall.status().configured) semanticRecall.refuse("Semantic recall is being set up; word recall works meanwhile");
+		// A run with no UI (pi -p, RPC, JSON) uses a runtime that is already installed: that needs no download. It does not start a first-time
+		// setup, which would outlast a one-shot run, and it says why, so tuck_search and /tuck name the real state.
+		const installed = existsSync(runtimeConfigPath(defaultRoot()));
+		if (!ctx.hasUI && !installed) {
+			semanticRecall.refuse("Semantic recall is not set up yet; start Pi once in an interactive session to set it up. Word recall works meanwhile");
+			return;
+		}
+		if (!semanticRecall.status().configured)
+			semanticRecall.refuse(installed ? "Semantic recall is starting; word recall works meanwhile" : "Semantic recall is being set up; word recall works meanwhile");
 		setup ??= ensureSemanticRuntime(defaultRoot(), message => { announced = true; say(ctx, message, "info"); });
 		setup.then(async () => {
 			if (current !== session || off) return;
