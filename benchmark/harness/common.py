@@ -52,7 +52,8 @@ SUITES = {"main": {"root": "live", "model": MODEL, "thinking": THINKING, "health
           "w32m": {"root": "live32m", "model": MODEL, "thinking": THINKING, "health": None},
           "w32g": {"root": "live32g", "model": MODEL, "thinking": THINKING, "health": None},
           "w81": {"root": "live81", "model": MODEL, "thinking": THINKING, "health": None},
-          "w81b": {"root": "live81b", "model": MODEL, "thinking": THINKING, "health": None}}  # the w81 settings with their own results folder, for a later gate on the same chains
+          "w81b": {"root": "live81b", "model": MODEL, "thinking": THINKING, "health": None},  # the w81 settings with their own results folder, for a later gate on the same chains
+          "w81c": {"root": "live81c", "model": MODEL, "thinking": THINKING, "health": None}}  # and a third one
 
 
 def refuse_openrouter(what: str):
@@ -101,7 +102,7 @@ def agent_dir(arm: str, suite: str = "main") -> Path:
         return agent_dir_w32m(arm)
     if suite == "w32g":
         return agent_dir_w32m(arm, W32G, "w32g")
-    if suite in ("w81", "w81b"):
+    if suite in ("w81", "w81b", "w81c"):
         return agent_dir_w32m(arm, W81, suite)
     if suite in ("pro81", "pro49"):
         return agent_dir_w32m(arm, PRO81 if suite == "pro81" else PRO49, suite)
@@ -141,6 +142,8 @@ def agent_dir_w32m(arm: str, cfg: dict = W32M, suite: str = "w32m") -> Path:
         "compaction": cfg["compaction"], "retry": RETRY, "defaultProvider": "mac-studio", "defaultModel": "main", "defaultThinkingLevel": THINKING,
         "quietStartup": True, "packages": [], "extensions": [],
     }, indent=1))
+    if suite.startswith("pro") and arm == "C":  # the head-to-head's third arm: pi-tuck cutting at the full room like native (cutAt 1); arm B keeps pi-tuck's own default
+        write_config(path / "pi-tuck.json", json.dumps({"cutAt": 1}))
     runtime = path / "pi-tuck"
     if arm in TUCK_ARMS and not runtime.exists():
         runtime.mkdir()
