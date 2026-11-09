@@ -67,6 +67,20 @@ Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, bo
 - Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.18`.
 - To pin a version, add it: `pi install npm:pi-tuck@1.0.18`.
 
+## Uninstall
+
+```sh
+pi remove npm:pi-tuck
+```
+
+Use the same source you installed with. This takes pi-tuck out of Pi's settings. It does not delete what the search setup downloaded: about 460 MB in the `pi-tuck` folder of Pi's agent folder (`~/.pi/agent/pi-tuck`, or the folder `PI_CODING_AGENT_DIR` names). To free the space, delete that folder:
+
+```sh
+rm -rf ~/.pi/agent/pi-tuck
+```
+
+On Linux and Intel Macs, nothing is downloaded, so there is nothing to delete.
+
 ## How it works
 
 When context fills up, pi-tuck replaces the older turns with one summary. The summary keeps:
