@@ -5,9 +5,8 @@ import { bandOf } from '../src/budget';
 import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, WINDOW, expectParity, nonSystem, receiptOf, referenceGuardSystem, scenario } from './budget-fixture';
 import { scriptedModelRuntime } from './model-fixture';
 
-// The reply reserve (C1). By default the room is the window less the model's catalogue maximum output (128,000 here), because a
-// transport may omit the output cap and the reply can then grow to that maximum. A host that knows its transport declares an exact
-// reserve with `responseExact: true`; the room is then the window less that reserve, whatever the catalogue says. Window 272,000.
+// The host reply reserve (C1). Without the flag the catalogue maximum output (128,000 here) stays the floor.
+// A host that declares `responseExact: true` gets exactly its reserve. Standalone is covered in standalone-reserve.test.ts.
 const PROMPT = 2; // 'Continue'
 const AROUND = [-3, -2, -1, 0, 1, 2, 3];
 // At the tool boundary the first request must stay below the band, or the prompt would be cut first: the first tool result takes 100,000 of the request.
@@ -44,14 +43,7 @@ test('without the flag the model\'s maximum output stays the floor of the reserv
  expect((await offered(declared, 0, 200000)).join(' ')).toContain(CAPACITY);
  // A host that sets the flag to anything but true is not exact.
  for (const flag of [false, 1, 'true'])
-  expect((await offered(() => ({ response: 32768, responseExact: flag as never }), 0, 200000)).join(' '), String(flag)).toContain(CAPACITY);
- // The same for a host that declares nothing: Pi's reserveTokens, never less than the maximum output.
- expect(await offered(undefined, 32768, ROOM - 1)).toEqual([]);
- expect((await offered(undefined, 32768, ROOM)).join(' ')).toContain(CAPACITY);
- expect((await offered(undefined, 32768, 200000)).join(' ')).toContain(CAPACITY);
- // A larger Pi setting than the maximum output is honored.
- expect(await offered(undefined, 200000, WINDOW - 200000 - 1)).toEqual([]);
- expect((await offered(undefined, 200000, WINDOW - 200000)).join(' ')).toContain(CAPACITY);
+   expect((await offered(() => ({ response: 32768, responseExact: flag as never }), 0, 200000)).join(' '), String(flag)).toContain(CAPACITY);
 });
 
 test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('a reserve of %s is invalid, exact or not', async response => {

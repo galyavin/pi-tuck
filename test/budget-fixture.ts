@@ -160,6 +160,10 @@ export interface Options {
  /** A server that does not refuse an oversize request: it keeps the end of it and answers as if nothing had happened. 'stop' reports input usage
   * equal to the window; 'lengthZero' is the variant Pi lists for Xiaomi, a stop at length, no output, and the window reported as input. */
  truncateOverWindow?: 'stop' | 'lengthZero';
+ /** A provider that enforces prompt + catalogue output cap, or emits a cap-sized reply clipped at the physical window end. */
+ replyWindow?: 'refuse' | 'clip';
+ /** Output attempted by the clipping provider on each final answer (defaults to the catalogue cap). */
+ replyWindowOutput?: (request: number) => number;
  /** Tokens of the assistant reply's own text, per request. A tool call that carries a large body is a fresh message no cut can drop and no clip may
   * shrink, so it overflows the room in a different way from a fresh result: the cut that answers it has already happened. */
  /** A reply whose own text is this many tokens, on top of its tool call. */
@@ -419,7 +423,8 @@ export async function harness(options: Options) {
    // A provider that enforces its own window refuses the request rather than answering it, and Pi runs its one compact-and-retry on the error.
    // A server that keeps the end of an oversize request instead (`truncateOverWindow`) answers it, and the reply below carries its usage.
    const truncated = options.truncateOverWindow !== undefined && count > model.contextWindow;
-   if (options.rejectOverWindow && !truncated && count > model.contextWindow) {
+   if ((options.replyWindow === 'refuse' && count + model.maxTokens > model.contextWindow) ||
+    (options.rejectOverWindow && !truncated && count > model.contextWindow)) {
     state.overflows++;
     state.assistantSizes[state.requests - 1] = 0; // the model sent no content at all for this request
     const failed = refuse(options.rejectWith ?? OVERFLOW_TEXT, options.rejectStatus);
@@ -449,12 +454,19 @@ export async function harness(options: Options) {
     stream.end(failed); return stream;
    }
    const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
+   // Exercise actual output exhaustion, distinct from the existing input-truncation fake. Tool rounds stay small; final answers try the cap.
+   const outputRoom = Math.max(0, model.contextWindow - count);
+   const output = Math.min(model.maxTokens, options.replyWindowOutput?.(state.requests) ?? model.maxTokens);
+   const clippedReply = options.replyWindow === 'clip' && !toolRound && output > outputRoom;
+   if (options.replyWindow === 'clip' && !toolRound) reply.splice(0, reply.length, { type: 'text', text: sized(Math.min(output, outputRoom)) });
    // A reply whose own body is large arrives with the round, so it is in the next request before any cut can reach it.
    if (options.replyTokens && toolRound) reply.unshift({ type: 'text', text: sized(Math.max(0, Math.round(options.replyTokens(state.requests)))) });
    state.assistantSizes[state.requests - 1] = est(replyOf(reply, toolRound ? 'toolUse' : 'stop'));
    // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
    const thinking = options.thinkingChars?.(state.requests);
-   const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, toolRound ? 'toolUse' : 'stop');
+   const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, clippedReply ? 'length' : toolRound ? 'toolUse' : 'stop');
+   if (options.replyWindow) { message.usage.input = count; message.usage.output = est(replyOf(reply)); message.usage.totalTokens = count + message.usage.output; }
+   if (clippedReply) state.truncations++;
    if (options.usageFirst !== undefined && state.requests === 1) { message.usage.input = options.usageFirst; message.usage.totalTokens = options.usageFirst; }
    if (options.usageRatio !== undefined && guard.length) { message.usage.input = Math.ceil(guard.at(-1)! * options.usageRatio); message.usage.totalTokens = message.usage.input; }
    if (options.outputTokens !== undefined) { message.usage.output = options.outputTokens; message.usage.totalTokens += options.outputTokens; }
@@ -472,7 +484,7 @@ export async function harness(options: Options) {
    // Every reply is measured as pi-tuck measures it, so a caller can weigh the assistant content a run just added to the session.
    state.replies.push(estimateTokens(message));
    state.answers.push(message);
-   stream.push({ type: 'done', reason: toolRound ? 'toolUse' : 'stop', message }); stream.end(message); return stream;
+   stream.push({ type: 'done', reason: message.stopReason as 'toolUse' | 'stop' | 'length', message }); stream.end(message); return stream;
   };
   const allCompactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);
   const isRunEnd = (e: { details?: unknown }) => (e.details as { diagnosticReceipt?: { reason?: string } } | undefined)?.diagnosticReceipt?.reason === 'run-end';

@@ -109,9 +109,9 @@ export interface CompactionOptions {
 	 * which is the room less 2% of it, or this fraction of the room when that is lower; a lower value cuts earlier and leaves less. The exact room
 	 * stays the limit of every throw, fault and the complete-context guard. If omitted, the band adapts to the last cut. */
 	cutAt?: number;
-	/** The response reserve: the input room is the context window less this. By default the room never exceeds the window less the model's
-	 * catalogue maximum output, because a transport may omit the output cap and the reply can then grow to that maximum. A host that knows its
-	 * transport's behavior declares an exact reserve with `responseExact: true`, and the room is then the window less `response` exactly. */
+	/** A host's response reserve: without `responseExact: true`, the catalogue maximum output stays its floor; with it, `response` is exact.
+	 * Standalone uses Pi's reserveTokens until an assistant length/error stop on the current branch, then also holds the catalogue maximum.
+	 * Resume, fork and /tree follow that branch's history; a new session has no inherited fallback. */
 	requestReserve?: (ctx: ExtensionContext) => { response: number; responseExact?: true };
 	/** The exact messages the host's `context` hook adds to every final request beyond the saved conversation (for example a role
 	 * view), in the form the hook injects them. Cut triggers, the cut planner and the post-cut checks count them with the same
@@ -266,17 +266,17 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("agent_settled", () => { admittedRun = false; pending = undefined; phase = "idle"; forgetFailure(); clips.clear(); promptCut = undefined; });
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
-	// The standalone default reserves the model's catalogue maximum output: a transport may omit the output cap, and then only that
-	// reserve keeps input plus any reply inside the window.
-	const reserveFor = (ctx: ExtensionContext) => Math.max(
-		settingsFor().getCompactionSettings(ctx.model).reserveTokens, ctx.model?.maxTokens ?? 0);
-	// The one place the response reserve is decided; every consumer takes its room from here. A host that knows how its transport caps
-	// a reply declares an exact reserve (`responseExact: true`) and is held to it; without that flag the catalogue maximum is the floor.
+	// The one reserve decision; every consumer takes its room from limits. Standalone starts at Pi's native cut point. Once a reply did
+	// not fit, hold the catalogue maximum too. Any error counts: older Pi versions may not preserve a readable overflow refusal. Read the
+	// whole branch, including history before compactions, each time: no flag to persist or reset on resume, fork, /tree or a new session.
 	const requestReserve = (ctx: ExtensionContext) => {
-        const budget: { response: number; responseExact?: true } = options.requestReserve?.(ctx) ?? { response: reserveFor(ctx) };
+        const host = options.requestReserve?.(ctx);
+        const budget = host ?? { response: settingsFor().getCompactionSettings(ctx.model).reserveTokens };
         if (!Number.isSafeInteger(budget.response) || budget.response < 0)
             throw new Error("Invalid host request reserve");
-        return { response: budget.responseExact === true ? budget.response : Math.max(budget.response, ctx.model?.maxTokens ?? 0) };
+        const floor = host ? host.responseExact !== true : ctx.sessionManager.getBranch().some(entry =>
+            entry.type === "message" && entry.message.role === "assistant" && ["length", "error"].includes(entry.message.stopReason));
+        return { response: floor ? Math.max(budget.response, ctx.model?.maxTokens ?? 0) : budget.response };
     };
     const inputRoom = (response: number, ctx: ExtensionContext) => {
         const configured = options.activeInputTokens;
