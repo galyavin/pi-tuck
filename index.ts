@@ -49,12 +49,19 @@ export default async function (pi: ExtensionAPI) {
 	if (settings.semanticRecall === false) return;
 	let session = 0, said = "", setup: Promise<unknown> | undefined, announced = false;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
-	const say = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { try { ctx.ui.notify(message, level); } catch { /* ended */ } };
+	// With no UI (pi -p), Pi shows no notices, so an off or failing semantic recall would go unsaid: write it to stderr instead, once per
+	// session. stderr is the operator's; it never enters the model's context.
+	let stderrSaid = false;
+	const say = (ctx: ExtensionContext, message: string, level: "info" | "warning") => {
+		if (!ctx.hasUI) { if (!stderrSaid) { stderrSaid = true; try { process.stderr.write(message + "\n"); } catch { /* closed */ } } return; }
+		try { ctx.ui.notify(message, level); } catch { /* ended */ }
+	};
 	const once = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { if (said !== message) { said = message; say(ctx, message, level); } };
 	pi.on("session_shutdown", () => { session++; });
 	pi.on("session_start", (_event, ctx) => {
 		const current = ++session;
 		off = false;
+		stderrSaid = false;
 		if (settings.error) once(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");
 		if (!appleSilicon)
 			return once(ctx, "pi-tuck: semantic recall needs macOS on Apple silicon; compaction and word recall work.", "info");
@@ -67,7 +74,7 @@ export default async function (pi: ExtensionAPI) {
 		const installed = existsSync(runtimeConfigPath(defaultRoot()));
 		if (!ctx.hasUI && !installed) {
 			semanticRecall.refuse("Semantic recall is not set up yet; start Pi once in an interactive session to set it up. Word recall works meanwhile");
-			return;
+			return say(ctx, "pi-tuck: semantic recall is not set up yet; start Pi once in an interactive session to set it up. Word recall works.", "warning");
 		}
 		if (!semanticRecall.status().configured)
 			semanticRecall.refuse(installed ? "Semantic recall is starting; word recall works meanwhile" : "Semantic recall is being set up; word recall works meanwhile");

@@ -36,9 +36,16 @@ for (const installed of [true, false])
 			vi.resetModules();
 			const { default: extension } = await import('../index');
 			await extension(pi);
-			const ctx = { hasUI: false, cwd: project, ui: { notify: () => {} } } as unknown as ExtensionContext;
-			for (const handler of handlers.get('session_start') ?? []) await handler({}, ctx);
-			await new Promise(resolve => setTimeout(resolve, 10));
+			const ctx = { hasUI: false, cwd: project, ui: { notify: () => { throw new Error('no UI'); } } } as unknown as ExtensionContext;
+			const written: string[] = [];
+			const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => { written.push(String(chunk)); return true; });
+			try {
+				for (const handler of handlers.get('session_start') ?? []) await handler({}, ctx);
+				await new Promise(resolve => setTimeout(resolve, 10));
+			} finally { write.mockRestore(); }
+			// An off or failing semantic recall is said once on stderr, where the operator of a no-UI run sees it; a working one says nothing.
+			const ours = written.filter(line => line.startsWith('pi-tuck: semantic recall'));
+			expect(ours).toHaveLength(installed ? 0 : 1);
 			if (installed) {
 				expect(spies.enabled).toHaveBeenCalledTimes(1);
 				expect(spies.refused).toEqual(['Semantic recall is starting; word recall works meanwhile']);
