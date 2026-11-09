@@ -162,6 +162,8 @@ export interface Options {
  truncateOverWindow?: 'stop' | 'lengthZero';
  /** A provider that enforces prompt + catalogue output cap, or emits a cap-sized reply clipped at the physical window end. */
  replyWindow?: 'refuse' | 'clip';
+ /** A transient provider error (HTTP 503, not a context overflow) on these requests. */
+ transientErrorAt?: (request: number) => boolean;
  /** Output attempted by the clipping provider on each final answer (defaults to the catalogue cap). */
  replyWindowOutput?: (request: number) => number;
  /** Tokens of the assistant reply's own text, per request. A tool call that carries a large body is a fresh message no cut can drop and no clip may
@@ -423,6 +425,12 @@ export async function harness(options: Options) {
    // A provider that enforces its own window refuses the request rather than answering it, and Pi runs its one compact-and-retry on the error.
    // A server that keeps the end of an oversize request instead (`truncateOverWindow`) answers it, and the reply below carries its usage.
    const truncated = options.truncateOverWindow !== undefined && count > model.contextWindow;
+   if (options.transientErrorAt?.(state.requests)) {
+    state.assistantSizes[state.requests - 1] = 0;
+    const failed = refuse('503 Service Unavailable: the upstream is temporarily overloaded', 503);
+    state.answers.push(failed);
+    stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
+   }
    if ((options.replyWindow === 'refuse' && count + model.maxTokens > model.contextWindow) ||
     (options.rejectOverWindow && !truncated && count > model.contextWindow)) {
     state.overflows++;

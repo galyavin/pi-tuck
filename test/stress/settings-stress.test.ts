@@ -169,7 +169,7 @@ type Reached = { state: string; check: (e: Evidence) => boolean };
 interface Cell {
  name: string;
  window: number;
- /** Pi's reserve setting, raised to the output cap only after a length/error stop on this branch. */
+ /** Pi's reserve setting, raised to the output cap only after a length stop or a context-overflow refusal on this branch. */
  reserve: number;
  /** The setup the run carries: system message plus tool schemas plus the host's view. Sampled cells leave this unset and scale it with the window;
   * the setup grid names it, because a replay at 131k spends about 24k of a 53k post-cut context on setup and each cut frees only about 16k. */
@@ -229,10 +229,12 @@ const base = (name: string, over: Partial<Cell>): Cell => {
  return cell;
 };
 
-/** Independent room oracle, shared by generated sizes and every rule: start at Pi's reserve, then hold the cap after a branch length/error.
- * Read native entries rather than pi-tuck's helper or receipts, so the same oracle judges 1.0.19 and the candidate. */
+/** Independent room oracle, shared by generated sizes and every rule: start at Pi's reserve, then hold the cap after a length stop or a refusal
+ * pi-ai classes as a context overflow on the branch; other errors (a 503) keep the reserve. Read native entries rather than pi-tuck's helper or
+ * receipts, so the same oracle judges 1.0.19 and the candidate. */
 function limitsOf(cell: Pick<Cell, 'window' | 'reserve' | 'maxTokens'>, branch: readonly SessionEntry[] = []) {
- const failed = branch.some(e => e.type === 'message' && e.message.role === 'assistant' && ['length', 'error'].includes(e.message.stopReason));
+ const failed = branch.some(e => e.type === 'message' && e.message.role === 'assistant' &&
+  (e.message.stopReason === 'length' || (e.message.stopReason === 'error' && isContextOverflow(e.message as never))));
  const reserve = failed ? Math.max(cell.reserve, cell.maxTokens) : cell.reserve;
  return { reserve, room: cell.window - reserve };
 }
@@ -958,6 +960,15 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
    check: e => e.requests.length === 6 && e.requests[1]! >= 4 && e.requests.at(-1)! > 0 && e.answered >= 5 && e.results.length >= 12 &&
     (e.requests[0] === 0 || (replyWindow === 'clip' ? e.truncations === 1 : e.overflows === 1 && e.piOverflow >= 1)) },
  })));
+ // A transient provider error is not a reply that did not fit: after a 503 the branch keeps native's room, so a prompt that fits native's room but
+ // not the output cap's is answered, not refused or cut for want of room.
+ replyReserveCells.push(base('reply reserve: window 81920, a 503 keeps native room', {
+  window: 81_920, reserve: 16_384, maxTokens: 32_768, system: 600, host: 200, prompts: [200, 54_000, 200], rounds: [0, 0, 0], results: [100],
+  extra: { transientErrorAt: request => request === 1, persist: true, noOpening: true },
+  // The 503 is the provider's own error, not a pi-tuck refusal: the provider rules judge prompt 1, as for the HTTP 413 cell.
+  providerRejection: true,
+  reached: { state: 'a 503 on the first request, then a prompt above the cap room and below native room', check: e => e.requests.length === 3 && e.requests[1]! > 0 && e.answered >= 2 },
+ }));
  // Usage that is a wrong observation rather than no observation: a count that jumps tenfold for one reply, a count of zero beside a cache that holds
  // the whole session, and a count that adds the cached tokens to the input as well. Each must leave the session taking its next prompt. The cell
  // records the report the scripted model actually sent, so reaching the state is that the odd usage went out, not that the cell asked for one.

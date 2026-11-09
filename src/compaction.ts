@@ -110,7 +110,7 @@ export interface CompactionOptions {
 	 * stays the limit of every throw, fault and the complete-context guard. If omitted, the band adapts to the last cut. */
 	cutAt?: number;
 	/** A host's response reserve: without `responseExact: true`, the catalogue maximum output stays its floor; with it, `response` is exact.
-	 * Standalone uses Pi's reserveTokens until an assistant length/error stop on the current branch, then also holds the catalogue maximum.
+	 * Standalone uses Pi's reserveTokens until a length stop or a context-overflow refusal on the current branch, then also holds the catalogue maximum.
 	 * Resume, fork and /tree follow that branch's history; a new session has no inherited fallback. */
 	requestReserve?: (ctx: ExtensionContext) => { response: number; responseExact?: true };
 	/** The exact messages the host's `context` hook adds to every final request beyond the saved conversation (for example a role
@@ -267,15 +267,17 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
 	// The one reserve decision; every consumer takes its room from limits. Standalone starts at Pi's native cut point. Once a reply did
-	// not fit, hold the catalogue maximum too. Any error counts: older Pi versions may not preserve a readable overflow refusal. Read the
-	// whole branch, including history before compactions, each time: no flag to persist or reset on resume, fork, /tree or a new session.
+	// not fit (a length stop, or a refusal pi-ai classes as a context overflow), hold the catalogue maximum too. Other errors, such as a 503,
+	// keep native's room. Read the whole branch, including history before compactions, each time: no flag to persist or reset on resume,
+	// fork, /tree or a new session.
 	const requestReserve = (ctx: ExtensionContext) => {
         const host = options.requestReserve?.(ctx);
         const budget = host ?? { response: settingsFor().getCompactionSettings(ctx.model).reserveTokens };
         if (!Number.isSafeInteger(budget.response) || budget.response < 0)
             throw new Error("Invalid host request reserve");
         const floor = host ? host.responseExact !== true : ctx.sessionManager.getBranch().some(entry =>
-            entry.type === "message" && entry.message.role === "assistant" && ["length", "error"].includes(entry.message.stopReason));
+            entry.type === "message" && entry.message.role === "assistant" &&
+            (entry.message.stopReason === "length" || (entry.message.stopReason === "error" && isContextOverflow(entry.message))));
         return { response: floor ? Math.max(budget.response, ctx.model?.maxTokens ?? 0) : budget.response };
     };
     const inputRoom = (response: number, ctx: ExtensionContext) => {
