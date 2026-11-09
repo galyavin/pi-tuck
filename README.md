@@ -63,9 +63,9 @@ pi install npm:pi-tuck
 Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, both automatic and `/compact`. You change no setting.
 
 - Needs Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS or Linux. On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once. Full features on macOS with Apple silicon; elsewhere, compaction and word recall.
-- On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once). Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
-- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.18`.
-- To pin a version, add it: `pi install npm:pi-tuck@1.0.18`.
+- On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once), and says once when it is set up. Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
+- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.0.19`.
+- To pin a version, add it: `pi install npm:pi-tuck@1.0.19`.
 
 ## Uninstall
 
@@ -102,10 +102,11 @@ pi-tuck's tools appear only after its first cut. Before that there is nothing ou
 
 | Command | Does |
 |---|---|
+| `/tuck` | Says in words what pi-tuck is doing in this session: the version this session loaded (an open session keeps it until Pi restarts), how many cuts pi-tuck made and the last one's size before and after, whether the cut point adapts or is fixed by `cutAt`, and how search works here. It is for you; the model sees nothing new. |
 | `/tuck-semantic on\|off\|status` | Turns semantic search on or off for this session, or shows its state. |
 | `/tuck-incident on\|next\|off\|status` | Records this session's compaction decisions to a file you can attach to a bug report. |
 
-`/compact` works as usual, but pi-tuck does not take custom summary instructions. Pi's own setting `"compaction": { "enabled": false }` turns compaction off.
+`/compact` works as usual. Text after it does not steer the summary, because pi-tuck builds the summary from the session itself: since 1.0.19 it cuts as plain `/compact` does and says the text was not used. Pi's own setting `"compaction": { "enabled": false }` turns compaction off.
 
 ## What is proven, and what is not
 
