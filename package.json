@@ -1,6 +1,6 @@
 {
   "name": "pi-tuck",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Deterministic compaction for Pi with no model call, plus exact recall of earlier history. Search by meaning on Apple silicon.",
   "keywords": [
     "pi-package",

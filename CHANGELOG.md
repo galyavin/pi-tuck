@@ -3,6 +3,28 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.20] - 2026-11-09
+
+### Fixed
+
+- **pi-tuck cut earlier than native Pi when a model's reply cap is above Pi's reserve.** It reserved the larger of Pi's `compaction.reserveTokens`
+  and the model's `maxTokens`. With `maxTokens` 32,768 and a reserve of 16,384 on an 81,920 window, its room fell to 49,152 tokens, where native Pi
+  compacts at 65,536. pi-tuck now reserves Pi's `reserveTokens`, native's point. Once a reply on the current branch did not fit, it holds the larger
+  of the two for the rest of that branch: a reply stopped for length, or a request pi-ai classes as a context overflow. A transient error such as a
+  503 keeps native's room. This is read from the branch at each decision, so resume, fork and `/tree` follow the branch, and a new session starts
+  at `reserveTokens` again. A host that passes its own reserve keeps today's behaviour.
+- Lowering `reserveTokens` now takes effect even when the model's `maxTokens` is larger, until a reply does not fit.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.19:** 13,946 requests on 29 recordings, 0 differ, 0 lost and 0 dead tasks, the same
+  17 clips. Every recording has the reply cap equal to the reserve, where nothing changes.
+- New stress cells with the reply cap above the reserve, at 81,920 and 16,384, on a provider that clips the reply at the window end and one that
+  refuses prompt plus cap over the window, plus one with a transient 503. On Pi 1.2.0 and 1.5.0, 1.0.19 refuses in the four cap cells. This version
+  takes one clipped or refused reply in each and recovers, with no lost work and no compaction loop; after the 503 it keeps native's room. The full
+  stress test (292 cells) has 3 findings on each Pi, all also found on 1.0.19, and no cell is worse. Tests (676) and CI.
+- Sessions that are open keep the build they started with until they are restarted.
+
 ## [1.0.19] - 2026-11-09
 
 ### Added
