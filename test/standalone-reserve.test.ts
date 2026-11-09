@@ -37,8 +37,6 @@ test('standalone starts at Pi reserveTokens even when the catalogue maximum is l
 test.each([
  ['length', reply('length')],
  ['readable context overflow', reply('error', OVERFLOW_TEXT)],
- ['unreadable error', reply('error')],
- ['other failed request', reply('error', '503 upstream unavailable')],
 ] as const)('%s on the branch raises the reserve, including after resume and compaction', async (_label, message) => {
  const manager = fresh();
  manager.appendMessage({ role: 'user', content: 'Task', timestamp: 0 });
@@ -51,6 +49,15 @@ test.each([
 
 test.each(['stop', 'toolUse', 'aborted'] as const)('%s does not raise the reserve', async stop => {
  const manager = fresh(); manager.appendMessage(reply(stop));
+ await edge(manager, reserve);
+});
+
+// A transient failure is not a reply that did not fit: pi-ai does not class it as a context overflow, so the branch keeps native's room.
+test.each([
+ ['an error with no message', reply('error')],
+ ['a 503', reply('error', '503 upstream unavailable')],
+] as const)('%s on the branch keeps Pi reserveTokens', async (_label, message) => {
+ const manager = fresh(); manager.appendMessage(message);
  await edge(manager, reserve);
 });
 
