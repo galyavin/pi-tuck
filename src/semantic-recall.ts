@@ -195,13 +195,13 @@ export function viewStart(branch:SessionEntry[]):number{
 }
 const TOOL_OUTPUT=new Set(['toolResult','bashExecution']);
 const isToolOutput=(source:Source)=>TOOL_OUTPUT.has(source.row.role);
-/** Sources in the order they are covered: out-of-view conversation (user messages, assistant text, tool-call names and arguments), then out-of-view tool output, then what is in view.
- * Each part is newest first, extending backward. */
 /** Whether `now` only grew from `plan`: the same session and project, and every source the plan ranks still eligible with the same hash. */
 function grownFrom(now:Snapshot,plan:Snapshot):boolean{
  if(now.session!==plan.session||now.project!==plan.project)return false;if(now.id===plan.id)return true;
  const shas=new Map(now.sources.map(source=>[source.entry.id,source.sha]));return plan.sources.every(source=>shas.get(source.entry.id)===source.sha);
 }
+/** Sources in the order they are covered: out-of-view conversation (user messages, assistant text, tool-call names and arguments), then out-of-view tool output, then what is in view.
+ * Each part is newest first, extending backward. */
 function windowOrder(snapshot:Snapshot):Source[]{
  const before=snapshot.sources.filter(source=>source.order<snapshot.viewStart),kept=snapshot.sources.filter(source=>source.order>=snapshot.viewStart);
  return[...before.filter(source=>!isToolOutput(source)).reverse(),...before.filter(isToolOutput).reverse(),...kept.reverse()];
