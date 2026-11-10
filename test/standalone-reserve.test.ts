@@ -24,11 +24,11 @@ async function edge(manager: SessionManager, response: number, maxTokens = cap) 
  expect((await offer(manager, window - response, maxTokens)).join(' ')).toContain(CAPACITY);
 }
 
-test('standalone starts at Pi reserveTokens even when the catalogue maximum is larger', async () => {
- await edge(fresh(), reserve);
+test('standalone starts with a 8192-token reply floor even when the reserve and catalogue maximum are larger', async () => {
+ await edge(fresh(), 8_192);
  // A Pi setting larger than the cap remains the reserve.
  const larger = SettingsManager.inMemory({ compaction: { reserveTokens: 40_000 } });
- for (const [tokens, refused] of [[41_919, false], [41_920, true]] as const) {
+ for (const [tokens, refused] of [[73_727, false], [73_728, true]] as const) {
   const errors = await guarded(fresh(), tokens, async d => { d.ctx.model = { ...MODEL, contextWindow: window, maxTokens: cap }; }, { ...options, settings: larger });
   expect(errors.join(' ').includes(CAPACITY)).toBe(refused);
  }
@@ -49,7 +49,7 @@ test.each([
 
 test.each(['stop', 'toolUse', 'aborted'] as const)('%s does not raise the reserve', async stop => {
  const manager = fresh(); manager.appendMessage(reply(stop));
- await edge(manager, reserve);
+ await edge(manager, 8_192);
 });
 
 // A transient failure is not a reply that did not fit: pi-ai does not class it as a context overflow, so the branch keeps native's room.
@@ -58,7 +58,7 @@ test.each([
  ['a 503', reply('error', '503 upstream unavailable')],
 ] as const)('%s on the branch keeps Pi reserveTokens', async (_label, message) => {
  const manager = fresh(); manager.appendMessage(message);
- await edge(manager, reserve);
+ await edge(manager, 8_192);
 });
 
 test('each decision follows /tree and a new session without an in-memory fallback flag', async () => {
@@ -96,7 +96,7 @@ test('a persisted resume and /fork inherit only failures on the retained branch'
   manager.appendMessage(reply('length'));
   const after = manager.appendMessage({ role: 'user', content: 'Continue', timestamp: 2 });
   await edge(SessionManager.open(manager.getSessionFile()!, dir), cap);
-  for (const [leaf, held] of [[before, reserve], [after, cap]] as const) {
+  for (const [leaf, held] of [[before, 8_192], [after, cap]] as const) {
    const source = SessionManager.open(manager.getSessionFile()!, dir);
    const path = source.createBranchedSession(leaf)!;
    await edge(SessionManager.open(path, dir), held);
@@ -104,14 +104,10 @@ test('a persisted resume and /fork inherit only failures on the retained branch'
  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('recorded shape: cap equals reserve, so standalone limits equal the 1.0.19 floor before and after a failure', async () => {
- for (const stop of [undefined, 'length', 'error'] as const) {
-  const manager = fresh(); if (stop) manager.appendMessage(reply(stop, OVERFLOW_TEXT));
+test('after a failure the full reserve remains mandatory even when cap equals reserve', async () => {
+ for (const stop of ['length', 'error'] as const) {
+  const manager = fresh(); manager.appendMessage(reply(stop, OVERFLOW_TEXT));
   await edge(manager, reserve, reserve);
-  for (const tokens of [49_152, 65_535, 65_536, 65_537]) {
-   // The unchanged host floor is exactly 1.0.19's max(reserveTokens, model.maxTokens) arithmetic.
-   expect(await offer(manager, tokens, reserve)).toEqual(await offer(manager, tokens, reserve, () => ({ response: reserve })));
-  }
  }
 });
 

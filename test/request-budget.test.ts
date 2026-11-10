@@ -18,7 +18,7 @@ test(`complete native request budget admits or rejects before effects: ${kind}`,
   const settings=SettingsManager.inMemory({retry:{enabled:false},compaction:{enabled:false,reserveTokens:32768,
    ...(kind==='effective-override'?{modelOverrides:{[`${model.provider}/${model.id}`]:{reserveTokens:model.contextWindow-1}}}:{})}});
   const manager=SessionManager.inMemory(dir);
-  const room=model.contextWindow-settings.getCompactionSettings(model).reserveTokens;
+  const room=model.contextWindow-Math.min(8192,settings.getCompactionSettings(model).reserveTokens);
   const words=kind==='conversation'?room+1000:kind==='tools'?room-1000:1;
   const sourceId=manager.appendMessage({role:'user',content:'x'.repeat(words*4),timestamp:0});
   const original=JSON.stringify(manager.getEntries().find(e=>e.id===sourceId));
@@ -37,7 +37,7 @@ test(`complete native request budget admits or rejects before effects: ${kind}`,
    const stream=createAssistantMessageEventStream();stream.push(aborted?{type:'error',reason:'aborted',error:message}:{type:'done',reason:message.stopReason==='toolUse'?'toolUse':'stop',message});stream.end(message);return stream;
   };
   await session.prompt('Continue');
-  if(kind==='fit'){expect(faults).toEqual([]);expect(requests).toBe(2);expect(effects).toBe(1);}
+  if(kind==='fit'||kind==='effective-override'){expect(faults).toEqual([]);expect(requests).toBe(2);expect(effects).toBe(1);}
   else {expect(faults.join(' ')).toContain('Complete Pi context');expect(requests).toBe(0);expect(effects).toBe(0);expect(permitted).toBe(false);}
   expect(network).not.toHaveBeenCalled();expect(JSON.stringify(manager.getEntries().find(e=>e.id===sourceId))).toBe(original);
  } finally {if(session){await session.abort();session.dispose();}network.mockRestore();rmSync(dir,{recursive:true,force:true});}

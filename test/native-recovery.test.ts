@@ -102,7 +102,7 @@ async function installed(diagnostics?: { directory: string }) {
  const commands = new Map<string, (args: string, ctx: unknown) => unknown>();
  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => unknown }) => { commands.set(name, command.handler); },
-  registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [] } as unknown as ExtensionAPI;
+  registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [], appendEntry: () => {} } as unknown as ExtensionAPI;
  const errors: unknown[] = [], notices: string[] = [], abort = vi.fn();
  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 } });
  const handle = await installCompaction(pi, { cutAt: 1, settings, ...EXACT_RESERVE, ...(diagnostics ? { diagnostics } : {}), fail: error => errors.push(error) });

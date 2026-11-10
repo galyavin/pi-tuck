@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { scriptedModelRuntime } from './model-fixture';
 import { expect, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -76,6 +77,10 @@ export interface Options {
  systemSection?: (run: number) => number | null | undefined;
  /** Register that host extension after the compactor instead of before it. */
  systemSectionLate?: boolean;
+ /** Inspect the scripted transport context without changing it. */
+ onWire?: (context: unknown) => void;
+ /** Stable host text for replay comparisons; ordinary stress keeps its changing host witness. */
+ stableHost?: boolean;
  /** Another model from the catalogue, for a case that depends on which API it uses. */
  model?: { provider: string; id: string };
  /** Persist the session to a file, then close it and open it again: the caller starts from a saved session. */
@@ -235,14 +240,19 @@ export async function harness(options: Options) {
   // clips counts the requests that went out with a clipped fresh result in them, which is pi-tuck's own doing and visible nowhere but on the wire;
   // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
   // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
-  const state = { requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
+  const state = { requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
+  const wholePrompt: boolean[] = [];
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
   const note = 'Queued operator note. ';
   const systemPrompt = 'Host input contact. ' + (options.systemTokens !== undefined ? sized(options.systemTokens) : text(options.system ?? 12000)) + 'p'.repeat(options.pad ?? 0);
   // The host's view can grow during a run (attempt effects are recorded in it).
   const exact = (n: number) => sized(n);
-  const hostInput = () => ({ role: 'custom' as const, customType: 'host.view', content: exact(host), display: false, timestamp: 0 });
+  const hostTexts = new Map<number, string>();
+  const hostInput = () => {
+   if (options.stableHost && !hostTexts.has(host)) hostTexts.set(host, exact(host));
+   return { role: 'custom' as const, customType: 'host.view', content: options.stableHost ? hostTexts.get(host)! : exact(host), display: false, timestamp: 0 };
+  };
   // The request as Pi would build it, measured before the compactor is asked anything (these hooks are registered before the compactor's), with
   // the number of requests already answered. A case that needs "the request before any cut" reads this, not the guard's post-cut measure.
   const probes: { after: number; at: string; complete: number; queued: number }[] = [];
@@ -297,7 +307,7 @@ export async function harness(options: Options) {
     pi.on('turn_end', event => { if (event.toolResults.length) options.afterDecision!(decisions++, unseen); });
    }
    // The guard's number for every request, computed independently (registered after the compactor's hook).
-   pi.on('context_with_system', (event, ctx) => { guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); state.cutCounts.push(cutsAtRequest.at(-1)!); if (event.messages.some(m => m.role === 'toolResult' && JSON.stringify((m as { content?: unknown }).content ?? '').includes('[pi-tuck: characters'))) state.clips++; });
+   pi.on('context_with_system', (event, ctx) => { wholePrompt.push(JSON.stringify(event.messages).includes(promptText)); guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); state.cutCounts.push(cutsAtRequest.at(-1)!); if (event.messages.some(m => m.role === 'toolResult' && JSON.stringify((m as { content?: unknown }).content ?? '').includes('[pi-tuck: characters'))) state.clips++; });
   }] });
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
   const newSession = async (m: SessionManager) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
@@ -408,6 +418,8 @@ export async function harness(options: Options) {
   };
   session.agent.streamFunction = (_m, _ctx, streamOptions) => {
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); state.answers.push(m); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
+   options.onWire?.(_ctx);
+   state.requestStates.push(createHash('sha256').update(JSON.stringify({ ..._ctx, messages: _ctx.messages.filter(m => m.role !== 'assistant' || !['error', 'aborted'].includes(m.stopReason)) }, (key, value) => key === 'timestamp' ? undefined : value)).digest('hex'));
    state.requests++;
    if (state.requests === 2) state.delivered = JSON.stringify(_ctx.messages).includes(note);
    options.onRequest?.(state.requests, { setHost: tokens => { host = tokens; }, pi: extension! });
@@ -515,7 +527,7 @@ export async function harness(options: Options) {
     state.hostCalls = end?.hostCalls ?? state.hostCalls;
     const measured = probes.find(p => p.at === (options.at === 'tool' ? 'tool' : 'prompt'));
     expect(network).not.toHaveBeenCalled();
-    return { cuts, requests: state.requests, effects: state.effects, faults, measured, delivered: state.delivered, kept, hostCalls: state.hostCalls, guard, entries: compactions(), runEnd: runEnd(), notices, probes, cutsAtRequest, cutsAtProbe, system: mandatory, aborts: state.aborts, last: session!.messages.findLast(m => m.role === 'assistant') as AssistantMessage | undefined,
+    return { wholePrompt, cuts, requests: state.requests, effects: state.effects, faults, measured, delivered: state.delivered, kept, hostCalls: state.hostCalls, guard, entries: compactions(), runEnd: runEnd(), notices, probes, cutsAtRequest, cutsAtProbe, system: mandatory, aborts: state.aborts, last: session!.messages.findLast(m => m.role === 'assistant') as AssistantMessage | undefined,
      probe: JSON.stringify({ ...options, onRequest: undefined, compaction: undefined, mandatory, saved: nonSystem(saved()), bigResult, probes, guard, cuts, requests: state.requests, effects: state.effects, faults, aborts: state.aborts, delivered: state.delivered, hostCalls: state.hostCalls }) };
    },
   };

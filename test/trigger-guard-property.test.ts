@@ -70,7 +70,13 @@ test(`irreducible requests: an in-band request that cannot be cut is no fault; o
 		const r = await run(options);
 		const why = `seed ${seed} ` + r.probe;
 		const measure = (i: number) => r.probes[i]!.complete + r.probes[i]!.queued;
-		// The margin adds no fault class: the compactor's own faults are only the old ones, and only for a request really over the room.
+        // A steering input can make the compiler quote only part of this run's original prompt. The new prompt check must stop that build.
+        if (r.faults.some(f => f.includes('Prompt check failed'))) {
+            expect(r.wholePrompt.at(-1), why).toBe(false);
+            expect(r.requests, why).toBe(r.guard.length - 1);
+            continue;
+        }
+		// Capacity faults remain confined to requests over the room.
 		for (const fault of r.faults) expect(fault.includes(GUARD) || fault.includes("pi-tuck's mandatory context cannot fit"), why).toBe(true);
 		expect(r.faults.join(' '), why).not.toContain('did not reduce');
 		if (r.faults.some(f => f.includes("pi-tuck's mandatory"))) expect(measure(r.probes.length - 1), why).toBeGreaterThanOrEqual(ROOM);

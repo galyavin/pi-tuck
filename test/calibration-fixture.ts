@@ -46,6 +46,8 @@ export function sessionWith(details: unknown[]) {
 
 export interface Drive {
  errors: unknown[];
+ emit: (name: string, event: unknown) => Promise<void>;
+ notices: string[];
  ctx: ExtensionContext;
  start: () => Promise<void>;
  /** A request of exactly `tokens` estimated tokens, offered to the guard; the messages are returned so that a test can change them. */
@@ -58,13 +60,14 @@ export interface Drive {
 export async function drive(session: SessionManager, options: Partial<CompactionOptions> = {}): Promise<Drive> {
  const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  appendEntry: (kind: string, data: unknown) => { session.appendCustomEntry(kind, data); },
   registerCommand: () => {}, registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [] } as unknown as ExtensionAPI;
- const errors: unknown[] = [];
+ const errors: unknown[] = [], notices: string[] = [];
  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 0 } });
  const handle = await installCompaction(pi, { cutAt: 1, settings, ...EXACT_RESERVE, fail: error => errors.push(error), ...options });
- const ctx = { model: MODEL, cwd: '/x', abort: vi.fn(), getSystemPrompt: () => 'system', ui: { notify: () => {} }, sessionManager: session } as unknown as Drive['ctx'];
+ const ctx = { model: MODEL, cwd: '/x', abort: vi.fn(), getSystemPrompt: () => 'system', ui: { notify: (message: string) => { notices.push(message); } }, sessionManager: session } as unknown as Drive['ctx'];
  const emit = async (name: string, event: unknown) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
- return { errors, ctx, close: () => handle.close(),
+ return { errors, notices, emit, ctx, close: () => handle.close(),
   start: () => emit('session_start', { type: 'session_start', reason: 'resume' }),
   offer: async tokens => {
    // A user message whose measure, with the system part, is exactly `tokens` (four characters to the token).

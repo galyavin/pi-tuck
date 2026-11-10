@@ -562,7 +562,7 @@ test('access revoked on a scheduled preparation disables the controller', async 
 async function installed(f: ReturnType<typeof fixture>, assertAccess: () => void) {
 	const handlers: Record<string, ((event: unknown, ctx: unknown) => unknown)[]> = {};
 	let tool: ToolDefinition | undefined;
-	const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { (handlers[name] ??= []).push(handler); }, getAllTools: () => [], getActiveTools: () => [], registerCommand: () => {}, registerTool: (t: ToolDefinition) => { if (t.name === 'tuck_search') tool = t; } } as unknown as ExtensionAPI;
+	const pi = { appendEntry: (kind: string, data: unknown) => { f.manager.appendCustomEntry(kind, data); }, on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { (handlers[name] ??= []).push(handler); }, getAllTools: () => [], getActiveTools: () => [], registerCommand: () => {}, registerTool: (t: ToolDefinition) => { if (t.name === 'tuck_search') tool = t; } } as unknown as ExtensionAPI;
 	const handle = await installCompaction(pi, { semanticRecall: f.c, assertAccess });
 	const ctx = { cwd: f.ctx.cwd, sessionManager: f.manager, ui: { notify: () => {} } } as unknown as ExtensionToolContext;
 	return { handle, handlers, ctx, search: () => tool!.execute('t13', { query: 'source' }, undefined, undefined, ctx) };

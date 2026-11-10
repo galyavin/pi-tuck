@@ -340,9 +340,10 @@ test('the seed writes nothing: the session file is byte-identical across session
   const d = await drive(resumed);
   try { await d.start(); await d.offer(50000); await d.reply(reporting(60000)); await d.offer(50000); } finally { await d.close(); }
   expect(d.errors).toEqual([]);
-  await expectFactor(1.19, resumed, 'read from the file');
   expect(readFileSync(file).equals(bytes)).toBe(true);
   expect(readdirSync(dir).sort()).toEqual(names);
+  // Boundary probes deliberately refuse; each such refusal now appends its required capacity receipt.
+  await expectFactor(1.19, resumed, 'read from the file');
  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

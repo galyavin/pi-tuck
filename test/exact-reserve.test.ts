@@ -16,7 +16,7 @@ const TOOL = { fresh: 100000 };
 async function offered(requestReserve: CompactionOptions['requestReserve'], settingsReserve: number, tokens: number) {
  const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
-  registerCommand: () => {}, registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [] } as unknown as ExtensionAPI;
+  registerCommand: () => {}, registerTool: () => {}, getSettings: () => ({}), getAllTools: () => [], getActiveTools: () => [], appendEntry: () => {} } as unknown as ExtensionAPI;
  const errors: unknown[] = [];
  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: settingsReserve, keepRecentTokens: 0 } });
  const handle = await installCompaction(pi, { cutAt: 1, settings, ...(requestReserve ? { requestReserve } : {}), fail: error => errors.push(error) });
