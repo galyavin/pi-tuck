@@ -527,7 +527,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const historyToolsEnabled = (ctx: ExtensionContext) => Boolean(promptCut) || hasTuckCut(ctx.sessionManager.getBranch());
     const syncHistoryTools = (ctx: ExtensionContext) => { if (active()) applyHistoryTools(pi, historyToolsEnabled(ctx)); };
     pi.on("session_start", (_event, ctx) => syncHistoryTools(ctx));
-    pi.on("session_tree", (_event, ctx) => syncHistoryTools(ctx));
+    // A plan decided on `input` is for the branch it was decided on: moving in the tree leaves it planned for another branch, whose kept entry
+    // may not be on this one.
+    pi.on("session_tree", (_event, ctx) => { promptCut = undefined; phase = "idle"; syncHistoryTools(ctx); });
     pi.on("session_compact", (_event, ctx) => { if (!admittedRun) syncHistoryTools(ctx); });
     pi.on("turn_start", (_event, ctx) => syncHistoryTools(ctx));
     pi.on("agent_settled", (_event, ctx) => syncHistoryTools(ctx));
@@ -596,7 +598,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         promptCut = { type: "compaction", summary: compaction.summary, firstKeptEntryId: compaction.firstKeptEntryId, tokensBefore: before, details: compaction.details };
     };
     pi.on("before_agent_start", async (event, ctx) => {
-        const prompted = phase === "decided";
+        // A decided plan is for the prompt `input` saw. A run that a custom message starts is not that run (another extension handled the
+        // input, so no run started for it): plan afresh.
+        const prompted = phase === "decided" && event.messageType !== "custom";
         phase = "starting";
         runPrompt = event.messageType === "custom" ? undefined : event.prompt;
         try {
