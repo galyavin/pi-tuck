@@ -149,8 +149,10 @@ test(`cut positions and complete post-cut requests equal the always-declared too
         }
         expect(runs[1]!.cutRequests).toEqual(runs[0]!.cutRequests);
         expect(runs[1]!.cuts).toEqual(runs[0]!.cuts);
-        expect(runs[1]!.requests).toEqual(runs[0]!.requests);
-        expect(JSON.stringify(runs[1]!.requests)).toBe(JSON.stringify(runs[0]!.requests));
+        // As above: `durationMs` comes from a clock the fake timers do not fix; every other byte is compared.
+        const stable = (requests: unknown) => JSON.stringify(requests, (key, value) => key === 'durationMs' ? 0 : value);
+        expect(JSON.parse(stable(runs[1]!.requests))).toEqual(JSON.parse(stable(runs[0]!.requests)));
+        expect(stable(runs[1]!.requests)).toBe(stable(runs[0]!.requests));
     } finally { vi.useRealTimers(); rmSync(dir, { recursive: true, force: true }); }
 });
 
