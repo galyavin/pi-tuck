@@ -221,7 +221,9 @@ function windowCoverage(snapshot:Snapshot,prefix=indexedPrefix(snapshot)){
  return{indexedCharacters,windowCharacters:window.windowCharacters,outOfViewCharacters:window.conversationOutOfView+window.toolOutOfView,eligibleCharacters:window.eligibleCharacters,oldestCoveredEntryId:oldest?.entry.id??null,oldestCoveredTime:time(oldest),
   conversation:{indexedCharacters:conversation,outOfViewCharacters:window.conversationOutOfView},toolResults:{indexedCharacters:tools,outOfViewCharacters:window.toolOutOfView,oldestCoveredTime:time(oldestTool)}};
 }
-export function semanticEligibleSources(ctx:Pick<ExtensionContext,'sessionManager'|'cwd'>,policy:RecallPolicy,access:()=>void):Snapshot {
+/** `pendingKeptId`: the first kept entry of a cut pi-tuck has applied to the requests but Pi has not yet saved (a prompt's cut is saved at the end of
+ * the first turn). Tools in that turn see the history as the model does: everything before that entry is out of view. */
+export function semanticEligibleSources(ctx:Pick<ExtensionContext,'sessionManager'|'cwd'>,policy:RecallPolicy,access:()=>void,pendingKeptId?:string):Snapshot {
  try{access();}catch(error){throw Object.assign(new Error(error instanceof Error?error.message:'Source access denied'),{name:'SemanticAccessError'});}const branch=ctx.sessionManager.getBranch(),all=ctx.sessionManager.getEntries();
  if(branch.some(e=>e.type==='context_edit'&&e.replacement!==null))throw new Error('Unsupported replacement context edit');
  const omitted=new Set(branch.flatMap(e=>e.type==='context_edit'?[e.targetId]:[]));
@@ -230,7 +232,8 @@ export function semanticEligibleSources(ctx:Pick<ExtensionContext,'sessionManage
  const eligible=branch.filter(e=>!omitted.has(e.id)&&ids.get(e.id)===1),recall=createRecall(policy),attempts=recall.recallAttempts(eligible),links=recall.producerReads(eligible),indices=buildGlobalIndexById(all);
  const orders=new Map(branch.map((entry,order)=>[entry.id,order]));
  const sources=eligible.flatMap(entry=>{const order=orders.get(entry.id)!;const row=recall.discoveryEntry(entry,attempts,links);if(!row)return[];const {sourceText:unusedText,ranges:unusedRanges,...readable}=row;return[{entry,row:readable,sourceText:row.sourceText,ranges:row.ranges,order,sha:hash({entry,order,row:readable,ranges:row.ranges,index:indices.get(entry.id)})}];});
- const session=ctx.sessionManager.getSessionId(),id=hash({session,project:resolve(ctx.cwd),branch:branch.map(e=>[e.id,e.parentId]),sources:sources.map(s=>[s.entry.id,s.sha])});return{id,session,project:ctx.cwd,sources,units:[],complete:false,throughEntryId:sources.at(-1)?.entry.id??null,viewStart:viewStart(branch),indexed:new Set()};
+ const pending=pendingKeptId===undefined?-1:branch.findIndex(e=>e.id===pendingKeptId),start=Math.max(viewStart(branch),pending);
+ const session=ctx.sessionManager.getSessionId(),id=hash({session,project:resolve(ctx.cwd),branch:branch.map(e=>[e.id,e.parentId]),sources:sources.map(s=>[s.entry.id,s.sha]),...(pending>=0?{pendingKeptId}:{})});return{id,session,project:ctx.cwd,sources,units:[],complete:false,throughEntryId:sources.at(-1)?.entry.id??null,viewStart:start,indexed:new Set()};
 }
 export class SemanticRecallController {
  private readonly ownerId=randomUUID();private readonly indexFiles=new Set<string>();private closing?:Promise<void>;private joiningSearches=0;private activeSearches=new Set<Promise<SemanticPage>>();private config?:SemanticRecallConfig;private worker?:LocalWorker;private identity='';private provider?:()=>Snapshot;private generation=0;private cleanupError:string|null=null;private dirty=false;private operations={preparationEmbeddings:0,queryEmbeddings:0};

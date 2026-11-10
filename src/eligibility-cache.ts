@@ -32,12 +32,12 @@ export const eligibilityKeyMoved = (ctx: Context, since: readonly unknown[]) => 
  * the same `SemanticAccessError` that `semanticEligibleSources` raises (the mapping below is that function's first statement, verbatim).
  * The policy is trusted by identity, so it must not change after install: a policy object mutated in place (a type added to
  * `privateCustomTypes`) or a `readAttemptMarker` with hidden state is not noticed until the history changes. */
-export function memoizedEligibleSources(ctx: Context, policy: RecallPolicy | undefined, access: () => void): Snapshot {
+export function memoizedEligibleSources(ctx: Context, policy: RecallPolicy | undefined, access: () => void, pendingKeptId?: string): Snapshot {
 	try { access(); } catch (error) { throw Object.assign(new Error(error instanceof Error ? error.message : 'Source access denied'), { name: 'SemanticAccessError' }); }
-	const key = eligibilityKey(ctx), held = cache.get(ctx.sessionManager);
+	const key = [...eligibilityKey(ctx), pendingKeptId ?? null], held = cache.get(ctx.sessionManager);
 	if (held && held.policy === policy && same(held.key, key)) return { ...held.stored, units: [], complete: false, indexed: new Set() };
 	// Access was checked on the line above with nothing awaited in between, so the rebuild does not check it a second time.
-	const built = semanticEligibleSources(ctx, policy ?? {}, () => {});
+	const built = semanticEligibleSources(ctx, policy ?? {}, () => {}, pendingKeptId);
 	cache.set(ctx.sessionManager, { policy, key, stored: { id: built.id, session: built.session, project: built.project, sources: built.sources, throughEntryId: built.throughEntryId, viewStart: built.viewStart } });
 	return built;
 }
