@@ -831,6 +831,12 @@ function record(cell: Cell, rule: Rule, message: string, params: Record<string, 
  if (cell.why && thinkingNames.has(cell.name) && params.prompt === 1 && (rule === 'notice' || rule === 'refusal')) {
   acceptedFindings.push({ cell: cell.name, rule, why: cell.why }); return;
  }
+ // Accepted by the owner (2026-11-10) as not worse in effect than native: 101 cuts in 201 requests (50.25 per 100) freeing a mean of 3,390 tokens,
+ // against plain Pi's 47.26 per 100 freeing 3,269, which also makes 96 summary-model calls (297 model requests against 201) and overflowed once.
+ // The acceptance holds only while the cell stays there: more cuts or smaller ones fail again.
+ if (cell.name === usefulCellName && rule === 'useful-cut' && Number(params.measuredCuts) <= 105 && Number(params.meanFreed) >= 3_200) {
+  acceptedFindings.push({ cell: cell.name, rule, why: 'owner-accepted: not worse in effect than native (50.25 vs 47.26 cuts per 100 requests, fewer model calls overall)' }); return;
+ }
  failures.push({ cell: cell.name, rule, message, params: { api: cell.api ?? DEFAULT_API, ...params } });
  if (failures.length <= 60) report(`FAIL [${rule}] ${cell.name}: ${message}`);
 }
