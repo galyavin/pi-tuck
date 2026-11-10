@@ -1,5 +1,5 @@
 import {afterEach,expect,test} from 'vitest';
-import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {SessionManager,type ExtensionAPI} from '@earendil-works/pi-coding-agent';
@@ -68,8 +68,9 @@ test('background indexing waits while another live process holds the machine loc
  mkdirSync(join(held.root,'index',INDEXER_LOCK),{recursive:true});writeFileSync(join(held.root,'index',INDEXER_LOCK,'pid'),String(process.ppid));
  held.c.indexAtCut(held.provider);await settled(held.c,held.internal);
  expect(held.embeddings).toBe(0);
- const page=await held.c.search('decision',held.provider); // a search never waits for the lock
- expect(page.status).toBe('ok');expect(held.embeddings).toBeGreaterThan(0);
+ const t0=Date.now(),page=await held.c.search('decision',held.provider); // a search never waits for the lock: it indexes for itself
+ expect(Date.now()-t0).toBeLessThan(2000);expect(page.status).toBe('ok');expect(held.embeddings).toBeGreaterThan(0);
+ expect(readFileSync(join(held.root,'index',INDEXER_LOCK,'pid'),'utf8')).toBe(String(process.ppid)); // the other holder's lock is left alone
  const stale=fixture();stale.append('first decision');cutAll(stale);
  mkdirSync(join(stale.root,'index',INDEXER_LOCK),{recursive:true});writeFileSync(join(stale.root,'index',INDEXER_LOCK,'pid'),'999999999');
  stale.c.indexAtCut(stale.provider);await settled(stale.c,stale.internal);

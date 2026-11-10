@@ -294,7 +294,7 @@ export class SemanticRecallController {
  private tokenized=new Map<string,Unit[]>();
  private healReason:string|null=null;private healIntegrity=false;private healAttempts=0;private healTimer?:ReturnType<typeof setTimeout>;private healRetryAt:number|null=null;private recycle=false;
  // Lazy start: background work runs only for a session that searched within the idle limit, or that searched at some point and has just been cut (`indexAtCut`).
- private active=false;private fullIndexing=false;/** Work a cut started with no search or wait behind it: it takes the machine's indexer lock, and its worker stops once the window is indexed. */private backgroundOnly=false;private idleTimer?:ReturnType<typeof setTimeout>;private idling?:Promise<void>;private quietStop=false;
+ private active=false;private fullIndexing=false;/** Work a cut started with no search or wait behind it: it takes the machine's indexer lock, and its worker stops once the window is indexed. */private backgroundOnly=false;/** The machine indexer lock while this controller holds it: released once its worker has stopped, not when embedding ends. */private releaseLock?:()=>Promise<void>;private idleTimer?:ReturnType<typeof setTimeout>;private idling?:Promise<void>;private quietStop=false;
  // Whether this session ran a search since the controller was created or last closed; it survives idle stops, so a cut after a long quiet spell still indexes.
  private searched=false;
  private readonly listeners=new Set<(state:SemanticState,reason:string|null)=>void>();private announced='disabled\0';private announcing=false;
@@ -334,7 +334,8 @@ export class SemanticRecallController {
    await mkdir(this.config!.indexDirectory,{recursive:true});release=await tryIndexerLock(this.config!.indexDirectory);
    if(!release){const retry=setTimeout(()=>{if(this.enabled&&generation===this.generation)this.schedule(provider);},INDEXER_RETRY_MS);retry.unref();return;}
   }
-  try{await this.prepareLocked(provider,full,generation,started,snapshot,prior);}finally{await release?.();}
+  try{await this.prepareLocked(provider,full,generation,started,snapshot,prior);}
+  finally{if(release){if(this.backgroundOnly&&this.current?.complete)this.releaseLock=release;else await release();}}
  }
  private async prepareLocked(provider:()=>Snapshot,full:boolean,generation:number,started:number,snapshot:Snapshot,prior:Snapshot|undefined){
   // Both caps bound the window instead of failing above them. The unit cap (MAX_INDEX_UNITS) stays below the worker's 8,008-row store; the character cap, 2,000,000, usually binds first, at about 2.2 thousand units.
@@ -391,7 +392,7 @@ export class SemanticRecallController {
    await yieldWork();if(progressed&&performance.now()-started>(this.config!.prepareWorkMs??30000)){this.error='Preparation work slice exhausted; indexing incomplete';this.dirty=true;return;}
   }
   check();
-  if(snapshot.units.every(unit=>snapshot.indexed.has(unit.key))){snapshot.complete=true;if(full)this.fullIndexing=false;if(this.backgroundOnly)setTimeout(()=>{if(this.backgroundOnly)void this.idleStop();},0).unref();}
+  if(snapshot.units.every(unit=>snapshot.indexed.has(unit.key))){snapshot.complete=true;if(full)this.fullIndexing=false;if(this.backgroundOnly)setTimeout(()=>{void (this.backgroundOnly?this.idleStop():Promise.resolve()).finally(()=>this.freeLock());},0).unref();}
   this.error=null;this.recovered();
  }
  async waitForReady(timeoutMs=this.config?.queryWaitMs??30000,signal?:AbortSignal,expectedSnapshotId?:string,forSearch=false){if(this.enabled)this.demand();let targetId=expectedSnapshotId;try{targetId??=this.provider?.().id;}catch(error){await this.revoked(error);throw error;}if(this.enabled&&this.provider&&this.current?.id!==targetId){this.error=null;this.schedule(this.provider);}const started=performance.now();while(this.enabled&&!this.readyFor(targetId,forSearch)&&!this.error&&!this.healTimer&&performance.now()-started<timeoutMs){if(signal?.aborted){await this.cancelled();throw abort();}if(this.provider&&!this.timer&&!this.task)this.schedule(this.provider);await new Promise(done=>setTimeout(done,10));}this.armIdle();return this.status();}
@@ -470,6 +471,7 @@ export class SemanticRecallController {
  private demand(){this.active=true;this.fullIndexing=true;this.backgroundOnly=false;this.cancelIdle();}
  private cancelIdle(){if(this.idleTimer)clearTimeout(this.idleTimer);this.idleTimer=undefined;}
  private armIdle(){this.cancelIdle();if(!this.enabled||!this.active)return;this.idleTimer=setTimeout(()=>{this.idleTimer=undefined;void this.idleStop();},this.timing.idleStopMs??IDLE_STOP_MS);this.idleTimer.unref();}
+ private async freeLock(){const release=this.releaseLock;this.releaseLock=undefined;await release?.().catch(()=>{});}
  private idleStop(){
   if(this.idling||!this.enabled||!this.active||this.joiningSearches||this.activeSearches.size)return Promise.resolve();
   return this.stopWorker();
@@ -515,7 +517,7 @@ export class SemanticRecallController {
  // A source that can no longer be read stops recall; the reason stays readable until the next enable, so this never looks like recall that was never on.
  private async revoked(error:unknown){await this.disable(false);this.error=error instanceof Error?error.message:'Source access denied';}
  async invalidate(){await this.disable();this.error='Caller invalidated semantic source access; explicit enable required';}
- async close(){await this.disable(true,false);this.provider=undefined;this.searched=false;} // a closed controller serves a new session, which has not searched; a disable and enable keeps it
+ async close(){await this.disable(true,false);await this.freeLock();this.provider=undefined;this.searched=false;} // a closed controller serves a new session, which has not searched; a disable and enable keeps it
 }
 export const createSemanticRecall=(config?:SemanticRecallConfig)=>new SemanticRecallController(config);
 /** Consolidate only source-bound coordinate overlap; equal text in distinct events is retained.
