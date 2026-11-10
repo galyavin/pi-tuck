@@ -36,7 +36,7 @@ const RecallInput = Type.Union([
     Type.Object({ entryId, outputPath: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), outputPath: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     ImageRecallInput,
-    Type.Object({ around: entryId, before: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })), after: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })) }, { additionalProperties: false }),
+    Type.Object({ around: Type.Union([entryId, Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })]), before: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })), after: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })) }, { additionalProperties: false }),
 	Type.Object({ query }, { additionalProperties: false }),
 	Type.Object({ continuation: Type.Object({
 		query, throughEntryId: entryId,
@@ -486,7 +486,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 
 	pi.registerTool({
 		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
-        description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. " + (search ? "Use tuck_search for historical information relevant to a question, including different wording and qualifications. " : "") + "Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
+        description: "Read anything from before a cut, word for word: use it before redoing a step or answering from memory. {index} reads the #N a summary shows (or {entryId}), optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {query} finds text by keyword and returns ranked passages with read coordinates; punctuation separates words; pass the returned next as {continuation} unchanged. " + (search ? "For what you would describe rather than quote, use tuck_search. " : "") + "{around: index or entryId, before, after} lists neighbouring entries; {} browses history; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
             const input = checkedInput(raw);
@@ -495,7 +495,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             if ("outputPath" in input) {
                 if (signal?.aborted) throw new Error("Source export cancelled before write");
                 const source = exportSource(ctx.sessionManager.getEntries(), branch, input, options.recallPolicy);
-                if (!source) return { ...reply({ status: "not_found", notice: "No unique eligible original readable source on this branch; no write requested." }), isError: true };
+                if (!source) return { ...reply(withIndexHint({ status: "not_found", notice: "No unique eligible original readable source on this branch; no write requested." }, "entryId" in input ? input.entryId : undefined)), isError: true };
                 const outcome = await ctx.executeTool("write", { path: input.outputPath, content: source.text }, { signal });
                 return { ...reply({ status: outcome.isError ? "write_failed" : "write_completed", entryId: source.entryId,
                     index: source.index ?? null, role: source.role, sourceTime: source.sourceTime,
@@ -505,12 +505,20 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     notice: "Exact recorded readable text, not fresh evidence or unrecorded bytes. Source hash describes supplied text; native write completion does not independently verify an arbitrary writer's physical file. A failed write may have partial effects." }), isError: outcome.isError };
             }
             if ("image" in input) return historyImage(branch, input, options.recallPolicy);
-            if ("around" in input) return reply(historyAround(branch, input, options.recallPolicy));
-            return reply(tuckRecall(tuck, ctx.sessionManager.getEntries(), branch, input, options.recallPolicy));
+            if ("around" in input) {
+                // A summary shows #N, so around takes that index as well as an entryId.
+                if (typeof input.around === "number") {
+                    const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries()), id = branch.find(e => indices.get(e.id) === input.around)?.id;
+                    if (id === undefined) return reply({ status: "not_found", notice: `No entry #${input.around} on this branch.`, entries: [], imageSources: [] });
+                    return reply(historyAround(branch, { ...input, around: id }, options.recallPolicy));
+                }
+                return reply(withIndexHint(historyAround(branch, { ...input, around: input.around }, options.recallPolicy), input.around));
+            }
+            return reply(withIndexHint(tuckRecall(tuck, ctx.sessionManager.getEntries(), branch, input, options.recallPolicy), "entryId" in input ? input.entryId : undefined));
 		},
 	});
     if (search) pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
-        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword and local embedding search. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns original evidence up to 20000 characters; not exhaustive. Semantic search may be off or incomplete, which is not the same as no matches. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists sources already read: pass each returned source's sourceSha and read unchanged.",
+        description:"Find what a command printed, a file said, or what was tried or decided earlier, by meaning, even in other words. Use it before redoing work or answering from memory. Combines keyword and local embedding search; returns original evidence up to 20000 characters, not exhaustive. If it reports semantic search off or incomplete, a miss is not proof of absence. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists sources already read: pass each returned source's sourceSha and read unchanged.",
         async execute(_id,raw,signal,_update,ctx){
             access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);
             recorder.capture("recall-action","authorized-native-tool-invocation-no-result-copy",input);
@@ -1144,4 +1152,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     return {close:async()=>{semanticRequest++;recorder.stop("caller-close");await semantic.close();await Promise.allSettled([...semanticPending]);}, semanticRecall:semantic, setSemanticEnabled, semanticStatus};
 }
 
+/** An entryId that is all digits and found nothing is most likely a summary's #N: say how to read that. */
+function withIndexHint<T extends { status?: string; notice?: string }>(result: T, id: unknown): T {
+    if (result.status !== "not_found" || typeof id !== "string" || !/^\d+$/.test(id)) return result;
+    return { ...result, notice: `${result.notice ? result.notice + " " : ""}If ${id} is a summary index (#${id}), pass {"index": ${id}}.` };
+}
 function checkedInput(raw: unknown) { if (!Check(RecallInput, raw)) throw new Error("Invalid recall input"); return structuredClone(raw); }
