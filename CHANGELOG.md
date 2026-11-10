@@ -3,6 +3,45 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.23] - 2026-11-10
+
+### Fixed
+
+- **Near the new refusal line, replies were cut to a few hundred tokens (1.0.22).** Pi sets each request's reply cap to the window less its own
+  estimate of the request less a 4,096-token safety margin. 1.0.22 left only its reply floor and did not count that margin. pi-tuck now:
+  - reads Pi's margin from Pi itself;
+  - sends a request above the room only if Pi's own cap still leaves the reply floor;
+  - never draws the line below the room, where 1.0.21 also sends.
+
+  The floor is the larger of the branch's largest reply and 3,584 tokens, capped at the model's own reply cap. After a reply stopped for length or
+  refused for context overflow, it is the reserve.
+- **`tuck_search` said semantic recall was still indexing when it was fully indexed.** After the session grew, the next index plan could still be
+  preparing when a search ran. The search now ranks the plan its history grew from, as long as nothing in it changed, and says which entries are
+  still being indexed.
+- **`tuck_search` in the turn after a prompt's cut ranked nothing ("nothing is out of view").** The cut reaches the requests at once but the session
+  only at the turn's end. Search now uses the pending cut.
+- **A keyword-search timeout on a very long history failed the whole `tuck_search`.** The keyword half now reports `keyword_timeout`, and semantic
+  results still answer. The timeout message names the history's size, not a pattern.
+
+### Added
+
+- The settings stress test builds every request through pi-ai's real request path, so Pi's own reply cap is tested. A large-session stress test
+  searches an ~85 MB session that grows while the next index plan prepares.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.22:** 13,946 requests on 29 recordings, read per request. One recording's 13
+  differing requests matched exactly in two more runs of each build. 0 lost and 0 dead tasks.
+- **Stress on Pi 1.2.0 and 1.5.0, 310 cells, through pi-ai's request path:**
+  - no cell answers fewer than 1.0.21;
+  - replies cut off below the floor 11 → 0;
+  - native-parity findings all inside its four exceptions;
+  - the 85 MB test passes.
+
+  Tests (712) and CI.
+- **The 1.0.22 floor patch's Tier 1 gate runs on this version instead,** because its pilot found the reply-cap defect fixed here.
+- Sessions that are open keep the build they started with until they are restarted.
+
 ## [1.0.22] - 2026-11-10
 
 ### Fixed
