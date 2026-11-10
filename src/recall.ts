@@ -418,7 +418,7 @@ function recallHistory(branch: readonly SessionEntry[], options: RecallOptions =
 		if (consumed >= limit || entries.length >= MAX_RESULTS) break;
 	}
 	return {
-		notice: "Historical session text, not current authority or proof of present effects. Source IDs refer only to the supplied branch. " + ATTEMPT_NOTICE,
+		notice: "Recorded history, word for word; files and state may have changed since. Source IDs refer only to this branch. " + ATTEMPT_NOTICE,
 		status: rows.length === 0 ? (entryId === undefined ? "no_matches" : "not_found") : entries.length ? "ok" : "end",
 		entries: entries.map(fragment => contextualReceipt(branch, entryId, fragment)), offset, limit,
 		nextOffset: consumed > 0 && offset + consumed < totalCharacters ? offset + consumed : null,
