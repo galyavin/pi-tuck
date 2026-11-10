@@ -1,10 +1,13 @@
-import { SettingsManager, shouldCompact, type ExtensionContext, type SessionEntry } from '@earendil-works/pi-coding-agent';
+import { convertToLlm, SettingsManager, shouldCompact, type ExtensionContext, type SessionEntry } from '@earendil-works/pi-coding-agent';
+import { normalizeContext, type Api, type Model, type Message, type UserMessage } from '@earendil-works/pi-ai';
+import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 
 export type BudgetObservation = { rawTokens: number; tokens: number; factor: number; response: number; room: number; hardLine?: number; context: ExtensionContext };
 export type NativeState = {
  rawTokens: number; correctedTokens: number; factor: number; window: number; room: number; hardLine?: number;
  expectedHardLine?: number;
+ oracleClamp?: number; oracleFloor?: number;
  overflowRecovery?: boolean;
  nativeSettings: ReturnType<SettingsManager['getCompactionSettings']>; nativePoint: number | null; nativeAction: 'send' | 'compact-then-send';
  afterFailedReply: boolean; branchEntries: number; branchMessages: number; leafId: string | null;
@@ -43,14 +46,27 @@ export function nativeState(measure: BudgetObservation, settings: SettingsManage
  };
 }
 
-export function refusalParity(state: NativeState, reason: string): { violation: boolean; exception?: 'past-window' | 'failed-reply' | 'prompt-check' | 'reply-floor' } {
+/** Pi's own cap on the smallest answering request, independent of pi-tuck's refusal text and budget.
+ * The summary carries the prompt once (as `smallest` does), plus 200 tokens of headings. It predates fresh
+ * replies: stamping it after them would invalidate Pi's usage anchor and silently change the question.
+ * Fresh assistant objects, including usage and timestamps, are passed through unchanged.
+ */
+export function nativeReplyClamp(model: Model<Api>, system: Message[], prompt: UserMessage, fresh: Message[]): number {
+ const text = typeof prompt.content === 'string' ? prompt.content : prompt.content.map(b => b.type === 'text' ? b.text : '').join('\n');
+ const heading = '## Current task\n';
+ const summary = { role: 'compactionSummary' as const, summary: heading.padEnd(800, ' ') + text, tokensBefore: 0, timestamp: 0 };
+ const messages = [...system, ...convertToLlm([summary]), ...fresh.map(message => message.role === 'toolResult'
+  ? { ...message, content: [{ type: 'text' as const, text: message.content.map(block => block.type === 'text' ? block.text : '').join('\n').slice(0, 800).padEnd(800, ' ') }] }
+  : message)];
+ return clampMaxTokensToContext(model, normalizeContext({ messages }), model.maxTokens);
+}
+
+export function refusalParity(state: NativeState): { violation: boolean; exception?: 'past-window' | 'failed-reply' | 'reply-floor' } {
  if (state.correctedTokens > state.window) return { violation: false, exception: 'past-window' };
  if (state.afterFailedReply) return { violation: false, exception: 'failed-reply' };
- if (reason.includes('Prompt check failed')) return { violation: false, exception: 'prompt-check' };
- if (reason.includes("Pi's request clamp leaves less than the reply floor")) return { violation: false, exception: 'reply-floor' };
- // The independent floor oracle also supplies this line for the pre-floor baseline.
- const hardLine = state.expectedHardLine ?? state.hardLine;
- if (hardLine !== undefined && state.correctedTokens > hardLine) return { violation: false, exception: 'reply-floor' };
+ if ((state.expectedHardLine !== undefined && state.correctedTokens > state.expectedHardLine) ||
+  (state.oracleClamp !== undefined && state.oracleFloor !== undefined && state.oracleClamp < state.oracleFloor))
+  return { violation: false, exception: 'reply-floor' };
  return { violation: true };
 }
 

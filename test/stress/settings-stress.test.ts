@@ -19,6 +19,9 @@
  *   STRESS=1 STRESS_CELLS=20 STRESS_REPORT=1 npx vitest run test/stress
  *   STRESS=1 STRESS_SETUP=1 npx vitest run test/stress
  *
+ * STRESS_PLAIN_PI=1 measures the two thinking cells and setup 40000/window 65536 with pi-tuck not installed; STRESS_ONLY selects one.
+ * Native summary calls are reported separately from workload requests.
+ *
  * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures to test/stress/failures.json,
  * STRESS_TRACE="a piece of a cell name" prints what happened to each of that cell's prompts, and STRESS_STRICT=1 turns the table into a failing
  * run. Without STRESS_STRICT the run reports: a finding is a finding whether or not it is fixed yet, and the grid keeps running after the first.
@@ -33,11 +36,11 @@ import { thinkingLengthCell, thinkingLengthCells } from '../length-retry-fixture
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
-import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
+import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
-import { normalizeContext } from '@earendil-works/pi-ai';
+import { normalizeContext, type Message } from '@earendil-works/pi-ai';
 
 const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const CELLS = Math.max(1, Number(process.env.STRESS_CELLS) || 200);
@@ -53,6 +56,8 @@ const TRACE = process.env.STRESS_TRACE;
 const ONLY = process.env.STRESS_ONLY;
 /** Run only the cells whose name contains this, and for the sampled grid any cell that carries a sampled setup: STRESS_SETUP=setup, STRESS_SETUP=provider. */
 const SETUP_ONLY = process.env.STRESS_SETUP;
+/** Measure the named parity/workload cells with pi-tuck not installed. */
+const PLAIN_PI = /^(1|true|yes)$/i.test(process.env.STRESS_PLAIN_PI ?? '');
 /** More than one cut per five tool rounds means a session repeatedly spends a substantial share of its work on compaction. This is a workload
  * rate, not a claim that every fifth cut is intrinsically bad; short runs are excluded below. */
 const THRASH_ROUNDS = 3;
@@ -106,8 +111,14 @@ const providerRows: ProviderRow[] = [];
 const cellRows: Record<string, unknown>[] = [];
 const usefulExemptCells = new Set<string>();
 let usefulExemptCuts = 0;
-const nativeCoverage = { observations: 0, sends: 0, compactThenSend: 0, refusals: 0, pastWindow: 0, failedReply: 0, promptCheck: 0, replyFloor: 0, forcedCuts: 0, overflowCompactions: 0 };
-type NativeRefusal = { prompt: number; recovery: boolean; afterRequest: number; reason: string; state: NativeState };
+const thinkingNames = new Set(['openai-codex-responses', 'openai-completions'].map(api => `36000 characters of thinking replayed at a 32k window (${api})`));
+const usefulCellName = 'setup 40000 at window 65536 (Pi defaults)';
+const nativeMeasurements: Record<string, unknown>[] = [];
+const thinkingParity: Record<string, unknown>[] = [];
+const acceptedFindings: { cell: string; rule: Rule; why: string }[] = [];
+const exemptRefusals = { 'past-window': 0, 'failed-reply': 0, 'reply-floor': 0 };
+const nativeCoverage = { observations: 0, sends: 0, compactThenSend: 0, refusals: 0, pastWindow: 0, failedReply: 0, replyFloor: 0, forcedCuts: 0, overflowCompactions: 0 };
+type NativeRefusal = { prompt: number; recovery: boolean; afterRequest: number; reason: string; state: NativeState & { oracleClamp: number; oracleFloor: number } };
 
 /** The builders of the cells whose sizes depend on the floor pi-tuck's guard measures. `namedCells()` fills this in and the test runs each one twice:
  *  a probe to measure the floor, then the cell at that floor. */
@@ -298,6 +309,63 @@ function sample(i: number): Cell {
 
 type Harness = Awaited<ReturnType<typeof harness>>;
 
+/** The exact same workload and transport settings for guarded runs and plain-Pi measurements. */
+function optionsOf(cell: Cell, toolCalls: NonNullable<Options['toolCalls']>): Options {
+ return {
+  at: 'prompt', complete: cell.setup ?? Math.max(2_000, cell.window), host: cell.host, noHistory: true, oneTurn: true, systemTokens: cell.system,
+  cutAtDefault: cell.setup !== undefined,
+  limits: { contextWindow: cell.window, maxTokens: cell.maxTokens },
+  reserveTokens: cell.reserve, keepRecent: cell.keepRecent, usageRatio: cell.usageRatio,
+  rejectOverWindow: true, toolCalls, toolResultTokens: call => cell.results[(call - 1) % cell.results.length] ?? 100,
+  ...cell.extra, piRequestPath: true, fingerprintWire: thinkingNames.has(cell.name),
+  compaction: { ...cell.extra?.compaction, requestReserve: undefined },
+ };
+}
+
+/** Measure without applying pi-tuck-specific rules to native Pi. Summary calls are counted separately
+ * from the workload requests, and before/after cuts use the fixture's same full-request estimator. */
+async function measureCell(cell: Cell, plainPi: boolean) {
+ cell.reset?.();
+ let start = 0, end = 0;
+ const h = await harness({ ...optionsOf(cell, request => request > start && request <= end), plainPi });
+ try {
+  h.hostInput(); // Match the guarded run's initial floor observation before sizing its first prompt.
+  const requests: number[] = [], stops: string[][] = [];
+  for (let i = 0; i < cell.prompts.length; i++) {
+   start = h.state.requests; end = start + (cell.rounds[i] ?? 0);
+   const seen = h.state.stops.length;
+   const outcome = await drive(h, h.sized(Math.max(20, Math.min(CAP, cell.prompts[i] ?? 100))), PROMPT_MS);
+   if (outcome === 'hung' || lastThrew) throw new Error(`measurement prompt ${i + 1}: ${outcome}, ${lastThrew}`);
+   requests.push(h.state.requests - start); stops.push(h.state.stops.slice(seen));
+  }
+  const cuts = plainPi ? h.state.nativeCuts.length : h.manager.getEntries().filter(e => e.type === 'compaction').length - (cell.extra?.seededTail ? 1 : 0);
+  return { name: cell.name, plainPi, requests, stops, requestOptions: [...h.state.requestOptions], fingerprints: [...h.state.requestFingerprints],
+   workRequests: h.state.requests, toolRounds: h.state.results.length, plannedToolRounds: cell.rounds.reduce((a, b) => a + b, 0),
+   cuts, cutsPer100: h.state.requests ? cuts * 100 / h.state.requests : 0,
+   nativeCuts: [...h.state.nativeCuts], summaryRequests: [...h.state.nativeSummaries],
+   meanFreed: h.state.nativeCuts.length ? h.state.nativeCuts.reduce((a, c) => a + c.freed, 0) / h.state.nativeCuts.length : 0,
+   overflows: h.state.overflows, faults: [...h.faults], notices: [...h.notices],
+  };
+ } finally { await h.cleanup(); }
+}
+
+function saveNativeMeasurement(measured: Awaited<ReturnType<typeof measureCell>>) {
+ nativeMeasurements.push(measured);
+ report(`stress: plain Pi ${JSON.stringify({ name: measured.name, workRequests: measured.workRequests, toolRounds: measured.toolRounds, cuts: measured.cuts, cutsPer100: measured.cutsPer100, meanFreed: measured.meanFreed, summaryCalls: measured.summaryRequests.length, overflows: measured.overflows })}`);
+}
+
+/** Acceptance is conditional on an independent, repeatable first-request replay, not refusal wording. */
+async function proveThinkingParity(cell: Cell) {
+ const guarded = await measureCell(cell, false), native = await measureCell(cell, true);
+ const matches = guarded.fingerprints[0] === native.fingerprints[0] && guarded.requestOptions[0]?.maxTokens === 8192 &&
+  native.requestOptions[0]?.maxTokens === 8192 && guarded.requests[0] === 1 && native.requests[0] === 1 &&
+  guarded.stops[0]?.join(',') === 'length' && native.stops[0]?.join(',') === 'length';
+ thinkingParity.push({ name: cell.name, matches, guarded, native });
+ if (matches) cell.why = 'Native parity: plain Pi sends the identical first request (timestamp/session-path normalized SHA-256), cap 8192, and the same length stop; STRESS_PLAIN_PI replay.';
+ else { cell.why = undefined; record(cell, 'native-parity', 'thinking replay differs from plain Pi', { guarded, native }); }
+ report(`stress: thinking parity ${cell.name}: ${matches ? 'identical first request, cap 8192, length stop' : 'DIFFERENT'}`);
+}
+
 /** The last exception a prompt threw, for the one case that is about the host throwing. Cells run one at a time. */
 let lastThrew = '';
 
@@ -324,6 +392,8 @@ const stripTimes = (s: string) => s.replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, 'T').re
 
 async function runCellInner(cell: Cell): Promise<Run> {
  const t0 = Date.now();
+ // Thinking parity accepts only the proven prompt-1 notice/refusal below; it is not a structural impossibility.
+ const structuralWhy = cell.why && !thinkingNames.has(cell.name);
  cell.reset?.();
  let { reserve, room, hardLine, replyFloor } = limitsOf(cell);
  // The point a cut aims under: pi-tuck's band, which is what a setup at or above it leaves nothing to cut into.
@@ -332,38 +402,57 @@ async function runCellInner(cell: Cell): Promise<Run> {
  const factor = Number.isFinite(cell.usageRatio) ? Math.max(1, cell.usageRatio!) : 1;
  let startReq = 0, roundEnd = 0, currentPrompt = 0, currentPromptTokens = 0, recovery = false;
  let lastBudget: BudgetObservation | undefined;
+ let promptBody = '', turnStartAnswer = 0;
+ let boundaryMessages: Parameters<typeof nonSystem>[0] = [];
  let overflowRecovery = false;
  const nativeBuilds: NativeState[] = [], nativeRefusals: NativeRefusal[] = [];
  const guardPrompts: number[] = [];
  const nativeRefusalKeys = new Set<string>();
  const h = await harness({
-  // The setup the cell carries: the system message, and the host's view of the conversation, which together stand in for a real system prompt and
-  // its tool schemas. A cell that names a setup gets exactly that much setup; the sampled grid scales it with the window.
-  at: 'prompt', complete: cell.setup ?? Math.max(2_000, cell.window), host: cell.host, noHistory: true, oneTurn: true, systemTokens: cell.system,
-  cutAtDefault: cell.setup !== undefined,
-  limits: { contextWindow: cell.window, maxTokens: cell.maxTokens },
-  reserveTokens: cell.reserve, keepRecent: cell.keepRecent, usageRatio: cell.usageRatio,
-  // The provider counts by its own tokenizer and holds its window: a request whose count passes it comes back as an overflow, not an answer.
-  rejectOverWindow: true,
-  toolCalls: request => request > startReq && request <= roundEnd,
-  toolResultTokens: call => cell.results[(call - 1) % cell.results.length] ?? 100,
-  ...cell.extra,
-  piRequestPath: true,
+  ...optionsOf(cell, request => request > startReq && request <= roundEnd),
   // The shared fixture defaults to the host path. This grid tests standalone, on both builds.
   onBeforeCompact: (event, ctx) => {
    overflowRecovery = event.reason === 'overflow';
    if (overflowRecovery && COUNT && !cell.probe && !covCounted.has(cell.name)) nativeCoverage.overflowCompactions++;
    cell.extra?.onBeforeCompact?.(event, ctx);
   },
+  onBoundary: (event, ctx) => {
+   boundaryMessages = [...event.context.contextMessages, ...event.context.pendingMessages];
+   cell.extra?.onBoundary?.(event, ctx);
+  },
   onFailure: error => {
    if (!lastBudget) throw new Error('Native parity has no observed pi-tuck budget for this refusal');
    const reason = String(error), key = JSON.stringify([currentPrompt, recovery, h.state.requests, reason]);
    if (nativeRefusalKeys.has(key)) return;
    nativeRefusalKeys.add(key);
-   nativeRefusals.push({ prompt: currentPrompt, recovery, afterRequest: h.state.requests, reason, state: { ...nativeState(lastBudget, h.settings), overflowRecovery, expectedHardLine: limitsOf(cell, h.manager.getBranch()).hardLine } });
+   const limits = limitsOf(cell, h.manager.getBranch()), pi = h.extension();
+   const tools = pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+   const system = { role: 'system' as const, content: lastBudget.context.getSystemPrompt(), toolsAdded: tools, timestamp: 0 };
+   // The transport records the original assistant objects, before a cut can hide them. Tool results are taken
+   // from Pi's live/boundary messages and paired by call id; old turns and synthetic aborted replies stay out.
+   const available = [...boundaryMessages, ...h.session.messages];
+   const fresh: Message[] = h.state.answers.slice(turnStartAnswer).flatMap(answer => [answer,
+    ...answer.content.flatMap(block => block.type === 'toolCall' ? available.filter(m => m.role === 'toolResult' && m.toolCallId === block.id).slice(-1) as Message[] : [])]);
+   const oracleClamp = nativeReplyClamp(lastBudget.context.model!, [system, ...normalizeContext({ messages: [{ role: 'user', content: h.hostSnapshot().content, timestamp: 0 }] }).messages],
+    { role: 'user', content: promptBody, timestamp: 0 }, fresh);
+   nativeRefusals.push({ prompt: currentPrompt, recovery, afterRequest: h.state.requests, reason, state: {
+    ...nativeState(lastBudget, h.settings), overflowRecovery, expectedHardLine: limits.hardLine, oracleClamp, oracleFloor: limits.replyFloor,
+   } });
+   if (TRACE && cell.name.includes(TRACE)) report(`trace refusal p${currentPrompt}${recovery ? ' recovery' : ''}: ${JSON.stringify(nativeRefusals.at(-1))}`);
   },
   compaction: { ...cell.extra?.compaction, requestReserve: undefined, observeBudget: measure => { lastBudget = measure; } },
  });
+ // Use the same independent exemption for the rule and the parity loop. Match the actual
+ // refusal of this prompt/recovery, never an earlier prompt's error or the refusal's wording.
+ const recordRefusal = (rule: 'refusal' | 'no-clip' | 'clip-room' | 'no-recovery', message: string, params: Record<string, unknown>) => {
+  const refusal = nativeRefusals.findLast(r => r.prompt === currentPrompt && r.recovery === (rule === 'no-recovery'));
+  const parity = refusal && refusalParity(refusal.state);
+  if (parity?.exception) {
+   if (COUNT && !cell.probe && !covCounted.has(cell.name)) exemptRefusals[parity.exception]++;
+   return;
+  }
+  record(cell, rule, message, { ...params, ...(refusal ? { refusal } : {}) });
+ };
  const requestLimits: ReturnType<typeof limitsOf>[] = [];
  h.extension().on('context_with_system', () => {
   requestLimits.push(limitsOf(cell, h.manager.getBranch()));
@@ -401,6 +490,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
    opening = JSON.stringify(body.slice(0, 80)).slice(1, -1);
    const cutsBefore = h.compactions().length;
    const ms = cell.stallPrompt === i + 1 ? cell.abortAfter ?? 1_500 : PROMPT_MS;
+   promptBody = body; turnStartAnswer = h.state.answers.length; boundaryMessages = [];
    startReq = h.state.requests; roundEnd = startReq + (cell.rounds[i] ?? 0);
    const seen = { requests: h.state.requests, notices: h.notices.length, faults: h.faults.length, guard: h.guard.length, stops: h.state.stops.length, results: h.state.results.length, counts: h.state.counts.length, clips: h.state.clips, answers: h.state.answers.length };
    const outcome = await drive(h, body, ms);
@@ -508,9 +598,9 @@ async function runCellInner(cell: Cell): Promise<Run> {
   // The claim is that the model's own reply overflowed a room pi-tuck thought it had, so there must be such a room and such a reply: a run whose
   // setup already leaves nothing free is the arithmetic case, and a reply of no content is not the cause of anything.
   const assistantOverRoom = freeRoom > 0 && freshAssistant > 0 && freshAssistant > freeRoom && freshAssistant < room - floor;
-  if (!cell.hostFault && wasRefused && !cell.why && assistantOverRoom) record(cell, 'fresh-room', `prompt ${i + 1} was refused on a fresh assistant body of ${freshAssistant} tokens, above the free room as pi-tuck estimates it (${freeRoom}) and below what the room holds at the provider's count (${room - floor}): nothing clips or cuts a fresh assistant message, so the run stopped where the model's own reply overflowed`, { prompt: i + 1, tokens, freshAssistant, freeRoom, floor });
-  else if (!cell.hostFault && wasRefused && !cell.why && fitsAlone && clipWouldFit) record(cell, h.state.clips > seen.clips ? 'clip-room' : 'no-clip', `prompt ${i + 1} of ${tokens} tokens was refused although a clip sized to the room the provider leaves would fit (${afterClip} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), floor ${floor}, clip budget ${Math.max(0, clipAware)} against pi-tuck's own ${Math.floor((room - floor) / 2)}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, floor, afterClip, clipAware, room, factor });
-  else if (!cell.hostFault && !cell.providerRejection && wasRefused && fitsAlone) record(cell, 'refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
+  if (!cell.hostFault && wasRefused && !structuralWhy && assistantOverRoom) record(cell, 'fresh-room', `prompt ${i + 1} was refused on a fresh assistant body of ${freshAssistant} tokens, above the free room as pi-tuck estimates it (${freeRoom}) and below what the room holds at the provider's count (${room - floor}): nothing clips or cuts a fresh assistant message, so the run stopped where the model's own reply overflowed`, { prompt: i + 1, tokens, freshAssistant, freeRoom, floor });
+  else if (!cell.hostFault && wasRefused && !structuralWhy && fitsAlone && clipWouldFit) recordRefusal(h.state.clips > seen.clips ? 'clip-room' : 'no-clip', `prompt ${i + 1} of ${tokens} tokens was refused although a clip sized to the room the provider leaves would fit (${afterClip} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), floor ${floor}, clip budget ${Math.max(0, clipAware)} against pi-tuck's own ${Math.floor((room - floor) / 2)}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, floor, afterClip, clipAware, room, factor });
+  else if (!cell.hostFault && !cell.providerRejection && wasRefused && fitsAlone) recordRefusal('refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
    if (!cell.hostFault && (wasRefused || outcome === 'hung')) {
     // Nothing may leave a session unable to take the next prompt: a short one has to get through, when the room can hold it at all — which
     // means beside the conversation the failure left behind, not only beside the prompt.
@@ -518,9 +608,10 @@ async function runCellInner(cell: Cell): Promise<Run> {
     if (Math.ceil((floor + left + 60) * factor) < hardLine - 64) {
      startReq = h.state.requests; roundEnd = startReq;
      recovery = true; currentPromptTokens = 60;
-     const again = await drive(h, h.sized(60), ms);
+     promptBody = h.sized(60); turnStartAnswer = h.state.answers.length; boundaryMessages = [];
+     const again = await drive(h, promptBody, ms);
      recovery = false;
-     if (again === 'hung' || h.state.requests === startReq) record(cell, 'no-recovery', `a short prompt after prompt ${i + 1} got no request either`, { prompt: i + 1, stop: stoppedLast ?? 'none' });
+     if (again === 'hung' || h.state.requests === startReq) recordRefusal('no-recovery', `a short prompt after prompt ${i + 1} got no request either`, { prompt: i + 1, stop: stoppedLast ?? 'none' });
     }
    }
    for (const cut of h.compactions().slice(cuts)) {
@@ -664,7 +755,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
    lostTask: failures.some(f => f.cell === cell.name && f.rule === 'task-turn'),
    strand: failures.some(f => f.cell === cell.name && f.rule === 'no-recovery'),
   };
-  const parity = nativeRefusals.map(refusal => ({ ...refusal, ...refusalParity(refusal.state, refusal.reason), floorCase: floorCase(refusal.state) }));
+  const parity = nativeRefusals.map(refusal => ({ ...refusal, ...refusalParity(refusal.state), floorCase: floorCase(refusal.state) }));
   for (const refusal of parity) if (refusal.violation)
    record(cell, 'native-parity', `prompt ${refusal.prompt}${refusal.recovery ? ' recovery' : ''}: pi-tuck refused ${refusal.state.correctedTokens} corrected tokens; native would ${refusal.state.nativeAction} at point ${refusal.state.nativePoint}`, { clause: 'refusal', ...refusal, workLost });
   for (const entry of entries) {
@@ -685,7 +776,6 @@ async function runCellInner(cell: Cell): Promise<Run> {
    nativeCoverage.refusals += parity.length;
    nativeCoverage.pastWindow += parity.filter(r => r.exception === 'past-window').length;
    nativeCoverage.failedReply += parity.filter(r => r.exception === 'failed-reply').length;
-   nativeCoverage.promptCheck += parity.filter(r => r.exception === 'prompt-check').length;
    nativeCoverage.replyFloor += parity.filter(r => r.exception === 'reply-floor').length;
   }
   cuts = savedCuts();
@@ -695,7 +785,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
    cuts, opportunistic, rounds, answered, refused, hung, overflows: h.state.overflows, truncations: h.state.truncations,
    clampStops: h.state.clampStops, clampEvents: h.state.clampEvents, requestOptions: h.state.requestOptions, requestFloors: requestLimits.map(l => l.replyFloor),
    cutReserves: entries.map(e => (e.details as { diagnosticReceipt?: { settings?: { responseReserveTokens?: number } } }).diagnosticReceipt?.settings?.responseReserveTokens),
-   nativeBuilds, nativeRefusals: parity, workLost, usefulExemptCuts: exemptCuts,
+   nativeBuilds, nativeRefusals: parity, requestFingerprints: h.state.requestFingerprints, workLost, usefulExemptCuts: exemptCuts,
    failures: failures.filter(f => f.cell === cell.name),
   });
  } finally { await h.cleanup(); }
@@ -739,6 +829,15 @@ let COUNT = true;
 
 function record(cell: Cell, rule: Rule, message: string, params: Record<string, unknown> = {}) {
  if (!COUNT) return;
+ if (cell.why && thinkingNames.has(cell.name) && params.prompt === 1 && (rule === 'notice' || rule === 'refusal')) {
+  acceptedFindings.push({ cell: cell.name, rule, why: cell.why }); return;
+ }
+ // Accepted by the owner (2026-11-10) as not worse in effect than native: 101 cuts in 201 requests (50.25 per 100) freeing a mean of 3,390 tokens,
+ // against plain Pi's 47.26 per 100 freeing 3,269, which also makes 96 summary-model calls (297 model requests against 201) and overflowed once.
+ // The acceptance holds only while the cell stays there: more cuts or smaller ones fail again.
+ if (cell.name === usefulCellName && rule === 'useful-cut' && Number(params.measuredCuts) <= 105 && Number(params.meanFreed) >= 3_200) {
+  acceptedFindings.push({ cell: cell.name, rule, why: 'owner-accepted: not worse in effect than native (50.25 vs 47.26 cuts per 100 requests, fewer model calls overall)' }); return;
+ }
  failures.push({ cell: cell.name, rule, message, params: { api: cell.api ?? DEFAULT_API, ...params } });
  if (failures.length <= 60) report(`FAIL [${rule}] ${cell.name}: ${message}`);
 }
@@ -852,7 +951,7 @@ function namedCells(): Cell[] {
   return base(`36000 characters of thinking replayed at a 32k window (${api})`, {
    window: 32_768, reserve: 16_384, maxTokens: 8_192, system: 1_200, host: 300, api: `${api} (${which})`,
    prompts: [4_000, 3_000, 400, 300], rounds: [1, 1, 0, 0], results: [2_000, 800],
-   extra: { thinkingChars: request => (request === 1 || request === 2 ? 36_000 : 0), ...(model ? { model } : {}) },
+   extra: { stableHost: true, thinkingChars: request => (request === 1 || request === 2 ? 36_000 : 0), ...(model ? { model } : {}) },
    reached: { state: 'the request after a 9000-token thinking reply above the room of 16384', check: e => e.probes.some(p => p.after >= 1 && p.complete > e.room) },
   });
  };
@@ -1054,12 +1153,13 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
  ];
  // Above-cap cells use the same prompts and oracle on both builds. The first prompt fits native's room but not 1.0.19's; later tool rounds
  // exercise recovery and the unchanged thrash rule (at least 12 rounds). A short final prompt must finish even after a provider failure.
+ // Pi's output clamp prevents the old prompt-plus-cap overflow. Refuse variants now script exactly one provider overflow.
  const replyReserveCells = [
   { window: 81_920, reserve: 16_384, maxTokens: 32_768, prompt: 54_000, result: 1_000 },
   { window: 16_384, reserve: 2_048, maxTokens: 8_192, prompt: 10_000, result: 250 },
  ].flatMap(size => (['clip', 'refuse'] as const).map(replyWindow => base(`reply reserve: window ${size.window}, ${replyWindow}`, {
   ...size, system: 600, host: 200, prompts: [size.prompt, ...Array(5).fill(200)], rounds: [0, 3, 3, 3, 3, 0], results: [size.result],
-  extra: { replyWindow, replyWindowOutput: request => request === 1 ? size.maxTokens : 48, persist: true, noOpening: true },
+  extra: { replyWindow, ...(replyWindow === 'refuse' ? { providerOverflowAt: (request: number) => request === 1 } : {}), replyWindowOutput: request => request === 1 ? size.maxTokens : 48, persist: true, noOpening: true },
   reached: { state: 'a cap above the reserve, then 12 tool rounds and a completed recovery prompt',
    check: e => e.requests.length === 6 && e.requests[1]! >= 4 && e.requests.at(-1)! > 0 && e.answered >= 5 && e.results.length >= 12 &&
     (e.requests[0] === 0 || (replyWindow === 'clip' ? e.truncations === 1 : e.overflows === 1 && e.piOverflow >= 1)) },
@@ -1067,8 +1167,9 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
  // Both fake transports exercise the new admission band, actual output exhaustion and input overflow.
  const floorCells = ['openai-codex', 'openai'].flatMap(provider => {
   const model = { provider, id: 'gpt-6.1-sol' };
+  // This opening leaves Pi's cap above the independent reply floor; the 1.4x provider still overflows it.
   const common = { window: 65_536, reserve: 16_384, maxTokens: 32_768, system: 600, host: 200,
-   prompts: [50_000, 200, 200], rounds: [0, 1, 0], results: [100], api: `fake ${provider}` };
+   prompts: [48_000, 200, 200], rounds: [0, 1, 0], results: [100], api: `fake ${provider}` };
   return [
    base(`floor failure: ${provider} length at window end`, { ...common,
     extra: { model, stableHost: true, replyWindow: 'clip', replyWindowOutput: n => n === 1 ? 32_768 : 48, persist: true, noOpening: true },
@@ -1207,6 +1308,14 @@ const freeRoomHolds = (size: number, e: Evidence) => size > Math.floor(e.room / 
 test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeout: 0 }, async () => {
  if (!RUN) return;
  const started = Date.now();
+ if (PLAIN_PI) {
+  const selected = namedCells().filter(cell => ONLY ? cell.name.includes(ONLY) : thinkingNames.has(cell.name) || cell.name === usefulCellName);
+  for (const cell of selected) {
+   saveNativeMeasurement(await measureCell(cell, true));
+  }
+  if (REPORT) { mkdirSync('test/stress', { recursive: true }); writeFileSync('test/stress/failures.json', JSON.stringify({ mode: 'plain-pi', nativeMeasurements, failures: [] }, null, 1)); }
+  return;
+ }
  for (let i = 0; i < CELLS; i++) {
   const cell = sample(i);
   if (ONLY && !cell.name.includes(ONLY)) continue;
@@ -1220,6 +1329,8 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
   if (ONLY && !cell.name.includes(ONLY)) continue;
   if (SETUP_ONLY && SETUP_ONLY !== '1' && !cell.name.includes(SETUP_ONLY)) continue;
   ran.push(cell.name); apis.add(cell.api ?? DEFAULT_API);
+  if (thinkingNames.has(cell.name)) await proveThinkingParity(cell);
+  if (cell.name === usefulCellName) saveNativeMeasurement(await measureCell(cell, true));
   try { await runCell(cell); } catch (error) { record(cell, 'harness', `the case could not run: ${String(error).slice(0, 300)}`); }
   // The determinism check runs the cell twice more and compares, sampled cells and named ones alike, under STRESS_STRICT as well.
   try { await repeat(cell); } catch (error) { record(cell, 'harness', `the repeat could not run: ${String(error).slice(0, 300)}`); }
@@ -1251,6 +1362,8 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  report(`stress: cut-target: ${cappedCuts} generated cuts checked, largest overshoot ${Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0}`);
  report(`stress: useful-cut exemption: ${usefulExemptCells.size} cells, ${usefulExemptCuts} forced cuts (setup + prompt above room)`);
  report(`stress: Pi safety margin ${PI_MARGIN}, clamp-caused length stops ${cov.clampStops}`);
+ report(`stress: accepted native-parity findings ${JSON.stringify(acceptedFindings)}`);
+ report(`stress: exempt refusals by clause ${JSON.stringify(exemptRefusals)}`);
  report(`stress: native-parity coverage: ${JSON.stringify(nativeCoverage)}`);
  report('class           failures  cells  examples');
  for (const [rule, row] of sorted) report(`${rule.padEnd(15)}  ${String(row.count).padStart(8)}  ${String(row.cells.size).padStart(5)}  ${[...row.cells].slice(0, 2).join(' | ')}${row.cells.size > 2 ? ` | +${row.cells.size - 2} more` : ''}`);
@@ -1272,7 +1385,7 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
   for (const r of providerRows) report(`${r.name.padEnd(35)}  ${r.saw.padStart(12)}  ${r.pi ? `yes, ${r.pi} repl${r.pi > 1 ? 'ies' : 'y'}` : 'no'}`);
  }
  if (REPORT) {
-  writeFileSync('test/stress/failures.json', JSON.stringify({ piMargin: PI_MARGIN, seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, nativeCoverage, usefulCutExemption: { cells: [...usefulExemptCells], cuts: usefulExemptCuts }, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, rows: cellRows, failures }, null, 1));
+  writeFileSync('test/stress/failures.json', JSON.stringify({ piMargin: PI_MARGIN, seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, nativeCoverage, exemptRefusals, thinkingParity, acceptedFindings, nativeMeasurements, usefulCutExemption: { cells: [...usefulExemptCells], cuts: usefulExemptCuts }, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, rows: cellRows, failures }, null, 1));
   report(`stress: wrote ${failures.length} failures to test/stress/failures.json`);
  }
  report(`stress: ran ${ran.length} cells in ${((Date.now() - started) / 1000).toFixed(1)}s on ${[...apis].join(', ')}`);
