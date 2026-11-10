@@ -133,7 +133,7 @@ test('C and D: no view drops tool history; both views end with the closing instr
 		if (!draft.compaction) throw new Error(draft.unavailable);
 		expect(['dialogue', 'shrunk']).toContain(draft.mode);
 		expect(ledgerText(draft.compaction.summary)).toContain('- wrote/edited out/x.csv');
-		expect(draft.compaction.summary.endsWith('\n\nOnly the dialogue and the actions and files listed above carry over. Files created by commands are not listed: before redoing a step, read its output with tuck_recall or list your output folders. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.')).toBe(true);
+		expect(draft.compaction.summary.endsWith('\n\n' + CLOSING_INSTRUCTION)).toBe(true);
 	} finally { s.dispose(); }
 });
 
@@ -219,7 +219,7 @@ test('E: the action trail lists the other tool calls newest first, marks failed 
 		// Each locator reads that call's own output.
 		const located = lines.find(line => line.includes('collect.py'))!.match(/\{"index":(\d+)\}/)!;
 		expect(JSON.stringify(tuckRecall(tuck, s.manager.getEntries(), s.manager.getBranch(), { index: Number(located[1]) }))).toContain('toolResult');
-		expect(draft.compaction.summary).toContain('Only the dialogue and the actions and files listed above carry over.');
+		expect(draft.compaction.summary).toContain(CLOSING_INSTRUCTION);
 	} finally { s.dispose(); }
 });
 
