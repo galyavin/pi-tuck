@@ -1,15 +1,17 @@
 import {afterEach,expect,test} from 'vitest';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,writeFileSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {SessionManager,type ExtensionAPI} from '@earendil-works/pi-coding-agent';
-import {createSemanticRecall,semanticEligibleSources,type SemanticRecallController} from '../src/semantic-recall';
+import {createSemanticRecall,semanticEligibleSources,INDEXER_LOCK,type SemanticRecallController} from '../src/semantic-recall';
 import {installCompaction} from '../src/compaction';
 
-// A saved cut starts background indexing of what left the view, for a session that has searched before (a host may give each session its own
-// controller and worker, so a session that never searched starts nothing). The cut never waits for it, and a failure goes to recovery.
+// A saved cut starts background indexing of what left the view, conversation and tool output, whether or not the session has searched, so a
+// first search ranks what a later one would (K8). Work a cut starts with no search behind it takes the machine's indexer lock (one encoder at a
+// time across Pi sessions) and gives its worker back once the window is indexed; the vectors stay for a later search. The cut never waits for
+// it, and a failure goes to recovery.
 type Snapshot=ReturnType<typeof semanticEligibleSources>;
-interface Internals {runtime(project:string):Promise<{call(op:string,input:any):Promise<unknown>}>;current?:Snapshot;task?:Promise<void>;timer?:unknown;healTimer?:ReturnType<typeof setTimeout>;healReason:string|null;active:boolean;fullIndexing:boolean;idleTimer?:unknown;error:string|null;}
+interface Internals {runtime(project:string):Promise<{call(op:string,input:any):Promise<unknown>}>;current?:Snapshot;task?:Promise<void>;timer?:unknown;healTimer?:ReturnType<typeof setTimeout>;healReason:string|null;active:boolean;fullIndexing:boolean;idleTimer?:unknown;error:string|null;worker?:unknown;idling?:Promise<void>;}
 const roots:string[]=[],controllers:SemanticRecallController[]=[];
 afterEach(async()=>{for(const c of controllers.splice(0))await c.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 function fixture(){
@@ -31,7 +33,7 @@ function fixture(){
  const cwd=join(root,'project'),manager=SessionManager.inMemory(cwd);
  let at=0;const append=(text:string)=>manager.appendMessage({role:'user',content:text,timestamp:++at*1000});
  const provider=()=>semanticEligibleSources({cwd,sessionManager:manager},{},()=>{});
- return {c,internal,stored,manager,append,provider,cwd,get embeddings(){return embeddings;},set failEmbed(value:boolean){failEmbed=value;},set undercount(value:boolean){undercount=value;}};
+ return {c,internal,stored,manager,append,provider,cwd,root,get embeddings(){return embeddings;},set failEmbed(value:boolean){failEmbed=value;},set undercount(value:boolean){undercount=value;}};
 }
 const settled=async(c:SemanticRecallController,internal:Internals)=>{for(let i=0;i<400&&(internal.timer||internal.task);i++)await new Promise(done=>setTimeout(done,5));return c.status();};
 /** A search with nothing out of view: it returns at once and marks the session as one that searches. Then the idle limit passes: the
@@ -50,11 +52,28 @@ test('a session that searched before: a cut indexes the conversation that left t
  expect(status.window?.conversation.indexedCharacters).toBe(status.window?.conversation.outOfViewCharacters);
  expect(status.window?.conversation.outOfViewCharacters).toBeGreaterThan(0);
 });
-test('a session that never searched starts nothing at a cut', async()=>{
- const f=fixture();f.append('first decision');cutAll(f);
+test('a session that never searched indexes at a cut, gives its worker back when done, and its first search ranks without re-embedding', async()=>{
+ const f=fixture();f.append('first decision');f.append('second decision');cutAll(f);
  f.c.indexAtCut(f.provider);
- await settled(f.c,f.internal);
- expect(f.embeddings).toBe(0);expect(f.internal.current).toBeUndefined();
+ const status=await settled(f.c,f.internal);await f.internal.idling;
+ expect(f.embeddings).toBeGreaterThan(0);expect(status.indexingComplete).toBe(true);
+ expect(status.window?.conversation.indexedCharacters).toBe(status.window?.conversation.outOfViewCharacters);
+ expect(f.internal.active).toBe(false); // worker given back
+ expect(existsSync(join(f.root,'index',INDEXER_LOCK))).toBe(false); // lock released
+ const before=f.embeddings,page=await f.c.search('decision',f.provider);
+ expect(page.status).toBe('ok');expect(f.embeddings).toBe(before);
+});
+test('background indexing waits while another live process holds the machine lock, and takes over a dead holder\'s lock', async()=>{
+ const held=fixture();held.append('first decision');cutAll(held);
+ mkdirSync(join(held.root,'index',INDEXER_LOCK),{recursive:true});writeFileSync(join(held.root,'index',INDEXER_LOCK,'pid'),String(process.ppid));
+ held.c.indexAtCut(held.provider);await settled(held.c,held.internal);
+ expect(held.embeddings).toBe(0);
+ const page=await held.c.search('decision',held.provider); // a search never waits for the lock
+ expect(page.status).toBe('ok');expect(held.embeddings).toBeGreaterThan(0);
+ const stale=fixture();stale.append('first decision');cutAll(stale);
+ mkdirSync(join(stale.root,'index',INDEXER_LOCK),{recursive:true});writeFileSync(join(stale.root,'index',INDEXER_LOCK,'pid'),'999999999');
+ stale.c.indexAtCut(stale.provider);await settled(stale.c,stale.internal);
+ expect(stale.embeddings).toBeGreaterThan(0);
 });
 test('disabled, or a recovery retry pending: a cut starts nothing', async()=>{
  const off=fixture();off.append('first decision');await searchBeforeAnyCut(off);await off.c.disable();const before=off.embeddings;cutAll(off);
@@ -89,10 +108,10 @@ test('a search soon after the cut ranks the whole out-of-view conversation witho
  expect(page.status).toBe('ok');
  expect(page.coverage.window?.conversation.indexedCharacters).toBe(page.coverage.window?.conversation.outOfViewCharacters);
 });
-test('a closed controller serves a new session: it has not searched, so its cut starts nothing', async()=>{
+test('a closed controller serves a new session: its cut indexes as any session\'s does', async()=>{
  const f=fixture();f.append('first decision');await searchBeforeAnyCut(f);await f.c.close();f.c.enable();const before=f.embeddings;cutAll(f);
  f.c.indexAtCut(f.provider);await settled(f.c,f.internal);
- expect(f.embeddings).toBe(before);expect(f.internal.active).toBe(false);
+ expect(f.embeddings).toBeGreaterThan(before);
 });
 test('a worker that reports fewer stored vectors than the covered prefix makes the search unavailable, not a partial ranking', async()=>{
  const f=fixture();f.append('first decision');f.append('second decision');await searchBeforeAnyCut(f);cutAll(f);

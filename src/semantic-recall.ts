@@ -1,6 +1,6 @@
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
-import {readFile,rm,mkdtemp,mkdir} from 'node:fs/promises';
+import {readFile,rm,mkdtemp,mkdir,writeFile} from 'node:fs/promises';
 import {lstatSync,realpathSync} from 'node:fs';
 import {resolve,relative,join,dirname,basename,isAbsolute,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -101,6 +101,23 @@ export const HEAL_DELAYS_MS:readonly number[]=[5000,30000,120000];
 export const HEAL_STEADY_MS=600000;
 /** A session that has not searched for this long gives its worker back (the index stays on disk). Enabling starts nothing; a search starts the worker again. */
 export const IDLE_STOP_MS=600000;
+/** Background indexing (a session that has not searched, indexing what a cut moved out of view) holds this lock in the index directory, so
+ * several Pi sessions on one machine embed one at a time: one encoder's memory at a time instead of one per session. A search never waits for it. */
+export const INDEXER_LOCK='background-indexer.lock';
+/** How long background indexing waits before trying the lock again when another process holds it. */
+export const INDEXER_RETRY_MS=15000;
+const alive=(pid:number)=>{try{process.kill(pid,0);return true;}catch(error){return (error as NodeJS.ErrnoException).code==='EPERM';}};
+/** Take the machine's background-indexer lock, or null when another live holder has it. A holder that has died leaves a stale lock, which is taken over. */
+async function tryIndexerLock(directory:string):Promise<(()=>Promise<void>)|null>{
+ const path=join(directory,INDEXER_LOCK),take=async()=>{try{await mkdir(path);return true;}catch(error){if((error as NodeJS.ErrnoException).code==='EEXIST')return false;throw error;}};
+ if(!await take()){
+  const holder=Number(await readFile(join(path,'pid'),'utf8').catch(()=>''));
+  if(holder&&alive(holder))return null;
+  await rm(path,{recursive:true,force:true});if(!await take())return null;
+ }
+ await writeFile(join(path,'pid'),String(process.pid));
+ return ()=>rm(path,{recursive:true,force:true});
+}
 /** A worker call's deadline once the worker has answered a call after `ready`: index, embed and tokenize on a loaded model. */
 export const CALL_DEADLINE_MS=60000;
 /** Why semantic recall is off where the embedding server cannot start on Metal (a VM, a Mac without a GPU): it runs on Metal only. */
@@ -277,7 +294,7 @@ export class SemanticRecallController {
  private tokenized=new Map<string,Unit[]>();
  private healReason:string|null=null;private healIntegrity=false;private healAttempts=0;private healTimer?:ReturnType<typeof setTimeout>;private healRetryAt:number|null=null;private recycle=false;
  // Lazy start: background work runs only for a session that searched within the idle limit, or that searched at some point and has just been cut (`indexAtCut`).
- private active=false;private fullIndexing=false;private idleTimer?:ReturnType<typeof setTimeout>;private idling?:Promise<void>;private quietStop=false;
+ private active=false;private fullIndexing=false;/** Work a cut started with no search or wait behind it: it takes the machine's indexer lock, and its worker stops once the window is indexed. */private backgroundOnly=false;private idleTimer?:ReturnType<typeof setTimeout>;private idling?:Promise<void>;private quietStop=false;
  // Whether this session ran a search since the controller was created or last closed; it survives idle stops, so a cut after a long quiet spell still indexes.
  private searched=false;
  private readonly listeners=new Set<(state:SemanticState,reason:string|null)=>void>();private announced='disabled\0';private announcing=false;
@@ -303,7 +320,7 @@ export class SemanticRecallController {
  /** A saved cut has moved entries out of view: start indexing them now, for a session that has searched before but is not searching now, or whose worker the idle limit stopped. Awaits nothing; a failure goes to `heal` like any preparation.
   * Only a session that ran a search earlier (`searched`) indexes at a cut: a host may give every session its own controller and worker, so indexing at every node's cut could run several encoders at once on a 16 GB machine.
   * It is the conversation that left the view only (kind first, no full pass), a heal backoff in progress is not bypassed, and the idle limit applies afterwards. */
- indexAtCut(provider:()=>Snapshot){if(this.enabled&&!this.healTimer&&this.searched&&!this.active){this.active=true;this.armIdle();}this.schedule(provider);}
+ indexAtCut(provider:()=>Snapshot){if(this.enabled&&!this.healTimer&&!this.active){this.active=true;this.fullIndexing=true;this.backgroundOnly=true;this.armIdle();}this.schedule(provider);}
  private async runtime(project:string){if(this.idling)await this.idling;if(!this.enabled)throw abort();outsideProject(project,this.config!.runtimeRoot,'runtime');outsideProject(project,scratchParent(this.config!),'scratch');outsideRuntime(this.config!.runtimeRoot,scratchParent(this.config!),'scratch');if(this.worker&&this.recycle){const old=this.worker;await old.close();if(this.worker===old){this.worker=undefined;this.identity='';this.recycle=false;}if(!this.enabled)throw abort();}
   if(!this.worker){const worker=new LocalWorker(this.config!,project,error=>{if(this.worker!==worker)return;this.cleanupError=error instanceof Error?error.message:'Semantic cleanup failed';this.error=this.cleanupError;this.enabled=false;this.generation++;},reason=>{if(this.worker===worker)this.heal(new WorkerFailure(reason));},{startMs:this.timing.startDeadlineMs??START_DEADLINE_MS,callMs:this.timing.callDeadlineMs??CALL_DEADLINE_MS,embedTextMs:this.timing.embedTextMs??EMBED_TEXT_MS});this.worker=worker;}if(!this.identity){const ready=await this.worker.call('ready');if(ready.dimensions!==768||ready.maxTokens!==8192||!ready.offline)throw new Error('Incompatible semantic model; EG2 768/8192 offline required');this.identity=hash({worker:ready.identity,chunk:'eg2-passage256-focused-disjoint-direct-v3'});}return this.worker;}
  private path(snapshot:Snapshot){const directory=this.config!.indexDirectory;outsideProject(snapshot.project,directory,'index');return join(directory,hash({owner:this.ownerId,session:snapshot.session,project:resolve(snapshot.project)})+'.sqlite');}
@@ -312,6 +329,14 @@ export class SemanticRecallController {
   if(!this.enabled)return;
   const generation=this.generation,started=performance.now();let snapshot=provider();const prior=this.current;
   if(prior?.complete&&prior.id===snapshot.id)return;
+  let release:(()=>Promise<void>)|null=null;
+  if(this.backgroundOnly){
+   await mkdir(this.config!.indexDirectory,{recursive:true});release=await tryIndexerLock(this.config!.indexDirectory);
+   if(!release){const retry=setTimeout(()=>{if(this.enabled&&generation===this.generation)this.schedule(provider);},INDEXER_RETRY_MS);retry.unref();return;}
+  }
+  try{await this.prepareLocked(provider,full,generation,started,snapshot,prior);}finally{await release?.();}
+ }
+ private async prepareLocked(provider:()=>Snapshot,full:boolean,generation:number,started:number,snapshot:Snapshot,prior:Snapshot|undefined){
   // Both caps bound the window instead of failing above them. The unit cap (MAX_INDEX_UNITS) stays below the worker's 8,008-row store; the character cap, 2,000,000, usually binds first, at about 2.2 thousand units.
   const maxChars=this.config!.maxSourceCharacters??2000000,maxUnits=this.config!.maxUnits??MAX_INDEX_UNITS;
   const check=()=>{if(generation!==this.generation||!this.enabled)throw abort();this.recheck(provider,snapshot);};
@@ -366,7 +391,7 @@ export class SemanticRecallController {
    await yieldWork();if(progressed&&performance.now()-started>(this.config!.prepareWorkMs??30000)){this.error='Preparation work slice exhausted; indexing incomplete';this.dirty=true;return;}
   }
   check();
-  if(snapshot.units.every(unit=>snapshot.indexed.has(unit.key))){snapshot.complete=true;if(full)this.fullIndexing=false;}
+  if(snapshot.units.every(unit=>snapshot.indexed.has(unit.key))){snapshot.complete=true;if(full)this.fullIndexing=false;if(this.backgroundOnly)setTimeout(()=>{if(this.backgroundOnly)void this.idleStop();},0).unref();}
   this.error=null;this.recovered();
  }
  async waitForReady(timeoutMs=this.config?.queryWaitMs??30000,signal?:AbortSignal,expectedSnapshotId?:string,forSearch=false){if(this.enabled)this.demand();let targetId=expectedSnapshotId;try{targetId??=this.provider?.().id;}catch(error){await this.revoked(error);throw error;}if(this.enabled&&this.provider&&this.current?.id!==targetId){this.error=null;this.schedule(this.provider);}const started=performance.now();while(this.enabled&&!this.readyFor(targetId,forSearch)&&!this.error&&!this.healTimer&&performance.now()-started<timeoutMs){if(signal?.aborted){await this.cancelled();throw abort();}if(this.provider&&!this.timer&&!this.task)this.schedule(this.provider);await new Promise(done=>setTimeout(done,10));}this.armIdle();return this.status();}
@@ -442,7 +467,7 @@ export class SemanticRecallController {
  private async stopOwner(){this.dirty=false;this.enabled=false;this.generation++;if(this.timer){clearTimeout(this.timer);this.timer=undefined;}try{await this.closeResources();await this.task;this.task=undefined;}catch(error){this.cleanupError=error instanceof Error?error.message:'Semantic cleanup failed';throw error;}}
 
  /** A search, or a wait for readiness, is demand: it lets background work start and keeps it alive for IDLE_STOP_MS after the last one. */
- private demand(){this.active=true;this.fullIndexing=true;this.cancelIdle();}
+ private demand(){this.active=true;this.fullIndexing=true;this.backgroundOnly=false;this.cancelIdle();}
  private cancelIdle(){if(this.idleTimer)clearTimeout(this.idleTimer);this.idleTimer=undefined;}
  private armIdle(){this.cancelIdle();if(!this.enabled||!this.active)return;this.idleTimer=setTimeout(()=>{this.idleTimer=undefined;void this.idleStop();},this.timing.idleStopMs??IDLE_STOP_MS);this.idleTimer.unref();}
  private idleStop(){
@@ -457,7 +482,7 @@ export class SemanticRecallController {
   if(this.idling)return this.idling;
   const running=this.task; // a preparation a search starts during the stop waits for it in runtime(), so the stop must not wait for that one
   const stop=(async()=>{
-   this.active=false;this.fullIndexing=false;this.quietStop=true;this.generation++;this.dirty=false;
+   this.active=false;this.fullIndexing=false;this.backgroundOnly=false;this.quietStop=true;this.generation++;this.dirty=false;
    if(this._timer){clearTimeout(this._timer);this.timer=undefined;}
    this.cancelHeal();
    const worker=this.worker;
