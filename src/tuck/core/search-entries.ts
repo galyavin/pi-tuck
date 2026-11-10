@@ -38,8 +38,8 @@ const startBudget = (): (() => void) => {
   return () => {
     if (Date.now() > deadline) {
       throw new Error(
-        `Search aborted: query exceeded ${SEARCH_BUDGET_MS}ms. Simplify the pattern — ` +
-        "nested quantifiers such as (a+)+ can make matching blow up.",
+        `Search aborted: query exceeded ${SEARCH_BUDGET_MS}ms on this history. ` +
+        "Use more specific words, or read an entry by index.",
       );
     }
   };

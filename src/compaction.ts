@@ -432,7 +432,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // Bind the actual independent lexical offer, including attribution derived
             // from custom markers and receipts excluded from semantic indexing. Rebuild
             // under current caller policy after await, when the session moved; never send this block to the encoder.
-            const wordOffer=()=>tuckRecall(tuck,ctx.sessionManager.getEntries(),ctx.sessionManager.getBranch(),{query:input.query},options.recallPolicy);
+            // Keyword search over a very long history can hit its time limit. That limit guards one call, not the semantic half: the agent still gets the
+            // semantic results, and is told the keyword half stopped (seen in the field on an 84.7 MB session, where the whole search failed instead).
+            const wordOffer=()=>{try{return tuckRecall(tuck,ctx.sessionManager.getEntries(),ctx.sessionManager.getBranch(),{query:input.query},options.recallPolicy);}
+                catch(error){if(error instanceof Error&&error.message.startsWith("Search aborted:"))return{status:"keyword_timeout",notice:"Keyword search stopped at its time limit on this long history; the semantic results follow. For a keyword match, use more specific words or read an entry by index.",hits:[]};throw error;}};
             // The key is taken in the same synchronous step as the first lexical pass. After the await the second pass runs only if it moved (see eligibilityKey); a moved key alone invalidates nothing.
             // The snapshot id check covers every in-contract change (any branch change moves the id); the key-gated second pass is defence in depth for out-of-contract callers.
             const provider=semanticProvider(ctx),initialSnapshot=provider(),initialKey=eligibilityKey(ctx),words=wordOffer(),wordText=JSON.stringify(words);
