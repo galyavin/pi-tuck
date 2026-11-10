@@ -47,6 +47,7 @@ export function refusalParity(state: NativeState, reason: string): { violation: 
  if (state.correctedTokens > state.window) return { violation: false, exception: 'past-window' };
  if (state.afterFailedReply) return { violation: false, exception: 'failed-reply' };
  if (reason.includes('Prompt check failed')) return { violation: false, exception: 'prompt-check' };
+ if (reason.includes("Pi's request clamp leaves less than the reply floor")) return { violation: false, exception: 'reply-floor' };
  // The independent floor oracle also supplies this line for the pre-floor baseline.
  const hardLine = state.expectedHardLine ?? state.hardLine;
  if (hardLine !== undefined && state.correctedTokens > hardLine) return { violation: false, exception: 'reply-floor' };

@@ -1,5 +1,5 @@
 import { textOf } from "./tuck/core/content.js";
-import { branchReplyFloor, carriesPrompt } from "./request-capacity.js";
+import { requestReplyFloor, carriesPrompt, piContextSafetyMargin } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
 import { createSemanticRecall, budgetSemantic, type SemanticRecallController } from "./semantic-recall";
 import { DIAGNOSTIC_BUILD, IncidentRecorder, attachReceipt, permittedEntries, receiptId, findReceiptEntry, type Receipt, type RecorderOptions } from "./diagnostics.js";
@@ -11,7 +11,7 @@ import { projectedMessages } from "./omissions.js";
 import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
 import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, systemPart, validCutAt,
     type AgentMessage, type Messages, type Plan, type Target, type ToolShape } from "./budget.js";
-import { getCurrentSystemMessage, isContextOverflow, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage, isContextOverflow, normalizeContext, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, convertToLlm, estimateTokens, shouldCompact, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
@@ -115,7 +115,7 @@ export interface CompactionOptions {
 	 * owns cut targets; standalone final capacity admission uses the branch reply floor. If omitted, the band adapts to the last cut. */
 	cutAt?: number;
 	/** A host's response reserve: without `responseExact: true`, the catalogue maximum output stays its floor; with it, `response` is exact.
-	 * Standalone cuts against Pi's reserveTokens, then admits up to the window less max(8192, largest branch output), capped at that reserve.
+	 * Standalone cuts against Pi's reserveTokens, then admits up to the window less Pi's safety margin and max(4096, largest branch output), capped at that reserve.
 	 * After a length stop or context overflow it holds the full reserve, also raised to the catalogue maximum.
 	 * Resume, fork and /tree follow that branch's history; a new session has no inherited fallback. */
 	requestReserve?: (ctx: ExtensionContext) => { response: number; responseExact?: true };
@@ -133,6 +133,9 @@ export interface CompactionOptions {
 }
 
 export async function installCompaction(pi: ExtensionAPI, options: CompactionOptions = {}) {
+    const piMargin = options.requestReserve ? 0 : await piContextSafetyMargin();
+    const piClamp = options.requestReserve ? undefined : await import('@earendil-works/pi-ai/api/simple-options')
+        .then(module => module.clampMaxTokensToContext).catch(() => undefined);
     const cutAt = options.cutAt ?? DEFAULT_CUT_AT;
     if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
     const semantic = options.semanticRecall ?? createSemanticRecall(), search = options.search ?? true;
@@ -305,9 +308,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // Room still owns every existing cut/clip attempt. Only final capacity admission uses the hard line.
     const limits = (ctx: ExtensionContext) => {
         const { response } = requestReserve(ctx), room = inputRoom(response, ctx);
-        const floor = options.requestReserve ? response : branchReplyFloor(ctx.sessionManager.getBranch(), response);
-        const hardLine = Math.min((ctx.model?.contextWindow ?? 0) - floor, lastCeiling ?? Infinity);
-        return { response, room, hardLine };
+        const floor = options.requestReserve ? response : requestReplyFloor(ctx.sessionManager.getBranch(), response, ctx.model?.maxTokens);
+        const hardLine = Math.min(Math.max(room, (ctx.model?.contextWindow ?? 0) - piMargin - floor), lastCeiling ?? Infinity);
+        return { response, room, hardLine, replyFloor: floor };
     };
     const decisionBand = (ctx: ExtensionContext, room: number, system: number) => {
         const last = ctx.sessionManager.getBranch().findLast(entry => entry.type === "compaction");
@@ -852,11 +855,16 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const tokens = system + conversationTokens(messages);
             observeBudget(tokens, ctx);
             estimatedTokens = corrected(tokens, ctx);
-            const { room, hardLine } = limits(ctx);
+            const { room, hardLine, replyFloor } = limits(ctx);
             if (runPrompt !== undefined && !carriesPrompt(messages, runPrompt))
                 throw new Refusal("Prompt check failed: the request is missing the whole text of the prompt that started this run. Shorten the prompt or choose a model with a larger context window, then retry");
 			if (!fits(tokens, hardLine, ctx))
 				throw new CapacityError("Complete Pi context and response reserve exceed the estimated request budget");
+            // Pi's request estimator and its compaction estimator need not agree. The hard line is
+            // necessary; above the room, also require the real request clamp to preserve the floor.
+            if (!options.requestReserve && estimatedTokens > room && piClamp &&
+                piClamp(ctx.model, normalizeContext({ messages: convertToLlm(messages) }), ctx.model.maxTokens) < replyFloor)
+                throw new CapacityError("Pi's request clamp leaves less than the reply floor");
             if (estimatedTokens > room) receipt("above-room", "Request exceeds the room and fits the hard line", ctx);
             if (recorder.enabled && !recorder.waitingForCut) recorder.measureInline(() => {
                 recorder.request();

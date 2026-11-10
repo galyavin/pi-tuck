@@ -34,6 +34,9 @@ import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
+import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
+import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
+import { normalizeContext } from '@earendil-works/pi-ai';
 
 const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const CELLS = Math.max(1, Number(process.env.STRESS_CELLS) || 200);
@@ -61,12 +64,12 @@ const PROMPT_MS = 60_000;
 /** The fixture's model, which every cell that does not name another goes out on. */
 const DEFAULT_API = 'openai-codex-responses (openai-codex/gpt-6.1-sol)';
 
-type Rule = 'native-parity' | 'repeat-state' | 'lost-prompt' | 'task-turn' | 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow' | 'cut-target';
+type Rule = 'reply-clamp' | 'native-parity' | 'repeat-state' | 'lost-prompt' | 'task-turn' | 'stuck' | 'window' | 'summary-room' | 'refusal' | 'clip-room' | 'no-clip' | 'fresh-room' | 'thrash' | 'useful-cut' | 'notice' | 'provider' | 'no-recovery' | 'determinism' | 'harness' | 'hollow' | 'cut-target';
 type Failure = { cell: string; rule: Rule; message: string; params: Record<string, unknown> };
 const failures: Failure[] = [];
 const ran: string[] = [];
 /** What the grid actually reached, so a run that cut nothing is visible as one that tested nothing. */
-const cov = { cells: 0, room: 0, cut: 0, cuts: 0, answered: 0, refused: 0, aboveRoom: 0, overflows: 0, truncations: 0, clips: 0 };
+const cov = { cells: 0, room: 0, cut: 0, cuts: 0, answered: 0, refused: 0, aboveRoom: 0, overflows: 0, truncations: 0, clampStops: 0, clips: 0 };
 /** Coverage describes a cell, not a run of it: outside STRESS_STRICT every named cell runs three times, and the re-runs are a second opinion on the
  * same settings rather than new ground, so only the first run of each name counts here. */
 const covCounted = new Set<string>();
@@ -114,6 +117,8 @@ const report = (line: string) => { process.stderr.write(`${line}\n`); };
 
 /** Everything a cell can be asked about after it ran, measured rather than intended. */
 interface Evidence {
+ clampStops: number;
+ requestCaps: number[];
  window: number;
  /** The reserve the branch currently requires. */
  reserve: number;
@@ -243,9 +248,16 @@ function limitsOf(cell: Pick<Cell, 'window' | 'reserve' | 'maxTokens'>, branch: 
   (e.message.stopReason === 'length' || (e.message.stopReason === 'error' && isContextOverflow(e.message as never))));
  const reserve = failed ? Math.max(cell.reserve, cell.maxTokens) : cell.reserve;
  const largest = Math.max(4_096, ...branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' && Number.isFinite(e.message.usage?.output) ? [e.message.usage.output] : []));
- const replyFloor = failed ? reserve : Math.min(reserve, Math.ceil(largest));
- return { reserve, replyFloor, room: cell.window - reserve, hardLine: cell.window - replyFloor };
+ const branchFloor = failed ? reserve : Math.min(reserve, Math.ceil(largest));
+ const replyFloor = cell.maxTokens > 0 ? Math.min(branchFloor, cell.maxTokens) : branchFloor;
+ const room = cell.window - reserve;
+ return { reserve, replyFloor, room, hardLine: Math.max(room, cell.window - PI_MARGIN - replyFloor) };
 }
+
+// Independent of production's import/fallback: failure to load Pi here fails the fixture.
+const emptyContext = normalizeContext({ messages: [] }), marginWindow = 1_000_000;
+const PI_MARGIN = marginWindow - estimateContextTokens(emptyContext).tokens -
+ clampMaxTokensToContext({ contextWindow: marginWindow, maxTokens: marginWindow } as never, emptyContext, marginWindow);
 
 /** The single arithmetic oracle for a setup that leaves no conversation capacity. */
 const noRoom = (setup: number, hardLine: number) => setup >= hardLine;
@@ -335,6 +347,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
   toolCalls: request => request > startReq && request <= roundEnd,
   toolResultTokens: call => cell.results[(call - 1) % cell.results.length] ?? 100,
   ...cell.extra,
+  piRequestPath: true,
   // The shared fixture defaults to the host path. This grid tests standalone, on both builds.
   onBeforeCompact: (event, ctx) => {
    overflowRecovery = event.reason === 'overflow';
@@ -443,6 +456,9 @@ async function runCellInner(cell: Cell): Promise<Run> {
   const said = `${h.notices.slice(-1).join(' | ').slice(0, 120) || 'no notice'} / ${h.faults.slice(-1).join(' | ').slice(0, 90) || 'no fault'}`;
    for (const [n, tokens] of sent.entries()) {
     const held = requestLimits[seen.guard + n]!.replyFloor;
+    const cap = h.state.requestOptions[seen.requests + n]?.maxTokens;
+    if (tokens > requestLimits[seen.guard + n]!.room && cap !== undefined && cap < held)
+     record(cell, 'reply-clamp', `request ${seen.requests + n + 1} above room has Pi cap ${cap} below reply floor ${held}`, { tokens, cap, floor: held });
     if (tokens + held > cell.window) record(cell, 'window', `a request of ${tokens} tokens plus the reserve of ${held} exceeds the window of ${cell.window}: ${said}`, { prompt: i + 1, peak: tokens });
    }
    // The provider's own count is what its window is measured in. Once a reply has reported a finite input, the density behind that count is a fact
@@ -621,6 +637,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
   // a finding about the test: it is recorded so it cannot hide behind a clean table.
   if (cell.reached) {
    const e: Evidence = {
+    clampStops: h.state.clampStops, requestCaps: h.state.requestOptions.map(r => r.maxTokens),
     window: cell.window, reserve, room, factor, floor, savedStart, savedRoles, guard, counts,
     probes: h.probes.slice(probeStart), prompts: promptSizes, results: resultSizes, requests: promptRequests, cuts: savedCuts(), opportunistic, postCuts,
     answered, refused, hung, aborts: h.state.aborts, overflows: h.state.overflows, vetoes: h.state.vetoes,
@@ -675,13 +692,14 @@ async function runCellInner(cell: Cell): Promise<Run> {
    initialRoom: limitsOf(cell).room, finalRoom: limitsOf(cell, h.manager.getBranch()).room,
    guard, requestReserves: requestLimits.map(l => l.reserve), stops, requests: promptRequests,
    cuts, opportunistic, rounds, answered, refused, hung, overflows: h.state.overflows, truncations: h.state.truncations,
+   clampStops: h.state.clampStops, clampEvents: h.state.clampEvents, requestOptions: h.state.requestOptions, requestFloors: requestLimits.map(l => l.replyFloor),
    cutReserves: entries.map(e => (e.details as { diagnosticReceipt?: { settings?: { responseReserveTokens?: number } } }).diagnosticReceipt?.settings?.responseReserveTokens),
    nativeBuilds, nativeRefusals: parity, workLost, usefulExemptCuts: exemptCuts,
    failures: failures.filter(f => f.cell === cell.name),
   });
  } finally { await h.cleanup(); }
  const summary = { cells: 1, room: room > 0 ? 1 : 0, cut: cuts > 0 ? 1 : 0, cuts, answered, refused, aboveRoom: h.probes.filter(p => p.at === 'prompt' && p.complete > room).length, overflows: h.state.overflows };
- if (!cell.probe && !covCounted.has(cell.name)) { covCounted.add(cell.name); cov.cells++; cov.room += summary.room; cov.cut += summary.cut; cov.cuts += summary.cuts; cov.answered += answered; cov.refused += refused; cov.aboveRoom += summary.aboveRoom; cov.overflows += summary.overflows; cov.truncations += h.state.truncations; cov.clips += h.state.clips; }
+ if (!cell.probe && !covCounted.has(cell.name)) { covCounted.add(cell.name); cov.cells++; cov.room += summary.room; cov.cut += summary.cut; cov.cuts += summary.cuts; cov.answered += answered; cov.refused += refused; cov.aboveRoom += summary.aboveRoom; cov.overflows += summary.overflows; cov.truncations += h.state.truncations; cov.clampStops += h.state.clampStops; cov.clips += h.state.clips; }
  const summariesText = summaries.map(stripTimes).join('\n');
  return { guard, stops, summariesText, faults: [...h.faults], notices: [...h.notices], prompts: promptSizes };
 }
@@ -1059,12 +1077,38 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
     extra: { model, stableHost: true, persist: true, noOpening: true },
     reached: { state: 'an input over the provider window refused as context overflow, then an answered next prompt', check: e => e.overflows >= 1 && e.piOverflow >= 1 && e.requests[1]! >= 2 && e.requests.at(-1)! > 0 && e.answered >= 2 },
    }),
-   base(`floor setup: ${provider} setup between room and hard line`, {
-    // Above the former 8,192-floor line, below the new 4,096-floor line; the first reply needs the full new minimum.
+   base(`floor setup: ${provider} setup leaves no Pi reply room`, {
+    // The old 1.0.22 setup cell now proves a refusal before any reply is shortened.
     window: 32_768, reserve: 16_384, maxTokens: 8_192, setup: 26_000, system: 25_448, host: 500,
     prompts: [200, 200, 200], rounds: [0, 2, 0], results: [200], api: `fake ${provider}`,
     extra: { model, stableHost: true, seededTail: { summary: 4_000, tail: 20_000, cycle: 2_000 }, replyWindow: 'clip', replyWindowOutput: n => n === 1 ? 4_096 : 2_048, persist: true, noOpening: true, cutAtDefault: true },
-    reached: { state: 'setup above room, the first reply uncut, all prompts answered and at least one cut', check: e => e.truncations === 0 && e.maxAssistant >= 4_096 && e.guard[0]! > e.room && e.answered === 3 && e.refused === 0 && e.cuts >= 1 },
+    reached: { state: 'setup above the clamp-safe line is refused before any shortened reply', check: e => e.clampStops === 0 && e.refused === 3 && e.guard.length === 0 },
+   }),
+  ];
+ });
+ // Same cells on both revisions: the pilot band, a safe above-room request, and a growing branch floor.
+ const clampCells = ['openai-codex', 'openai', 'groq'].flatMap(provider => {
+  const model = { provider, id: provider === 'groq' ? 'openai/gpt-oss-120b' : 'gpt-6.1-sol' };
+  const common = { window: 32_768, reserve: 16_384, maxTokens: 16_384, host: 500,
+   keepRecent: 0, rounds: [0, 0, 0], results: [200], api: `capped fake ${provider}` };
+  return [
+   ...[27_742, 27_827].map(target => base(`clamp pilot: ${provider} request ${target}`, {
+    ...common, setup: target - 200, system: target - 752, prompts: [200, 200, 200],
+    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 4_096 },
+    reached: { state: 'pilot setup between room and window, refused before any clamp-shortened reply',
+     check: e => e.floor > 16_384 && e.clampStops === 0 && e.refused === 3 && e.requests.every(n => n === 0) },
+   })),
+   base(`clamp safe: ${provider} above room with full reply floor`, {
+    ...common, setup: 18_000, system: 17_448, prompts: [200],
+    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 4_096 },
+    reached: { state: 'requests above room answer with the full 4096 floor and no clamp stops',
+     check: e => e.guard.some(n => n > 16_384) && e.clampStops === 0 && e.answered === 1 && e.maxAssistant >= 4_096 },
+   }),
+   base(`clamp long: ${provider} floor rises to 8192`, {
+    ...common, setup: 10_000, system: 9_448, prompts: [200, 6_000, 200],
+    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 8_192 },
+    reached: { state: 'an 8192-token first reply raises the floor, later admitted requests finish whole',
+     check: e => e.maxAssistant >= 8_192 && e.clampStops === 0 && e.answered >= 2 && e.requestCaps.every(n => n >= 8_192) },
    }),
   ];
  });
@@ -1138,7 +1182,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
   ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, ...standoffSection, tasksSmallWindow, ...longSteps, ...specThenSteering,
-  ...providerCells, ...replyReserveCells, ...floorCells, ...oddUsageCells,
+  ...providerCells, ...replyReserveCells, ...floorCells, ...clampCells, ...oddUsageCells,
  ];
 }
 
@@ -1205,6 +1249,7 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  report(`stress: coverage: cells with room ${cov.room}/${cov.cells}, cells with a cut ${cov.cut}/${cov.cells}, total cuts ${cov.cuts}, prompts answered ${cov.answered}, prompts refused ${cov.refused}, prompts planned above the room ${cov.aboveRoom}, provider overflows ${cov.overflows}, provider truncations ${cov.truncations}, clips ${cov.clips}`);
  report(`stress: cut-target: ${cappedCuts} generated cuts checked, largest overshoot ${Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0}`);
  report(`stress: useful-cut exemption: ${usefulExemptCells.size} cells, ${usefulExemptCuts} forced cuts (setup + prompt above room)`);
+ report(`stress: Pi safety margin ${PI_MARGIN}, clamp-caused length stops ${cov.clampStops}`);
  report(`stress: native-parity coverage: ${JSON.stringify(nativeCoverage)}`);
  report('class           failures  cells  examples');
  for (const [rule, row] of sorted) report(`${rule.padEnd(15)}  ${String(row.count).padStart(8)}  ${String(row.cells.size).padStart(5)}  ${[...row.cells].slice(0, 2).join(' | ')}${row.cells.size > 2 ? ` | +${row.cells.size - 2} more` : ''}`);
@@ -1226,7 +1271,7 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
   for (const r of providerRows) report(`${r.name.padEnd(35)}  ${r.saw.padStart(12)}  ${r.pi ? `yes, ${r.pi} repl${r.pi > 1 ? 'ies' : 'y'}` : 'no'}`);
  }
  if (REPORT) {
-  writeFileSync('test/stress/failures.json', JSON.stringify({ seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, nativeCoverage, usefulCutExemption: { cells: [...usefulExemptCells], cuts: usefulExemptCuts }, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, rows: cellRows, failures }, null, 1));
+  writeFileSync('test/stress/failures.json', JSON.stringify({ piMargin: PI_MARGIN, seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, nativeCoverage, usefulCutExemption: { cells: [...usefulExemptCells], cuts: usefulExemptCuts }, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, rows: cellRows, failures }, null, 1));
   report(`stress: wrote ${failures.length} failures to test/stress/failures.json`);
  }
  report(`stress: ran ${ran.length} cells in ${((Date.now() - started) / 1000).toFixed(1)}s on ${[...apis].join(', ')}`);

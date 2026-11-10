@@ -66,7 +66,7 @@ test('missing whole run prompt stops through fail exactly once and writes one re
 
 test('real Pi guard receipts preserve tool pairing, parentage, prompt cut boundaries and recovery after a mid-run refusal', async () => {
  let dropPrompt = false;
- const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 21_000,
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 18_000,
   limits: { contextWindow: 32_768, maxTokens: 8_192 }, reserveTokens: 16_384, persist: true,
   compaction: { requestReserve: undefined }, toolCalls: request => request <= 2 || request === 4, toolResultTokens: () => 100,
   onBoundary: (_event, ctx) => { if (dropPrompt) { const user = ctx.sessionManager.getBranch().findLast(e => e.type === 'message' && e.message.role === 'user'); if (user) h.manager.appendContextEdit(user.id, null); } },
@@ -136,8 +136,8 @@ test('capacity receipts cannot enter summaries, omission counts, recall, keyword
 
 test('a prompt cut that keeps only its summary survives guard receipts and saves a boundary that keeps the user', async () => {
  // Still require a cut with the smaller 4,096 floor; the old incoming size now fits without one.
- const h = await harness({ at: 'prompt', complete: 76_000, summary: true, summaryOnly: true, summaryTokens: 8_000,
-  incoming: 72_000, host: 200, systemTokens: 800, limits: { contextWindow: 81_920, maxTokens: 8_192 }, reserveTokens: 16_384,
+ const h = await harness({ at: 'prompt', complete: 76_000, summary: true, summaryOnly: true, summaryTokens: 12_000,
+  incoming: 63_000, host: 200, systemTokens: 800, limits: { contextWindow: 81_920, maxTokens: 8_192 }, reserveTokens: 32_768,
   compaction: { requestReserve: undefined }, persist: true });
  try {
   const r = await h.run();

@@ -1,6 +1,9 @@
 import { expect, test, vi } from 'vitest';
 import { SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
+import { normalizeContext } from '@earendil-works/pi-ai';
+import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
+import { piContextSafetyMargin } from '../src/request-capacity';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,15 +23,24 @@ const reply = (stopReason: AssistantMessage['stopReason'], errorMessage?: string
 const offer = (manager: SessionManager, tokens: number, maxTokens = cap, host?: CompactionOptions['requestReserve']) =>
  guarded(manager, tokens, async d => { d.ctx.model = { ...MODEL, contextWindow: window, maxTokens }; }, { ...options, requestReserve: host });
 async function edge(manager: SessionManager, response: number, maxTokens = cap) {
- expect(await offer(manager, window - response - 1, maxTokens)).toEqual([]);
- expect((await offer(manager, window - response, maxTokens)).join(' ')).toContain(CAPACITY);
+ const room = window - Math.max(reserve, response), model = { ...MODEL, contextWindow: window, maxTokens };
+ const hardLine = Math.max(room, window - await piContextSafetyMargin() - response);
+ let low = 1, high = hardLine;
+ while (high - low > 1) {
+  const tokens = Math.floor((low + high) / 2);
+  const context = normalizeContext({ messages: [{ role: 'user', content: 'x'.repeat(4 * (tokens - 2)), timestamp: 0 }] });
+  if (tokens <= room || clampMaxTokensToContext(model, context, maxTokens) >= response) low = tokens; else high = tokens;
+ }
+ expect(await offer(manager, low, maxTokens)).toEqual([]);
+ expect((await offer(manager, high, maxTokens)).join(' ')).toMatch(/estimated request budget|request clamp/);
+ expect((await offer(manager, hardLine, maxTokens)).join(' ')).toContain(CAPACITY);
 }
 
 test('standalone starts with a 4096-token reply floor even when the reserve and catalogue maximum are larger', async () => {
  await edge(fresh(), 4_096);
  // A Pi setting larger than the cap remains the reserve.
  const larger = SettingsManager.inMemory({ compaction: { reserveTokens: 40_000 } });
- for (const [tokens, refused] of [[77_823, false], [77_824, true]] as const) {
+ for (const [tokens, refused] of [[60_000, false], [73_728, true]] as const) {
   const errors = await guarded(fresh(), tokens, async d => { d.ctx.model = { ...MODEL, contextWindow: window, maxTokens: cap }; }, { ...options, settings: larger });
   expect(errors.join(' ').includes(CAPACITY)).toBe(refused);
  }

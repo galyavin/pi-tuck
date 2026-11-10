@@ -11,6 +11,7 @@ import { installCompaction, type CompactionOptions } from '../src/compaction';
 import { bandOf } from '../src/budget';
 import { serializeTranscript } from '../src/tuck/core/transcript';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
+import { providerRequest } from './request-options';
 
 // Window 272,000 and response reserve max(32,768, model.maxTokens 128,000) leave an input room of 144,000 estimated tokens.
 export const ROOM = 144000, HOST = 6000;
@@ -43,6 +44,8 @@ export function referenceSystemPart(saved: Messages, observedPrompt: string, too
 export interface Unseen { growHost: (tokens: number) => void; setTools: (dormant: boolean) => void; steer: (tokens: number) => Promise<void>; }
 
 export interface Options {
+ /** Apply Pi's actual SimpleStreamOptions and capped OpenAI payload builders before the scripted server answers. */
+ piRequestPath?: boolean;
  /** Install with no cutAt, so the compactor's own default cut point applies; otherwise the harness pins cutAt 1 unless `compaction` sets it. */
  cutAtDefault?: boolean;
  /** Where the request that matters is made. */
@@ -242,7 +245,7 @@ export async function harness(options: Options) {
   // clips counts the requests that went out with a clipped fresh result in them, which is pi-tuck's own doing and visible nowhere but on the wire;
   // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
   // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
-  const state = { requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
+  const state = { clampEvents: [] as { request: number; wanted: number; cap: number }[], requestOptions: [] as Awaited<ReturnType<typeof providerRequest>>[], clampStops: 0, requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
   const wholePrompt: boolean[] = [];
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
@@ -418,9 +421,11 @@ export async function harness(options: Options) {
    failed.timestamp = Math.max(Date.now(), newest + 1);
    return failed;
   };
-  session.agent.streamFunction = (_m, _ctx, streamOptions) => {
+  session.agent.streamFunction = async (_m, _ctx, streamOptions) => {
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); state.answers.push(m); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
    options.onWire?.(_ctx);
+   const request = options.piRequestPath ? await providerRequest(_m, _ctx, streamOptions) : undefined;
+   if (request) state.requestOptions.push(request);
    state.requestStates.push(createHash('sha256').update(JSON.stringify({ ..._ctx, messages: _ctx.messages.filter(m => m.role !== 'assistant' || !['error', 'aborted'].includes(m.stopReason)) }, (key, value) => key === 'timestamp' ? undefined : value)).digest('hex'));
    state.requests++;
    if (state.requests === 2) state.delivered = JSON.stringify(_ctx.messages).includes(note);
@@ -445,7 +450,7 @@ export async function harness(options: Options) {
     state.answers.push(failed);
     stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
    }
-   if ((options.replyWindow === 'refuse' && count + model.maxTokens > model.contextWindow) ||
+   if ((options.replyWindow === 'refuse' && count + (request?.maxTokens ?? model.maxTokens) > model.contextWindow) ||
     (options.rejectOverWindow && !truncated && count > model.contextWindow)) {
     state.overflows++;
     state.assistantSizes[state.requests - 1] = 0; // the model sent no content at all for this request
@@ -477,7 +482,7 @@ export async function harness(options: Options) {
    }
    const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
    // Exercise actual output exhaustion, distinct from the existing input-truncation fake. Tool rounds stay small; final answers try the cap.
-   const outputRoom = Math.max(0, model.contextWindow - count);
+   const outputRoom = Math.min(request?.maxTokens ?? Infinity, Math.max(0, model.contextWindow - count));
    const output = Math.min(model.maxTokens, options.replyWindowOutput?.(state.requests) ?? model.maxTokens);
    const clippedReply = options.replyWindow === 'clip' && !toolRound && output > outputRoom;
    if (options.replyWindow === 'clip' && !toolRound) reply.splice(0, reply.length, { type: 'text', text: sized(Math.min(output, outputRoom)) });
@@ -487,6 +492,15 @@ export async function harness(options: Options) {
    // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
    const thinking = options.thinkingChars?.(state.requests);
    const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, clippedReply ? 'length' : toolRound ? 'toolUse' : 'stop');
+   const wanted = options.replyWindow === 'clip' && !toolRound ? output : options.outputTokens ?? est(message);
+   const clampStop = request !== undefined && wanted > request.maxTokens && request.maxTokens < request.requestedMaxTokens;
+   if (clampStop) { state.clampStops++; state.clampEvents.push({ request: state.requests, wanted, cap: request.maxTokens }); }
+   if (request && wanted > request.maxTokens) {
+    message.content = [{ type: 'text', text: sized(request.maxTokens) }];
+    message.stopReason = 'length';
+    state.stops[state.stops.length - 1] = 'length';
+    state.assistantSizes[state.requests - 1] = request.maxTokens;
+   }
    if (options.replyWindow) { message.usage.input = count; message.usage.output = est(replyOf(reply)); message.usage.totalTokens = count + message.usage.output; }
    if (clippedReply) state.truncations++;
    if (options.usageFirst !== undefined && state.requests === 1) { message.usage.input = options.usageFirst; message.usage.totalTokens = options.usageFirst; }
@@ -500,6 +514,7 @@ export async function harness(options: Options) {
     if (options.truncateOverWindow === 'lengthZero') { message.content = [{ type: 'text', text: 'The server stopped here.' }]; message.stopReason = 'length'; message.usage.output = 0; message.usage.totalTokens = model.contextWindow; }
    }
    if (options.usageAt) Object.assign(message.usage, options.usageAt(state.requests, guard.at(-1) ?? 0));
+   if (request && wanted > request.maxTokens) { message.usage.output = request.maxTokens; message.usage.totalTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + request.maxTokens; }
    if (options.noUsage) delete (message as { usage?: unknown }).usage;
    // A reply that reports a finite input is the session's first proof of the provider's density; NaN, Infinity and no usage object report nothing.
    if (Number.isFinite((message as { usage?: { input?: number } }).usage?.input)) state.reports++; else state.nonFinite++;

@@ -1,7 +1,22 @@
-import { isContextOverflow } from '@earendil-works/pi-ai';
+import { isContextOverflow, normalizeContext } from '@earendil-works/pi-ai';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import type { Messages } from './budget.js';
 import { parseRecords, splitSummary } from './tuck/core/transcript.js';
+
+/** Read Pi's private safety allowance through its public clamp, rather than copying it.
+ * Older/unavailable subpaths fall back to Pi 1.2–1.5's documented 4,096-token allowance.
+ */
+export async function piContextSafetyMargin(): Promise<number> {
+    try {
+        const [{ clampMaxTokensToContext }, { estimateContextTokens }] = await Promise.all([
+            import('@earendil-works/pi-ai/api/simple-options'), import('@earendil-works/pi-ai/utils/estimate'),
+        ]);
+        const window = 1_000_000, context = normalizeContext({ messages: [] });
+        const margin = window - estimateContextTokens(context).tokens - clampMaxTokensToContext({ contextWindow: window, maxTokens: window } as never, context, window);
+        if (!Number.isSafeInteger(margin) || margin < 0 || margin >= window) throw new Error('Invalid Pi context margin');
+        return margin;
+    } catch { return 4_096; }
+}
 
 /** Read the whole current branch, including replies before cuts. No session-local fallback flag. */
 export function branchReplyFloor(branch: readonly SessionEntry[], reserve: number): number {
@@ -14,6 +29,12 @@ export function branchReplyFloor(branch: readonly SessionEntry[], reserve: numbe
         if (typeof output === 'number' && Number.isFinite(output) && output > largest) largest = output;
     }
     return Math.min(reserve, Math.ceil(largest));
+}
+
+/** Admission never promises more output than a model with a positive reply cap can produce. */
+export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, maxTokens?: number): number {
+    const floor = branchReplyFloor(branch, reserve);
+    return maxTokens !== undefined && maxTokens > 0 ? Math.min(floor, maxTokens) : floor;
 }
 
 /** Check decoded text, including a whole verbatim user quote in our summary; never JSON-escaped substring matching. */
