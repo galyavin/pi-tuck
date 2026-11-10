@@ -583,6 +583,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("session_compact", (_event, ctx) => { if (!admittedRun) syncHistoryTools(ctx); });
     pi.on("turn_start", (_event, ctx) => syncHistoryTools(ctx));
     pi.on("agent_settled", (_event, ctx) => syncHistoryTools(ctx));
+    // A reply that stopped at the output limit may be cut off, and Pi says nothing. Tell the operator once per run, on the operator's side only:
+    // the notice never enters the model's context. Decided at the end of the run, so a later reply in the same run (a retry or a continuation)
+    // that ends normally clears it.
+    let lengthStop = false;
+    pi.on("agent_start", () => { lengthStop = false; });
+    pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason === "length"; });
+    pi.on("agent_settled", (_event, ctx) => {
+        if (!lengthStop || !active()) return;
+        lengthStop = false;
+        const message = "pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
+        try { if (ctx.hasUI === false) process.stderr.write(message + "\n"); else ctx.ui.notify(message, "warning"); } catch { /* ended */ } // with no UI (pi -p), stderr is the operator's
+    });
     // The session as it will be once a cut that is not saved yet is saved, and its conversation as the next request carries it.
     const previewCut = (ctx: ExtensionContext, cut: CutEntry) => {
         const header = ctx.sessionManager.getHeader();
