@@ -3,6 +3,50 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.22] - 2026-11-10
+
+### Fixed
+
+- **pi-tuck refused requests that fit the window, and could strand a session (1.0.0 to 1.0.21).** It refused at the room (the window less the full
+  reply reserve), where native Pi still sends. With Pi's defaults and a large setup, a session could be refused at every prompt. The final refusal
+  now sits at the window less a reply floor:
+  - the floor is the larger of the biggest reply seen on the branch and 4,096 tokens, capped at the reserve;
+  - after a reply stopped for length or a context-overflow refusal, the floor is the full reserve, as in 1.0.20;
+  - everything pi-tuck does before refusing (cut to the band, cut to the room, a smaller summary, clipping a fresh result) is unchanged and still
+    comes first;
+  - a session that never reaches the room sends the same requests as 1.0.21.
+- **A run's request always carries the whole prompt that started the run.** If it cannot fit after every reduction, pi-tuck stops the run with a
+  notice saying to shorten the prompt or use a larger window, instead of sending part of it. In-run cuts now keep the run's starting prompt whole
+  beside a later steering message.
+
+### Added
+
+- **Each pi-tuck refusal, and each request sent above the room, leaves one session entry:** type `custom`, `customType` `pi-tuck-capacity`, with
+  `data` `{kind: "refusal" | "above-room", reason, estimatedTokens, room, hardLine, buildId}`. It is never sent to the model, and never appears in
+  summaries or recall.
+- **A native-parity check in the settings stress test,** computed from Pi's own `shouldCompact` and compaction settings for the Pi version under
+  test. It fails a cell where pi-tuck refuses a request native Pi would send, or forces a cut below native's compaction point. Four refusals are
+  allowed:
+  - past the window;
+  - after a reply that did not fit;
+  - when the whole starting prompt cannot fit;
+  - when sending would leave the reply less than the floor.
+
+### Known cost
+
+- **Between the room and the window, the reply reserve no longer cushions a wrong count.** At a cold start an undercount can reach the provider. A
+  provider that errors is caught and learned from; a server that truncates silently truncates, as it does for native Pi.
+- **With a setup above the room, cuts are forced and frequent,** each freeing little. That beats a stranded session.
+
+### Release gates
+
+- **Shipped before its Tier 1 live gate, under the stranded-session rule;** the gate runs right after release, and a fail rolls back to 1.0.21.
+- **Replay matches 1.0.21,** read per request on 29 recordings: every differing request also differs between two runs of 1.0.21. 0 lost and 0 dead
+  tasks, the same 17 clips.
+- **Stress on Pi 1.2.0 and 1.5.0,** 298 cells: answered 1,309 → 1,356, refused 360 → 313, stranded sessions 3 → 0, native-parity findings 53 → 0. The
+  old fresh-room finding passes. Tests (696) and CI.
+- Sessions that are open keep the build they started with until they are restarted.
+
 ## [1.0.21] - 2026-11-09
 
 ### Fixed
