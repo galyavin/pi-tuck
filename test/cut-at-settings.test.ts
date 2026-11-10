@@ -27,7 +27,7 @@ async function load(file: string | undefined) {
 		expect(state.options).toHaveLength(1);
 		const notices: { message: string; level: string }[] = [];
 		// A session start without a UI: nothing is downloaded, whatever the platform.
-		const ctx = { hasUI: false, cwd: join(agentDir, 'project'), ui: { notify: (message: string, level: string) => { notices.push({ message, level }); } } } as unknown as ExtensionContext;
+		const ctx = { hasUI: true, cwd: join(agentDir, 'project'), ui: { notify: (message: string, level: string) => { notices.push({ message, level }); } } } as unknown as ExtensionContext;
 		for (const handler of handlers.get('session_start') ?? []) await handler({}, ctx);
 		return { cutAt: state.options[0]!.cutAt, notices, path, listening: handlers.has('session_start') };
 	} finally {

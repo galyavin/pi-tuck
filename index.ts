@@ -49,11 +49,11 @@ export default async function (pi: ExtensionAPI) {
 	if (settings.semanticRecall === false) return;
 	let session = 0, said = "", setup: Promise<unknown> | undefined, announced = false;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
-	// With no UI (pi -p), Pi shows no notices, so an off or failing semantic recall would go unsaid: write it to stderr instead, once per
-	// session. stderr is the operator's; it never enters the model's context.
-	let stderrSaid = false;
+	// With no UI (pi -p), Pi shows no notices, so a settings error or an off or failing semantic recall would go unsaid: write each to stderr
+	// instead, once per session. stderr is the operator's; it never enters the model's context.
+	const stderrSaid = new Set<string>();
 	const say = (ctx: ExtensionContext, message: string, level: "info" | "warning") => {
-		if (!ctx.hasUI) { if (!stderrSaid) { stderrSaid = true; try { process.stderr.write(message + "\n"); } catch { /* closed */ } } return; }
+		if (!ctx.hasUI) { if (!stderrSaid.has(message)) { stderrSaid.add(message); try { process.stderr.write(message + "\n"); } catch { /* closed */ } } return; }
 		try { ctx.ui.notify(message, level); } catch { /* ended */ }
 	};
 	const once = (ctx: ExtensionContext, message: string, level: "info" | "warning") => { if (said !== message) { said = message; say(ctx, message, level); } };
@@ -61,7 +61,7 @@ export default async function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		const current = ++session;
 		off = false;
-		stderrSaid = false;
+		stderrSaid.clear();
 		if (settings.error) once(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");
 		if (!appleSilicon)
 			return once(ctx, "pi-tuck: semantic recall needs macOS on Apple silicon; compaction and word recall work.", "info");
