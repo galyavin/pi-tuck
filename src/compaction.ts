@@ -148,7 +148,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const semanticPending = new Set<Promise<unknown>>();
     // Semantic indexing outlives any one attempt, so it checks only that the host still grants access: a compactor failure, which ends with its
     // attempt, must not read as a revocation (that disables semantic recall and deletes its index for the rest of the session).
-    const semanticProvider = (ctx: ExtensionContext) => () => memoizedEligibleSources(ctx, options.recallPolicy, hostAccess);
+    // A prompt's cut reaches the requests at once but the session only at the end of the first turn: until then search sees the history as the model does.
+    const semanticProvider = (ctx: ExtensionContext) => () => memoizedEligibleSources(ctx, options.recallPolicy, hostAccess, promptCut ? promptCut.firstKeptEntryId || ctx.sessionManager.getBranch().findLast(e => e.type === "message" && e.message.role === "user")?.id : undefined);
     const recorder = new IncidentRecorder(options.diagnostics);
     let proposalId: string | undefined;
     const observe = (ctx: ExtensionContext) => recorder.measureInline(() => {
