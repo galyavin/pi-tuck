@@ -29,6 +29,7 @@ import { mulberry32 } from '../random-sessions';
 import { afterAll, expect, test } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget-fixture';
+import { thinkingLengthCell, thinkingLengthCells } from '../length-retry-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
@@ -1278,3 +1279,22 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  // The assertion comes last, so the summary, the coverage line and the class table are printed even when the run is failing.
  if (STRICT) expect(failures.length, `${failures.length} rule violations; the table above`).toBe(0);
 });
+
+// ---- Thinking-only length recovery (part 2): carry this block and the length-retry-fixture import together. ----
+// Separate from runCell's refusal oracle: the third cell deliberately ends at length after its one permitted retry.
+for (const cell of thinkingLengthCells) {
+ test.skipIf(!RUN || Boolean(ONLY && !`thinking-only length: ${cell.name}`.includes(ONLY)))(`thinking-only length: ${cell.name}`, async () => {
+  const r = await thinkingLengthCell(cell);
+  report(`stress: thinking-only length ${JSON.stringify({ cell: cell.name, requests: r.requests, caps: r.caps, outputs: r.outputs, stops: r.stops, retries: r.retries, floor: r.replyFloor })}`);
+  expect(r.requests).toBe(2);
+  expect(r.retries).toBe(1);
+  expect(r.stops).toEqual(['length', cell.twice ? 'length' : 'stop']);
+  expect(r.caps[1]).toBeGreaterThanOrEqual(r.outputs[0]!);
+  if (cell.above) expect(r.caps[1]).toBeGreaterThan(r.outputs[0]!);
+  expect(r.replyFloor).toBe(Math.max(3_584, ...r.outputs));
+  expect(r.omitted && r.preserved && r.wholePrompt && r.deepest && r.noOptionalHistory).toBe(true);
+  expect(r.faults).toEqual([]);
+  expect(r.notices).toEqual([]);
+ }, 300_000);
+}
+// ---- End thinking-only length recovery cells. ----

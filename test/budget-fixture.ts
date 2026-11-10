@@ -73,6 +73,8 @@ export interface Options {
  stallChars?: (request: number) => number;
  /** Characters of thinking on the reply to request N, as a model that replays its reasoning sends them. */
  thinkingChars?: (request: number) => number;
+ /** Exhaust the real Pi request cap with thinking only, with no text or tool call. */
+ thinkingOnlyLength?: (request: number) => boolean;
  /** Another extension, present beside the compactor: it appends N boundary entries at every turn end. */
  turnEndEntries?: number;
  /** A host extension that patches a system-prompt section in `before_agent_start`, as an engine adds the current iteration's packet: called with the
@@ -491,11 +493,15 @@ export async function harness(options: Options) {
    state.assistantSizes[state.requests - 1] = est(replyOf(reply, toolRound ? 'toolUse' : 'stop'));
    // A model that replays its reasoning sends the thinking text back on the next request, so it counts against the window.
    const thinking = options.thinkingChars?.(state.requests);
-   const message = answer(thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply, clippedReply ? 'length' : toolRound ? 'toolUse' : 'stop');
+   const thinkingStop = options.thinkingOnlyLength?.(state.requests) ?? false;
+   const message = answer(thinkingStop ? [{ type: 'thinking', thinking: sized(request?.maxTokens ?? model.maxTokens) }] :
+    thinking ? [{ type: 'thinking', thinking: sized(Math.max(1, Math.round(thinking / 4))) }, ...reply] : reply,
+    thinkingStop || clippedReply ? 'length' : toolRound ? 'toolUse' : 'stop');
+   if (thinkingStop) state.assistantSizes[state.requests - 1] = est(message);
    const wanted = options.replyWindow === 'clip' && !toolRound ? output : options.outputTokens ?? est(message);
    const clampStop = request !== undefined && wanted > request.maxTokens && request.maxTokens < request.requestedMaxTokens;
    if (clampStop) { state.clampStops++; state.clampEvents.push({ request: state.requests, wanted, cap: request.maxTokens }); }
-   if (request && wanted > request.maxTokens) {
+   if (!thinkingStop && request && wanted > request.maxTokens) {
     message.content = [{ type: 'text', text: sized(request.maxTokens) }];
     message.stopReason = 'length';
     state.stops[state.stops.length - 1] = 'length';
@@ -514,7 +520,10 @@ export async function harness(options: Options) {
     if (options.truncateOverWindow === 'lengthZero') { message.content = [{ type: 'text', text: 'The server stopped here.' }]; message.stopReason = 'length'; message.usage.output = 0; message.usage.totalTokens = model.contextWindow; }
    }
    if (options.usageAt) Object.assign(message.usage, options.usageAt(state.requests, guard.at(-1) ?? 0));
-   if (request && wanted > request.maxTokens) { message.usage.output = request.maxTokens; message.usage.totalTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + request.maxTokens; }
+   if (thinkingStop || request && wanted > request.maxTokens) {
+    message.usage.output = request?.maxTokens ?? model.maxTokens;
+    message.usage.totalTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + message.usage.output;
+   }
    if (options.noUsage) delete (message as { usage?: unknown }).usage;
    // A reply that reports a finite input is the session's first proof of the provider's density; NaN, Infinity and no usage object report nothing.
    if (Number.isFinite((message as { usage?: { input?: number } }).usage?.input)) state.reports++; else state.nonFinite++;

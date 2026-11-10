@@ -59,7 +59,7 @@ export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: Ext
 /** `newPrompt`: the cut is planned for a run that has not begun (a prompt Pi has not appended yet, an operator's manual cut, Pi's own cut before
  * a run a custom message starts); the session has moved on from an ended run.
  * `reRenderSummary`: the cut is due, so its summary may be re-rendered smaller (see the `no_live_messages` branch below). */
-export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string }, ctx: ExtensionContext,
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string; deepest?: boolean }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
  const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
@@ -304,6 +304,14 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         };
         const calibrationHigh = highAt(floorBoundary, minimumOpeningLength);
         const floorSummary = render(calibrationHigh.rows), floorProjection = preview(floorSummary, floorBoundary);
+        // The last admission attempt and thinking-only retry share this exact floor: whole protected prompts, the smallest
+        // existing summary representation, and the required fresh/native suffix. No historical fill or room target spends reply space.
+        if (input.deepest) {
+            assertNativeToolRounds(floorProjection);
+            const after = measure(floorProjection);
+            return { compaction: { summary: floorSummary, firstKeptEntryId: entries[floorBoundary]?.id ?? "", tokensBefore: input.tokensBefore,
+                details: { ...detailsAt(floorBoundary), tokensAfter: after, carriedTarget: after, view: "shrunk-dialogue", mode: "shrunk", deepest: true } }, after, mode: "shrunk" };
+        }
         const offset = measure(floorProjection) - nativeAt(floorBoundary) - summaryTokens(floorSummary.length);
         const price = (characters: number, boundary: number) => offset + nativeAt(boundary) + summaryTokens(characters);
         const listCache = new Map<number, { files: ReturnType<typeof ledgerItems>; actions: ReturnType<typeof actionItems>; records: TranscriptRecord[] }>();

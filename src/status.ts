@@ -15,7 +15,7 @@ export const LOADED_VERSION: string = (() => {
 export function statusText(input: {
     version: string;
     active: boolean;
-    branch: readonly { type: string; tokensBefore?: unknown; details?: unknown }[];
+    branch: readonly { type: string; tokensBefore?: unknown; details?: unknown; customType?: unknown; data?: unknown }[];
     cutAt: number | undefined;
     search: boolean;
     semantic: { state: SemanticState; lastError: string | null };
@@ -27,6 +27,8 @@ export function statusText(input: {
     const cutLine = ours.length === 0 ? "Cuts: none yet in this session. The recall tools appear after the first cut."
         : `Cuts: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
     const native = cuts.length - ours.length;
+    const retries = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity" &&
+        (entry.data as { kind?: unknown } | null | undefined)?.kind === "retry").length;
     const searchLine = !input.search ? "Search: by keyword (search by meaning needs macOS on Apple silicon)."
         : input.semantic.state === "ready" || input.semantic.state === "waiting" ? "Search: by meaning and keyword."
         : input.semantic.state === "preparing" ? "Search: by meaning and keyword; indexing history in the background."
@@ -34,6 +36,7 @@ export function statusText(input: {
     return [
         `pi-tuck ${input.version} (the version this session loaded; restart Pi after an update).`,
         cutLine,
+        ...(retries ? [`Retries: ${retries} after thinking-only length stops in this session.`] : []),
         ...(native > 0 ? [`Pi's own compaction cut ${native} time${native === 1 ? "" : "s"} in this session.`] : []),
         input.cutAt === undefined ? "Cut point: adapts by itself." : `Cut point: fixed at cutAt ${input.cutAt} of the input room. Remove cutAt from pi-tuck.json to let it adapt.`,
         searchLine,
