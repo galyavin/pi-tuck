@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantMessageEventStream, type AssistantMessage, type Context } from '@earendil-works/pi-ai';
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installCompaction } from '../src/compaction';
 import { scriptedModelRuntime } from './model-fixture';
 
@@ -24,8 +24,8 @@ async function lifecycle(handled: boolean, treeTo?: number) {
   const faults: string[] = [], requests: Context[] = [];
   const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true,
     noPromptTemplates: true, noThemes: true, systemPrompt: 'Follow the current task.', extensionFactories: [
-      async api => { await installCompaction(api, { settings, fail: error => faults.push(String(error)) }); },
-      async api => { api.on('input', event => event.text.includes('HANDLE-ME') ? { action: 'handled' } : undefined); },
+      async (api: ExtensionAPI) => { await installCompaction(api, { settings, fail: error => faults.push(String(error)) }); },
+      async (api: ExtensionAPI) => { api.on('input', event => event.text.includes('HANDLE-ME') ? { action: 'handled' } : undefined); },
     ] } as never);
   await loader.reload();
   const { session } = await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: manager, settingsManager: settings,
