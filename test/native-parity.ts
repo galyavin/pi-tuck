@@ -28,9 +28,16 @@ export function nativeCompactionPoint(window: number, settings: ReturnType<Setti
  return low;
 }
 
+/** A reply that did not fit, after which the reply needs the whole reserve: a length stop that wrote text or a tool call, or a context overflow.
+ * A thinking-only length stop is not one (1.0.25): the session retries it with the largest reply as its floor, so a later refusal is judged
+ * by the clamp oracle, not exempted here. Written from the branch alone, not from pi-tuck's helper. */
 export function failedReply(branch: readonly SessionEntry[]): boolean {
- return branch.some(e => e.type === 'message' && e.message.role === 'assistant' &&
-  (e.message.stopReason === 'length' || e.message.stopReason === 'error' && isContextOverflow(e.message as never)));
+ return branch.some(e => {
+  if (e.type !== 'message' || e.message.role !== 'assistant') return false;
+  const m = e.message;
+  const thinkingOnly = m.content.length > 0 && m.content.every(block => block.type === 'thinking');
+  return m.stopReason === 'length' && !thinkingOnly || m.stopReason === 'error' && isContextOverflow(m as never);
+ });
 }
 
 export function nativeState(measure: BudgetObservation, settings: SettingsManager): NativeState {
