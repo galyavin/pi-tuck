@@ -3,6 +3,37 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.25] - 2026-11-10
+
+### Fixed
+
+- **A request above the room could be admitted and then refused, leaving the session stuck where native Pi would have sent.** pi-tuck checked
+  its line in its own corrected token count. Pi's reply cap uses Pi's own estimate, which is higher when the provider counts fewer tokens
+  than pi-tuck's raw measure.
+  - Now each point that sends above the room checks Pi's own cap on the request it would send.
+  - When that leaves less than the reply floor, it cuts deeper: up to three re-plans, then the deepest cut that still carries the whole
+    prompt. It refuses only if that leaves less than the floor too.
+  - In the stress test, 7 refusals now answer, 3 of which had stranded the session.
+
+### Added
+
+- **One retry after a reply that stops for length with thinking only.** pi-tuck retries the turn once, leaving the stopped reply out of the
+  request. It uses the deepest cut that still carries the whole prompt when that gives the reply more room; otherwise it retries uncut.
+  - After such a stop, the reply floor is the largest reply on the branch, the stopped one included, instead of the whole reserve. The full
+    reserve would refuse every request when the setup alone is above the room.
+  - A retried reply that stops again ends the run.
+  - `/tuck` counts retries.
+- **A notice when a run ends on a reply cut at the output limit:** "the last reply stopped at the model's output limit and may be cut off".
+  It goes to stderr when there's no UI and never enters the model's context.
+- **Stress runs strict in CI:** any finding fails it. A refusal is exempt only when an independent check allows it. One such check is Pi's
+  own reply cap on the smallest request that answers the prompt.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.24 exactly:** 13,946 requests on 29 recordings, 0 different, 0 lost and
+  0 dead tasks, clips 17 → 17.
+- **Stress, 310 cells, strict:** 0 findings (1.0.24: 25 lines, 14 of them this defect). Tests (731) and CI.
+
 ## [1.0.24] - 2026-11-10
 
 ### Fixed
