@@ -12,6 +12,7 @@ import { bandOf } from '../src/budget';
 import { serializeTranscript } from '../src/tuck/core/transcript';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { providerRequest } from './request-options';
+import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
 
 // Window 272,000 and response reserve max(32,768, model.maxTokens 128,000) leave an input room of 144,000 estimated tokens.
 export const ROOM = 144000, HOST = 6000;
@@ -46,6 +47,12 @@ export interface Unseen { growHost: (tokens: number) => void; setTools: (dormant
 export interface Options {
  /** Apply Pi's actual SimpleStreamOptions and capped OpenAI payload builders before the scripted server answers. */
  piRequestPath?: boolean;
+ /** Keep the scripted provider and host/probes, but do not install pi-tuck. Native Pi owns all cuts. */
+ plainPi?: boolean;
+ /** Capture normalized request hashes only for comparisons that need them. */
+ fingerprintWire?: boolean;
+ /** A scripted provider context-overflow error on a particular request, independent of Pi's output clamp. */
+ providerOverflowAt?: (request: number) => boolean;
  /** Install with no cutAt, so the compactor's own default cut point applies; otherwise the harness pins cutAt 1 unless `compaction` sets it. */
  cutAtDefault?: boolean;
  /** Where the request that matters is made. */
@@ -245,7 +252,8 @@ export async function harness(options: Options) {
   // clips counts the requests that went out with a clipped fresh result in them, which is pi-tuck's own doing and visible nowhere but on the wire;
   // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
   // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
-  const state = { clampEvents: [] as { request: number; wanted: number; cap: number }[], requestOptions: [] as Awaited<ReturnType<typeof providerRequest>>[], clampStops: 0, requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
+  let nativeSummarizing = false, nativeBefore = 0, nativeReason = '';
+  const state = { nativeSummaries: [] as Awaited<ReturnType<typeof providerRequest>>[], nativeCuts: [] as { afterRequest: number; reason: string; before: number; after: number; freed: number }[], requestFingerprints: [] as string[], clampEvents: [] as { request: number; wanted: number; cap: number }[], requestOptions: [] as Awaited<ReturnType<typeof providerRequest>>[], clampStops: 0, requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
   const wholePrompt: boolean[] = [];
   const guard: number[] = [], cutsAtRequest: number[] = [], cutsAtProbe: number[] = [];
@@ -254,9 +262,10 @@ export async function harness(options: Options) {
   // The host's view can grow during a run (attempt effects are recorded in it).
   const exact = (n: number) => sized(n);
   const hostTexts = new Map<number, string>();
+  let latestHostInput: { role: 'custom'; customType: string; content: string; display: boolean; timestamp: number } | undefined;
   const hostInput = () => {
    if (options.stableHost && !hostTexts.has(host)) hostTexts.set(host, exact(host));
-   return { role: 'custom' as const, customType: 'host.view', content: options.stableHost ? hostTexts.get(host)! : exact(host), display: false, timestamp: 0 };
+   return latestHostInput = { role: 'custom' as const, customType: 'host.view', content: options.stableHost ? hostTexts.get(host)! : exact(host), display: false, timestamp: 0 };
   };
   // The request as Pi would build it, measured before the compactor is asked anything (these hooks are registered before the compactor's), with
   // the number of requests already answered. A case that needs "the request before any cut" reads this, not the guard's post-cut measure.
@@ -279,7 +288,19 @@ export async function harness(options: Options) {
    };
    if (options.systemSection && !options.systemSectionLate) addSection();
    if (options.turnEndEntries) pi.on('turn_end', () => { for (let i = 0; i < options.turnEndEntries!; i++) pi.appendEntry(`stress-boundary-${i}`, { at: state.requests }); });
-   pi.on('session_before_compact', (event, ctx) => { state.compacts++; if (options.onBeforeCompact) options.onBeforeCompact(event, ctx); });
+   const nativeComplete = (ctx: ExtensionContext) => referenceSystemPart(saved(), ctx.getSystemPrompt(), activeToolsJson()) + nonSystem([hostInput()]) + nonSystem(saved());
+   pi.on('session_before_compact', (event, ctx) => {
+    state.compacts++;
+    if (options.plainPi) { nativeSummarizing = true; nativeBefore = nativeComplete(ctx); nativeReason = event.reason; }
+    options.onBeforeCompact?.(event, ctx);
+   });
+   pi.on('session_compact', (_event, ctx) => {
+    if (!options.plainPi) return;
+    const after = nativeComplete(ctx);
+    state.nativeCuts.push({ afterRequest: state.requests, reason: nativeReason, before: nativeBefore, after, freed: nativeBefore - after });
+    nativeSummarizing = false;
+   });
+   pi.on('session_compact_failed', () => { nativeSummarizing = false; });
    // The host's per-request view: present in every request, never in the saved conversation.
    pi.on('context', event => ({ messages: [hostInput(), ...event.messages.filter(m => !(m.role === 'custom' && m.customType === 'host.view'))] }));
    // Probes only (registered before the compactor's hooks): the complete request as the guard will count it, from Pi's own functions.
@@ -295,7 +316,7 @@ export async function harness(options: Options) {
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ after: state.requests, at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
    // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
    // and `cutAtDefault` leaves it to the compactor's default.
-   await installCompaction(pi, {
+   if (!options.plainPi) await installCompaction(pi, {
     // The response reserve is Pi's setting, which is what the session actually holds; a case that needs an exact reserve passes its own below.
     requestReserve: () => ({ response: options.reserveTokens ?? 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
@@ -423,10 +444,27 @@ export async function harness(options: Options) {
   };
   session.agent.streamFunction = async (_m, _ctx, streamOptions) => {
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); state.answers.push(m); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
+   if (options.plainPi && nativeSummarizing) {
+    // Pi chooses the boundary, kept tail and summary prompt. The same scripted model's normal
+    // final answer ("Finished") answers its summary call; summary calls are not tool-work requests.
+    const request = await providerRequest(_m, _ctx, streamOptions);
+    state.nativeSummaries.push(request);
+    const message = replyOf([{ type: 'text', text: 'Finished' }]);
+    message.timestamp = Date.now();
+    message.usage.input = estimateContextTokens(_ctx).tokens;
+    message.usage.output = est(message); message.usage.totalTokens = message.usage.input + message.usage.output;
+    const stream = createAssistantMessageEventStream();
+    if (options.rejectOverWindow && _ctx.messages.reduce((sum, m) => sum + est(m), 0) > model.contextWindow) {
+     message.content = []; message.stopReason = 'error'; message.errorMessage = OVERFLOW_TEXT;
+     stream.push({ type: 'error', reason: 'error', error: message });
+    } else stream.push({ type: 'done', reason: 'stop', message });
+    stream.end(message); return stream;
+   }
    options.onWire?.(_ctx);
    const request = options.piRequestPath ? await providerRequest(_m, _ctx, streamOptions) : undefined;
    if (request) state.requestOptions.push(request);
    state.requestStates.push(createHash('sha256').update(JSON.stringify({ ..._ctx, messages: _ctx.messages.filter(m => m.role !== 'assistant' || !['error', 'aborted'].includes(m.stopReason)) }, (key, value) => key === 'timestamp' ? undefined : value)).digest('hex'));
+   if (options.fingerprintWire) state.requestFingerprints.push(createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' ? undefined : value).replaceAll(dir, '<session>')).digest('hex'));
    state.requests++;
    if (state.requests === 2) state.delivered = JSON.stringify(_ctx.messages).includes(note);
    options.onRequest?.(state.requests, { setHost: tokens => { host = tokens; }, pi: extension! });
@@ -450,7 +488,7 @@ export async function harness(options: Options) {
     state.answers.push(failed);
     stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
    }
-   if ((options.replyWindow === 'refuse' && count + (request?.maxTokens ?? model.maxTokens) > model.contextWindow) ||
+   if (options.providerOverflowAt?.(state.requests) || (options.replyWindow === 'refuse' && count + (request?.maxTokens ?? model.maxTokens) > model.contextWindow) ||
     (options.rejectOverWindow && !truncated && count > model.contextWindow)) {
     state.overflows++;
     state.assistantSizes[state.requests - 1] = 0; // the model sent no content at all for this request
@@ -528,7 +566,7 @@ export async function harness(options: Options) {
   const runEnd = () => allCompactions().filter(isRunEnd);
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
-   dir, manager, session, settings, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
+   dir, manager, session, settings, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
    // Open the session's file again the way Pi does when a saved session is resumed, and report how many messages came back. The run's own session is
    // left alone: this reads what reached the disk, which is all the operator has if the run ends where it stands.
    reopenFile: () => {
