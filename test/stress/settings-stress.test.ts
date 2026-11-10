@@ -247,7 +247,7 @@ function limitsOf(cell: Pick<Cell, 'window' | 'reserve' | 'maxTokens'>, branch: 
  const failed = branch.some(e => e.type === 'message' && e.message.role === 'assistant' &&
   (e.message.stopReason === 'length' || (e.message.stopReason === 'error' && isContextOverflow(e.message as never))));
  const reserve = failed ? Math.max(cell.reserve, cell.maxTokens) : cell.reserve;
- const largest = Math.max(4_096, ...branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' && Number.isFinite(e.message.usage?.output) ? [e.message.usage.output] : []));
+ const largest = Math.max(3_584, ...branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' && Number.isFinite(e.message.usage?.output) ? [e.message.usage.output] : []));
  const branchFloor = failed ? reserve : Math.min(reserve, Math.ceil(largest));
  const replyFloor = cell.maxTokens > 0 ? Math.min(branchFloor, cell.maxTokens) : branchFloor;
  const room = cell.window - reserve;
@@ -1081,7 +1081,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
     // The old 1.0.22 setup cell now proves a refusal before any reply is shortened.
     window: 32_768, reserve: 16_384, maxTokens: 8_192, setup: 26_000, system: 25_448, host: 500,
     prompts: [200, 200, 200], rounds: [0, 2, 0], results: [200], api: `fake ${provider}`,
-    extra: { model, stableHost: true, seededTail: { summary: 4_000, tail: 20_000, cycle: 2_000 }, replyWindow: 'clip', replyWindowOutput: n => n === 1 ? 4_096 : 2_048, persist: true, noOpening: true, cutAtDefault: true },
+    extra: { model, stableHost: true, seededTail: { summary: 4_000, tail: 20_000, cycle: 2_000 }, replyWindow: 'clip', replyWindowOutput: n => n === 1 ? 3_584 : 2_048, persist: true, noOpening: true, cutAtDefault: true },
     reached: { state: 'setup above the clamp-safe line is refused before any shortened reply', check: e => e.clampStops === 0 && e.refused === 3 && e.guard.length === 0 },
    }),
   ];
@@ -1094,15 +1094,15 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   return [
    ...[27_742, 27_827].map(target => base(`clamp pilot: ${provider} request ${target}`, {
     ...common, setup: target - 200, system: target - 752, prompts: [200, 200, 200],
-    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 4_096 },
+    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 3_584 },
     reached: { state: 'pilot setup between room and window, refused before any clamp-shortened reply',
      check: e => e.floor > 16_384 && e.clampStops === 0 && e.refused === 3 && e.requests.every(n => n === 0) },
    })),
    base(`clamp safe: ${provider} above room with full reply floor`, {
     ...common, setup: 18_000, system: 17_448, prompts: [200],
-    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 4_096 },
-    reached: { state: 'requests above room answer with the full 4096 floor and no clamp stops',
-     check: e => e.guard.some(n => n > 16_384) && e.clampStops === 0 && e.answered === 1 && e.maxAssistant >= 4_096 },
+    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 3_584 },
+    reached: { state: 'requests above room answer with the full 3584 floor and no clamp stops',
+     check: e => e.guard.some(n => n > 16_384) && e.clampStops === 0 && e.answered === 1 && e.maxAssistant >= 3_584 },
    }),
    base(`clamp long: ${provider} floor rises to 8192`, {
     ...common, setup: 10_000, system: 9_448, prompts: [200, 6_000, 200],

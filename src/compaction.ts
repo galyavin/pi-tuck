@@ -115,7 +115,7 @@ export interface CompactionOptions {
 	 * owns cut targets; standalone final capacity admission uses the branch reply floor. If omitted, the band adapts to the last cut. */
 	cutAt?: number;
 	/** A host's response reserve: without `responseExact: true`, the catalogue maximum output stays its floor; with it, `response` is exact.
-	 * Standalone cuts against Pi's reserveTokens, then admits up to the window less Pi's safety margin and max(4096, largest branch output), capped at that reserve.
+	 * Standalone cuts against Pi's reserveTokens, then admits up to the window less Pi's safety margin and max(3,584, largest branch output), capped at that reserve.
 	 * After a length stop or context overflow it holds the full reserve, also raised to the catalogue maximum.
 	 * Resume, fork and /tree follow that branch's history; a new session has no inherited fallback. */
 	requestReserve?: (ctx: ExtensionContext) => { response: number; responseExact?: true };

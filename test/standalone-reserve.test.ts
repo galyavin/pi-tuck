@@ -36,11 +36,11 @@ async function edge(manager: SessionManager, response: number, maxTokens = cap) 
  expect((await offer(manager, hardLine, maxTokens)).join(' ')).toContain(CAPACITY);
 }
 
-test('standalone starts with a 4096-token reply floor even when the reserve and catalogue maximum are larger', async () => {
- await edge(fresh(), 4_096);
+test('standalone starts with a 3584-token reply floor even when the reserve and catalogue maximum are larger', async () => {
+ await edge(fresh(), 3_584);
  // A Pi setting larger than the cap remains the reserve.
  const larger = SettingsManager.inMemory({ compaction: { reserveTokens: 40_000 } });
- for (const [tokens, refused] of [[60_000, false], [73_728, true]] as const) {
+ for (const [tokens, refused] of [[60_000, false], [74_240, true]] as const) {
   const errors = await guarded(fresh(), tokens, async d => { d.ctx.model = { ...MODEL, contextWindow: window, maxTokens: cap }; }, { ...options, settings: larger });
   expect(errors.join(' ').includes(CAPACITY)).toBe(refused);
  }
@@ -61,7 +61,7 @@ test.each([
 
 test.each(['stop', 'toolUse', 'aborted'] as const)('%s does not raise the reserve', async stop => {
  const manager = fresh(); manager.appendMessage(reply(stop));
- await edge(manager, 4_096);
+ await edge(manager, 3_584);
 });
 
 // A transient failure is not a reply that did not fit: pi-ai does not class it as a context overflow, so the branch keeps native's room.
@@ -70,7 +70,7 @@ test.each([
  ['a 503', reply('error', '503 upstream unavailable')],
 ] as const)('%s on the branch keeps Pi reserveTokens', async (_label, message) => {
  const manager = fresh(); manager.appendMessage(message);
- await edge(manager, 4_096);
+ await edge(manager, 3_584);
 });
 
 test('each decision follows /tree and a new session without an in-memory fallback flag', async () => {
@@ -108,7 +108,7 @@ test('a persisted resume and /fork inherit only failures on the retained branch'
   manager.appendMessage(reply('length'));
   const after = manager.appendMessage({ role: 'user', content: 'Continue', timestamp: 2 });
   await edge(SessionManager.open(manager.getSessionFile()!, dir), cap);
-  for (const [leaf, held] of [[before, 4_096], [after, cap]] as const) {
+  for (const [leaf, held] of [[before, 3_584], [after, cap]] as const) {
    const source = SessionManager.open(manager.getSessionFile()!, dir);
    const path = source.createBranchedSession(leaf)!;
    await edge(SessionManager.open(path, dir), held);

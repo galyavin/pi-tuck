@@ -49,7 +49,7 @@ test.each([{ reserve: 4_096, output: 0 }, { reserve: 16_384, output: 16_384 }])(
  } finally { await d.close(); vi.restoreAllMocks(); }
 });
 
-test.each([22_000, 27_742])('a request at %s whose real clamp cannot hold the floor is never sent', async setup => {
+test.each([23_000, 27_742])('a request at %s whose real clamp cannot hold the floor is never sent', async setup => {
  const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, systemTokens: setup - 252, host: 200,
   limits: { contextWindow: 32_768, maxTokens: 16_384 }, reserveTokens: 16_384,
   compaction: { requestReserve: undefined }, piRequestPath: true });
@@ -57,12 +57,12 @@ test.each([22_000, 27_742])('a request at %s whose real clamp cannot hold the fl
   const prompt = h.sized(200);
   const context = normalizeContext({ systemPrompt: h.session.systemPrompt, messages: convertToLlm([{ role: 'user', content: prompt, timestamp: 0 }, h.hostInput()]) });
   const model = { ...MODEL, contextWindow: 32_768, maxTokens: 16_384 };
-  expect(clampMaxTokensToContext(model, context, model.maxTokens)).toBeLessThan(4_096);
+  expect(clampMaxTokensToContext(model, context, model.maxTokens)).toBeLessThan(3_584);
   await h.session.prompt(prompt);
   expect(h.state.requests).toBe(0);
   expect(h.state.clampStops).toBe(0);
   expect(h.faults.join(' ')).toMatch(/estimated request budget|request clamp/);
-  expect(h.manager.getBranch().find(e => e.type === 'custom' && e.customType === 'pi-tuck-capacity')).toMatchObject({ data: { kind: 'refusal', hardLine: 24_576 } });
+  expect(h.manager.getBranch().find(e => e.type === 'custom' && e.customType === 'pi-tuck-capacity')).toMatchObject({ data: { kind: 'refusal', hardLine: 25_088 } });
  } finally { await h.cleanup(); }
 });
 
@@ -94,7 +94,7 @@ test('a request above the room is sent when Pi leaves the model’s 1879-token r
 test('only a positive model cap limits the branch floor, including its failed-reply fallback', () => {
  const manager = SessionManager.inMemory('/x');
  expect(requestReplyFloor(manager.getBranch(), 16_384, 1_879)).toBe(1_879);
- for (const cap of [undefined, 0, -1]) expect(requestReplyFloor(manager.getBranch(), 16_384, cap)).toBe(4_096);
+ for (const cap of [undefined, 0, -1]) expect(requestReplyFloor(manager.getBranch(), 16_384, cap)).toBe(3_584);
  manager.appendMessage({ role: 'assistant', content: [], stopReason: 'length', api: MODEL.api, provider: MODEL.provider,
   model: MODEL.id, timestamp: 0, usage: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1,
    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });

@@ -20,7 +20,7 @@ test.each([false, true])('the whole starting prompt is refused only after every 
  vi.spyOn(clipping, 'clipFor').mockImplementation((...args) => {
   const clips = originalClip(...args); events.push({ kind: 'clip', allowance: args[2], clips: clips.length }); return clips;
  });
- const wire: boolean[] = [], response = irreducible ? 8192 : 4096, limit = 32768 - response;
+ const wire: boolean[] = [], response = irreducible ? 8192 : 3584, limit = 32768 - response;
  const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, stableHost: true,
   limits: { contextWindow: 32768, maxTokens: 8192 }, reserveTokens: response, host: 200, systemTokens: 800,
   compaction: { requestReserve: () => ({ response, responseExact: true }), cutAt: 1 },

@@ -18,9 +18,12 @@ export async function piContextSafetyMargin(): Promise<number> {
     } catch { return 4_096; }
 }
 
+/** The smallest reply room a request above the room must leave after Pi's own clamp: above the user's p99 reply (3,270 tokens). */
+export const REPLY_FLOOR_MIN = 3_584;
+
 /** Read the whole current branch, including replies before cuts. No session-local fallback flag. */
 export function branchReplyFloor(branch: readonly SessionEntry[], reserve: number): number {
-    let largest = 4_096;
+    let largest = REPLY_FLOOR_MIN;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;

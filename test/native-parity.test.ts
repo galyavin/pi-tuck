@@ -33,9 +33,11 @@ test('the native-parity refusal exceptions are narrow and retain the window boun
 });
 
 test('the reply-floor exception uses corrected count and is strict at the branch floor line on both builds', () => {
- expect(refusalParity({ ...state, correctedTokens: 8001 }, 'cannot fit')).toEqual({ violation: false, exception: 'reply-floor' });
- expect(refusalParity({ ...state, correctedTokens: 8000 }, 'cannot fit')).toEqual({ violation: true });
- expect(refusalParity({ ...state, correctedTokens: 7999 }, 'cannot fit')).toEqual({ violation: true });
+ const floorLine = 32_768 - 4_096 - 3_584;
+ const floorState = { ...state, window: 32_768, room: 16_384, hardLine: floorLine };
+ expect(refusalParity({ ...floorState, correctedTokens: floorLine + 1 }, 'cannot fit')).toEqual({ violation: false, exception: 'reply-floor' });
+ expect(refusalParity({ ...floorState, correctedTokens: floorLine }, 'cannot fit')).toEqual({ violation: true });
+ expect(refusalParity({ ...floorState, correctedTokens: floorLine - 1 }, 'cannot fit')).toEqual({ violation: true });
  expect(refusalParity({ ...state, hardLine: undefined, expectedHardLine: 6500 }, 'baseline refusal').exception).toBe('reply-floor');
  expect(refusalParity({ ...state, hardLine: 6500, expectedHardLine: 8000 }, 'cannot fit').violation).toBe(true);
 });
