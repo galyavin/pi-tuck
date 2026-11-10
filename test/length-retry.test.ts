@@ -22,7 +22,8 @@ test.each(thinkingLengthCells)('thinking-only length recovery: $name', async cel
  expect(r.replyFloor).toBe(Math.max(3_584, ...r.outputs));
  expect(r.receipt).toMatchObject({ kind: 'retry', stoppedOutputTokens: r.outputs[0], piEstimateTokens: r.contextTokens[1], piCap: r.caps[1] });
  expect(r.faults).toEqual([]);
- expect(r.notices).toEqual([]);
+ // K10: a retry that ends normally clears the length-stop notice; a retried reply that stops again leaves exactly one.
+ expect(r.notices).toEqual(cell.twice ? ["pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue."] : []);
 });
 
 test.each(['text', 'toolCall'] as const)('a length stop with %s does not trigger pi-tuck recovery', async kind => {
