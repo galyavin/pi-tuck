@@ -155,7 +155,7 @@ test('a history whose dialogue exceeds the allowance is cut to the shrunk view, 
 	expect(receiptOf(entry).view, r.probe).toBe('shrunk-dialogue');
 	expect(entry.summary).toContain(LEDGER);
 	expect(entry.summary.endsWith(CLOSING_INSTRUCTION)).toBe(true);
-}, 60000); // hundreds of turns, drafted at the room
+}, 240000); // hundreds of turns, drafted at the room: 30-87 s on this Mac under load, so four times the worst seen
 
 test('a call-only prefix with no dialogue or results is admitted or declined without an invalid empty summary', () => {
   const manager = SessionManager.inMemory('/call-only');

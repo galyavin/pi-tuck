@@ -243,8 +243,9 @@ for (const make of sessions) {
 			// A share is a ratio of few cuts: 0 stays 0, otherwise it may move by 10% of the golden or by 0.05, whichever is more.
 			if (Math.abs(m.lowYieldShare - g.lowYieldShare) > (g.lowYieldShare === 0 ? 0 : Math.max(g.lowYieldShare * 0.1, 0.05)))
 				violations.push(`lowYieldShare ${m.lowYieldShare}, golden ${g.lowYieldShare}`);
-			// A runner can be many times slower than the laptop that recorded the golden: ten times its median, plus 50 ms.
-			if (m.medianCutMs > g.medianCutMs * 10 + 50) violations.push(`medianCutMs ${m.medianCutMs}, golden ${g.medianCutMs} (limit ten times plus 50)`);
+			// A runner can be many times slower than the laptop that recorded the golden, and a loaded laptop too (133.9 against 7.8 once, with two
+			// suites running side by side): twenty times its median, plus 100 ms. That still fails a cut whose time grows with the history.
+			if (m.medianCutMs > g.medianCutMs * 20 + 100) violations.push(`medianCutMs ${m.medianCutMs}, golden ${g.medianCutMs} (limit twenty times plus 100)`);
 			expect(violations, JSON.stringify({ got: m, golden: g })).toEqual([]);
 		}, 600_000);
 	}
