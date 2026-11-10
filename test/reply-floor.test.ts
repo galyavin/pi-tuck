@@ -16,18 +16,20 @@ const response = (output: number, stopReason = 'stop', errorMessage?: string) =>
  api: MODEL.api, provider: MODEL.provider, model: MODEL.id, timestamp: 1, stopReason, errorMessage,
  usage: { input: 0, output, cacheRead: 0, cacheWrite: 0, totalTokens: output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as Parameters<SessionManager['appendMessage']>[0];
 
-test('branch floor: minimum 8192, largest output across cuts, reserve cap and branch selection', () => {
+test('branch floor: minimum 4096, largest output across cuts, reserve cap and branch selection', () => {
  const manager = SessionManager.inMemory('/x');
  const first = manager.appendMessage({ role: 'user', content: 'start', timestamp: 0 });
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(8_192);
+ expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(4_096);
  expect(branchReplyFloor(manager.getBranch(), 100)).toBe(100);
+ manager.appendMessage(response(6_000));
+ expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(6_000);
  manager.appendMessage(response(12_000));
  manager.appendMessage(response(400));
  manager.appendCompaction('summary', '', 1);
  expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(12_000);
  expect(branchReplyFloor(manager.getBranch(), 10_000)).toBe(10_000);
  manager.branch(first);
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(8_192);
+ expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(4_096);
 });
 
 test.each(['length', 'overflow'] as const)('%s on the retained branch holds the entire reserve', kind => {
@@ -133,8 +135,9 @@ test('capacity receipts cannot enter summaries, omission counts, recall, keyword
 });
 
 test('a prompt cut that keeps only its summary survives guard receipts and saves a boundary that keeps the user', async () => {
+ // Still require a cut with the smaller 4,096 floor; the old incoming size now fits without one.
  const h = await harness({ at: 'prompt', complete: 76_000, summary: true, summaryOnly: true, summaryTokens: 8_000,
-  incoming: 68_000, host: 200, systemTokens: 800, limits: { contextWindow: 81_920, maxTokens: 8_192 }, reserveTokens: 16_384,
+  incoming: 72_000, host: 200, systemTokens: 800, limits: { contextWindow: 81_920, maxTokens: 8_192 }, reserveTokens: 16_384,
   compaction: { requestReserve: undefined }, persist: true });
  try {
   const r = await h.run();

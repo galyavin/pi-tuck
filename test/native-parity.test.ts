@@ -15,13 +15,13 @@ test('native points come from the installed shouldCompact and effective model ov
  expect(nativeCompactionPoint(1000, { enabled: true, reserveTokens: 2000, keepRecentTokens: 0 })).toBe(-1000);
 });
 
-const state: NativeState = { rawTokens: 7000, correctedTokens: 7000, factor: 1, window: 10000, room: 6000, nativeSettings: settings.getCompactionSettings(),
+const state: NativeState = { rawTokens: 7000, correctedTokens: 7000, factor: 1, window: 10000, room: 6000, hardLine: 8000, nativeSettings: settings.getCompactionSettings(),
  nativePoint: 6000, nativeAction: 'compact-then-send', afterFailedReply: false, branchEntries: 1, branchMessages: 1, leafId: 'x' };
 
 test('the native-parity refusal exceptions are narrow and retain the window boundary', () => {
  expect(refusalParity(state, 'cannot fit')).toEqual({ violation: true });
  expect(refusalParity({ ...state, correctedTokens: 10001 }, 'cannot fit').exception).toBe('past-window');
- expect(refusalParity({ ...state, correctedTokens: 10000 }, 'cannot fit').violation).toBe(true);
+ expect(refusalParity({ ...state, correctedTokens: 10000, hardLine: 10000 }, 'cannot fit').violation).toBe(true); // zero reserve/floor
  expect(refusalParity({ ...state, afterFailedReply: true }, 'cannot fit').exception).toBe('failed-reply');
  expect(refusalParity(state, 'Prompt check failed: partial summary').exception).toBe('prompt-check');
  expect(forcedPointParity(state, 5999)).toBe(true);
@@ -30,6 +30,14 @@ test('the native-parity refusal exceptions are narrow and retain the window boun
  expect(forcedPointParity({ ...state, nativePoint: null }, 6000)).toBe(true);
  expect(floorCase({ ...state, expectedHardLine: 8000 })).toBe(true);
  expect(floorCase({ ...state, expectedHardLine: 6500 })).toBe(false);
+});
+
+test('the reply-floor exception uses corrected count and is strict at the branch floor line on both builds', () => {
+ expect(refusalParity({ ...state, correctedTokens: 8001 }, 'cannot fit')).toEqual({ violation: false, exception: 'reply-floor' });
+ expect(refusalParity({ ...state, correctedTokens: 8000 }, 'cannot fit')).toEqual({ violation: true });
+ expect(refusalParity({ ...state, correctedTokens: 7999 }, 'cannot fit')).toEqual({ violation: true });
+ expect(refusalParity({ ...state, hardLine: undefined, expectedHardLine: 6500 }, 'baseline refusal').exception).toBe('reply-floor');
+ expect(refusalParity({ ...state, hardLine: 6500, expectedHardLine: 8000 }, 'cannot fit').violation).toBe(true);
 });
 
 test('useful-cut exempts only forced cuts whose setup plus prompt exceeds the room', () => {

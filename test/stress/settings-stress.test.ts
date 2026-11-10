@@ -102,7 +102,7 @@ const providerRows: ProviderRow[] = [];
 const cellRows: Record<string, unknown>[] = [];
 const usefulExemptCells = new Set<string>();
 let usefulExemptCuts = 0;
-const nativeCoverage = { observations: 0, sends: 0, compactThenSend: 0, refusals: 0, pastWindow: 0, failedReply: 0, promptCheck: 0, forcedCuts: 0, overflowCompactions: 0 };
+const nativeCoverage = { observations: 0, sends: 0, compactThenSend: 0, refusals: 0, pastWindow: 0, failedReply: 0, promptCheck: 0, replyFloor: 0, forcedCuts: 0, overflowCompactions: 0 };
 type NativeRefusal = { prompt: number; recovery: boolean; afterRequest: number; reason: string; state: NativeState };
 
 /** The builders of the cells whose sizes depend on the floor pi-tuck's guard measures. `namedCells()` fills this in and the test runs each one twice:
@@ -242,7 +242,7 @@ function limitsOf(cell: Pick<Cell, 'window' | 'reserve' | 'maxTokens'>, branch: 
  const failed = branch.some(e => e.type === 'message' && e.message.role === 'assistant' &&
   (e.message.stopReason === 'length' || (e.message.stopReason === 'error' && isContextOverflow(e.message as never))));
  const reserve = failed ? Math.max(cell.reserve, cell.maxTokens) : cell.reserve;
- const largest = Math.max(8_192, ...branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' && Number.isFinite(e.message.usage?.output) ? [e.message.usage.output] : []));
+ const largest = Math.max(4_096, ...branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' && Number.isFinite(e.message.usage?.output) ? [e.message.usage.output] : []));
  const replyFloor = failed ? reserve : Math.min(reserve, Math.ceil(largest));
  return { reserve, replyFloor, room: cell.window - reserve, hardLine: cell.window - replyFloor };
 }
@@ -668,6 +668,7 @@ async function runCellInner(cell: Cell): Promise<Run> {
    nativeCoverage.pastWindow += parity.filter(r => r.exception === 'past-window').length;
    nativeCoverage.failedReply += parity.filter(r => r.exception === 'failed-reply').length;
    nativeCoverage.promptCheck += parity.filter(r => r.exception === 'prompt-check').length;
+   nativeCoverage.replyFloor += parity.filter(r => r.exception === 'reply-floor').length;
   }
   cuts = savedCuts();
   if (!cell.probe && !covCounted.has(cell.name)) cellRows.push({ name: cell.name, window: cell.window,
@@ -1059,10 +1060,11 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
     reached: { state: 'an input over the provider window refused as context overflow, then an answered next prompt', check: e => e.overflows >= 1 && e.piOverflow >= 1 && e.requests[1]! >= 2 && e.requests.at(-1)! > 0 && e.answered >= 2 },
    }),
    base(`floor setup: ${provider} setup between room and hard line`, {
-    window: 32_768, reserve: 16_384, maxTokens: 8_192, setup: 22_000, system: 21_448, host: 500,
+    // Above the former 8,192-floor line, below the new 4,096-floor line; the first reply needs the full new minimum.
+    window: 32_768, reserve: 16_384, maxTokens: 8_192, setup: 26_000, system: 25_448, host: 500,
     prompts: [200, 200, 200], rounds: [0, 2, 0], results: [200], api: `fake ${provider}`,
-    extra: { model, stableHost: true, seededTail: { summary: 4_000, tail: 20_000, cycle: 2_000 }, replyWindow: 'clip', replyWindowOutput: n => n === 1 ? 8_192 : 2_048, persist: true, noOpening: true, cutAtDefault: true },
-    reached: { state: 'setup above room, the first reply uncut, all prompts answered and at least one cut', check: e => e.truncations === 0 && e.maxAssistant >= 8_192 && e.guard[0]! > e.room && e.answered === 3 && e.refused === 0 && e.cuts >= 1 },
+    extra: { model, stableHost: true, seededTail: { summary: 4_000, tail: 20_000, cycle: 2_000 }, replyWindow: 'clip', replyWindowOutput: n => n === 1 ? 4_096 : 2_048, persist: true, noOpening: true, cutAtDefault: true },
+    reached: { state: 'setup above room, the first reply uncut, all prompts answered and at least one cut', check: e => e.truncations === 0 && e.maxAssistant >= 4_096 && e.guard[0]! > e.room && e.answered === 3 && e.refused === 0 && e.cuts >= 1 },
    }),
   ];
  });

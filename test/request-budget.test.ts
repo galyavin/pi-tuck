@@ -18,7 +18,7 @@ test(`complete native request budget admits or rejects before effects: ${kind}`,
   const settings=SettingsManager.inMemory({retry:{enabled:false},compaction:{enabled:false,reserveTokens:32768,
    ...(kind==='effective-override'?{modelOverrides:{[`${model.provider}/${model.id}`]:{reserveTokens:model.contextWindow-1}}}:{})}});
   const manager=SessionManager.inMemory(dir);
-  const room=model.contextWindow-Math.min(8192,settings.getCompactionSettings(model).reserveTokens);
+  const room=model.contextWindow-Math.min(4096,settings.getCompactionSettings(model).reserveTokens);
   const words=kind==='conversation'?room+1000:kind==='tools'?room-1000:1;
   const sourceId=manager.appendMessage({role:'user',content:'x'.repeat(words*4),timestamp:0});
   const original=JSON.stringify(manager.getEntries().find(e=>e.id===sourceId));

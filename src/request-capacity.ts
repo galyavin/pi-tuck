@@ -5,7 +5,7 @@ import { parseRecords, splitSummary } from './tuck/core/transcript.js';
 
 /** Read the whole current branch, including replies before cuts. No session-local fallback flag. */
 export function branchReplyFloor(branch: readonly SessionEntry[], reserve: number): number {
-    let largest = 8_192;
+    let largest = 4_096;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;

@@ -43,10 +43,13 @@ export function nativeState(measure: BudgetObservation, settings: SettingsManage
  };
 }
 
-export function refusalParity(state: NativeState, reason: string): { violation: boolean; exception?: 'past-window' | 'failed-reply' | 'prompt-check' } {
+export function refusalParity(state: NativeState, reason: string): { violation: boolean; exception?: 'past-window' | 'failed-reply' | 'prompt-check' | 'reply-floor' } {
  if (state.correctedTokens > state.window) return { violation: false, exception: 'past-window' };
  if (state.afterFailedReply) return { violation: false, exception: 'failed-reply' };
  if (reason.includes('Prompt check failed')) return { violation: false, exception: 'prompt-check' };
+ // The independent floor oracle also supplies this line for the pre-floor baseline.
+ const hardLine = state.expectedHardLine ?? state.hardLine;
+ if (hardLine !== undefined && state.correctedTokens > hardLine) return { violation: false, exception: 'reply-floor' };
  return { violation: true };
 }
 
