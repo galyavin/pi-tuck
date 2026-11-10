@@ -486,7 +486,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 
 	pi.registerTool({
 		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
-        description: "Read anything from before a cut, word for word: use it before redoing a step or answering from memory. {index} reads the #N a summary shows (or {entryId}), optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {query} finds text by keyword and returns ranked passages with read coordinates; punctuation separates words; pass the returned next as {continuation} unchanged. " + (search ? "For what you would describe rather than quote, use tuck_search. " : "") + "{around: index or entryId, before, after} lists neighbouring entries; {} browses history; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
+        description: "Read anything from before a cut, word for word: use it before redoing a step or answering from memory. {index} reads the #N a summary shows (or {entryId}), optionally with query, offset and limit (UTF-16 characters, default 8000). {query} finds text by keyword (exact commands and paths match best) and returns ranked passages with read coordinates; punctuation separates words; pass the returned next as {continuation} unchanged. " + (search ? "For what you would describe rather than quote, use tuck_search. " : "") + "{around: index or entryId, before, after} lists neighbouring entries; {} browses history; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
             const input = checkedInput(raw);
@@ -518,7 +518,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 		},
 	});
     if (search) pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
-        description:"Find what a command printed, a file said, or what was tried or decided earlier, by meaning, even in other words. Use it before redoing work or answering from memory. Combines keyword and local embedding search; returns original evidence up to 20000 characters, not exhaustive. If it reports semantic search off or incomplete, a miss is not proof of absence. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists sources already read: pass each returned source's sourceSha and read unchanged.",
+        description:"Find what a command printed, a file said, or what was decided earlier, by meaning. Use it before redoing work or answering from memory. Put the exact command, path or identifier first in the query, then describe. Keyword plus local embedding search, up to 20000 characters, not exhaustive. If it reports semantic search off or incomplete, a miss is not proof of absence. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists sources already read: pass each returned source's sourceSha and read unchanged.",
         async execute(_id,raw,signal,_update,ctx){
             access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);
             recorder.capture("recall-action","authorized-native-tool-invocation-no-result-copy",input);

@@ -33,6 +33,8 @@ test("both tool descriptions open with when to use them; tuck_recall points to t
 	expect(on.tuck_recall!.description.startsWith("Read anything from before a cut, word for word: use it before redoing a step or answering from memory.")).toBe(true);
 	expect(on.tuck_search!.description).toContain("Use it before redoing work or answering from memory.");
 	expect(on.tuck_recall!.description).toContain("{around: index or entryId, before, after}");
+	expect(on.tuck_search!.description).toContain('Put the exact command, path or identifier first in the query, then describe.');
+	expect(on.tuck_recall!.description).toContain('exact commands and paths match best');
 	expect(off.tuck_recall!.description.includes("tuck_search")).toBe(false);
 });
 
