@@ -3,6 +3,25 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.21] - 2026-11-09
+
+### Fixed
+
+- **Semantic recall never started in `pi -p` (1.0.0 to 1.0.20).** pi-tuck skipped semantic recall whenever Pi ran with no UI, to keep a one-shot
+  run from starting the first-time download. That also skipped a runtime that was already installed. So jobs run with `pi -p` searched by keyword
+  only, while `tuck_search` said semantic recall was being set up. With no UI, an installed runtime now starts as it does in an interactive session.
+  Without one, pi-tuck says it is not set up and starts no download. RPC mode, which has a UI, was not affected.
+- **An off or failing semantic recall, or a bad settings file, is no longer silent in `pi -p`.** Pi shows no notices there, so pi-tuck writes each
+  such message once per session to stderr, never into the model's context.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.20.** Replay does not load the changed file (`index.ts`). In the replay, 43 requests
+  of one recording (live-s08-A) differed once. Three more runs of that recording on each build were identical, so it was noise under machine load.
+  0 lost and 0 dead tasks, the same 17 clips. Tests and CI; the settings stress test, none worse than 1.0.20.
+- Checked in real Pi 1.4.0: with `pi -p` and no runtime, one stderr line; with an installed runtime, semantic recall starts.
+- Sessions that are open keep the build they started with until they are restarted.
+
 ## [1.0.20] - 2026-11-09
 
 ### Fixed
