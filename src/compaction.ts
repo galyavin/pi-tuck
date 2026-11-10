@@ -1,5 +1,5 @@
 import { textOf } from "./tuck/core/content.js";
-import { requestReplyFloor, carriesPrompt, needsFullReplyReserve, thinkingOnlyLength, piContextSafetyMargin } from "./request-capacity.js";
+import { requestReplyFloor, carriesPrompt, needsFullReplyReserve, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
 import { createSemanticRecall, budgetSemantic, type SemanticRecallController } from "./semantic-recall";
 import { DIAGNOSTIC_BUILD, IncidentRecorder, attachReceipt, permittedEntries, receiptId, findReceiptEntry, type Receipt, type RecorderOptions } from "./diagnostics.js";
@@ -12,7 +12,6 @@ import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
 import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, systemPart, validCutAt,
     type AgentMessage, type Decision, type Messages, type Plan, type Target } from "./budget.js";
 import { getCurrentSystemMessage, isContextOverflow, normalizeContext, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
-import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { calculateContextTokens, convertToLlm, estimateTokens, shouldCompact, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry, type SessionBoundaryDraft, type TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
@@ -135,9 +134,9 @@ export interface CompactionOptions {
 }
 
 export async function installCompaction(pi: ExtensionAPI, options: CompactionOptions = {}) {
-    const piMargin = options.requestReserve ? 0 : await piContextSafetyMargin();
-    const piClamp = await import('@earendil-works/pi-ai/api/simple-options')
-        .then(module => module.clampMaxTokensToContext).catch(() => undefined);
+    const piMath = await loadPiRequestMath();
+    const piMargin = options.requestReserve ? 0 : await piContextSafetyMargin(piMath);
+    const piClamp = piMath?.clampMaxTokensToContext;
     const cutAt = options.cutAt ?? DEFAULT_CUT_AT;
     if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
     const semantic = options.semanticRecall ?? createSemanticRecall(), search = options.search ?? true;
@@ -350,7 +349,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const context = normalizeContext({ messages: convertToLlm(messages) });
         const cap = piClamp?.(ctx.model!, context, ctx.model!.maxTokens);
         return { cap, leavesFloor: cap === undefined || cap >= limits(ctx).replyFloor,
-            estimate: estimateContextTokens(context).tokens };
+            estimate: piMath ? piMath.estimateContextTokens(context).tokens : 0 };
     };
     const projectedRequest = (messages: Messages, ctx: ExtensionContext, host: Messages, incoming: Messages, prompt: string, tools: readonly string[], cut: boolean) => {
         const enabled = cut || historyToolsEnabled(ctx), shapes = toolShapes(historyToolNames(pi, tools, enabled));

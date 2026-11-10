@@ -3,6 +3,24 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.26] - 2026-11-10
+
+### Fixed
+
+- **1.0.25 failed to load in an installed Pi** ("Cannot find module '@earendil-works/pi-ai/utils/estimate'"). Pi's extension loader resolves
+  only a few pi-ai entry points for an installed package, and 1.0.25 imported another one by name.
+- **Since 1.0.23, the check of Pi's own reply cap never ran in an installed Pi**, for the same reason. It loaded only in tests and the eval
+  harness, where pi-ai resolves by name; the installed package silently fell back without it. The 4,096-token margin in the hard line held,
+  because it fell back to the same value.
+  - pi-tuck now loads Pi's reply clamp and estimator from the running Pi's own install. If it can't find them (a host embedding Pi), it
+    keeps the fallback as before.
+
+### Release gates
+
+- **New gate:** the packed tarball was loaded in the real installed Pi before publishing. It loaded, and Pi's clamp resolved from Pi's own
+  install.
+- Requests are unchanged from 1.0.25 wherever pi-ai resolves by name, which covers replay, stress and tests. Tests and CI pass.
+
 ## [1.0.25] - 2026-11-10
 
 ### Fixed

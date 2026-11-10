@@ -3,14 +3,47 @@ import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import type { AgentMessage, Messages } from './budget.js';
 import { parseRecords, splitSummary } from './tuck/core/transcript.js';
 
-/** Read Pi's private safety allowance through its public clamp, rather than copying it.
- * Older/unavailable subpaths fall back to Pi 1.2–1.5's documented 4,096-token allowance.
- */
-export async function piContextSafetyMargin(): Promise<number> {
+type SimpleOptions = typeof import('@earendil-works/pi-ai/api/simple-options');
+type Estimate = typeof import('@earendil-works/pi-ai/utils/estimate');
+export type PiRequestMath = { clampMaxTokensToContext: SimpleOptions['clampMaxTokensToContext']; estimateContextTokens: Estimate['estimateContextTokens'] };
+
+/** Pi's own request arithmetic: its reply clamp and the estimator behind it, as the running Pi has them.
+ * An installed extension cannot import these subpaths by name: Pi's extension loader aliases only pi-ai's root, compat, models, oauth and
+ * providers/all, and an installed package has no node_modules of its own. So resolve them first by name (tests, the eval harness, a dev
+ * checkout), then from the running Pi's own install, beside its executable. If neither works (an SDK host), there is none, and callers
+ * keep their fallbacks. */
+export async function loadPiRequestMath(): Promise<PiRequestMath | undefined> {
     try {
-        const [{ clampMaxTokensToContext }, { estimateContextTokens }] = await Promise.all([
-            import('@earendil-works/pi-ai/api/simple-options'), import('@earendil-works/pi-ai/utils/estimate'),
-        ]);
+        const [simple, estimate] = await Promise.all([import('@earendil-works/pi-ai/api/simple-options'), import('@earendil-works/pi-ai/utils/estimate')]);
+        return { clampMaxTokensToContext: simple.clampMaxTokensToContext, estimateContextTokens: estimate.estimateContextTokens };
+    } catch { /* not resolvable by name: an installed extension */ }
+    try {
+        // pi-ai's exports map these subpaths for `import` only (./api/* -> ./dist/api/*.js), so find the package beside Pi's executable and
+        // import the files that map names.
+        const [{ existsSync, realpathSync }, { dirname, join }, { pathToFileURL }] = await Promise.all([import('node:fs'), import('node:path'), import('node:url')]);
+        const entry = process.argv[1];
+        if (!entry) return undefined;
+        let dir = dirname(realpathSync(entry)), root: string | undefined;
+        for (let up = 0; up < 12 && !root; up++, dir = dirname(dir)) {
+            const candidate = join(dir, 'node_modules', '@earendil-works', 'pi-ai');
+            if (existsSync(join(candidate, 'dist', 'api', 'simple-options.js'))) root = candidate;
+            if (dirname(dir) === dir) break;
+        }
+        if (!root) return undefined;
+        const [simple, estimate] = await Promise.all([
+            import(pathToFileURL(join(root, 'dist', 'api', 'simple-options.js')).href) as Promise<SimpleOptions>,
+            import(pathToFileURL(join(root, 'dist', 'utils', 'estimate.js')).href) as Promise<Estimate>]);
+        if (typeof simple.clampMaxTokensToContext !== 'function' || typeof estimate.estimateContextTokens !== 'function') return undefined;
+        return { clampMaxTokensToContext: simple.clampMaxTokensToContext, estimateContextTokens: estimate.estimateContextTokens };
+    } catch { return undefined; }
+}
+
+/** Read Pi's private safety allowance through its public clamp, rather than copying it.
+ * Without Pi's request arithmetic, fall back to Pi 1.2–1.5's documented 4,096-token allowance.
+ */
+export async function piContextSafetyMargin(math?: PiRequestMath): Promise<number> {
+    try {
+        const { clampMaxTokensToContext, estimateContextTokens } = math ?? await loadPiRequestMath() ?? (() => { throw new Error('No Pi request math'); })();
         const window = 1_000_000, context = normalizeContext({ messages: [] });
         const margin = window - estimateContextTokens(context).tokens - clampMaxTokensToContext({ contextWindow: window, maxTokens: window } as never, context, window);
         if (!Number.isSafeInteger(margin) || margin < 0 || margin >= window) throw new Error('Invalid Pi context margin');
