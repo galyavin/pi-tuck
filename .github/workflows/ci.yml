@@ -63,7 +63,10 @@ jobs:
         env:
           STRESS: "1"
           STRESS_REPORT: "1"
-        run: npx vitest run test/stress
+          # Strict: any rule violation fails the job. Exempt refusals are only those an independent clause allows (past the window, a reply
+          # that did not fit, above the oracle's hard line, or Pi's own cap on the smallest answering request under the floor).
+          STRESS_STRICT: "1"
+        run: npx vitest run test/stress --testTimeout=600000
       - name: Failure table
         if: failure()
         uses: actions/upload-artifact@v4

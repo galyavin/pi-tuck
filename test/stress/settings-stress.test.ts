@@ -1405,9 +1405,12 @@ for (const cell of thinkingLengthCells) {
   expect(r.caps[1]).toBeGreaterThanOrEqual(r.outputs[0]!);
   if (cell.above) expect(r.caps[1]).toBeGreaterThan(r.outputs[0]!);
   expect(r.replyFloor).toBe(Math.max(3_584, ...r.outputs));
-  expect(r.omitted && r.preserved && r.wholePrompt && r.deepest && r.noOptionalHistory).toBe(true);
+  expect(r.omitted && r.preserved && r.wholePrompt).toBe(true);
+  // The deepest cut only where it buys reply room (above the room); below it Pi's cap is already the model's whole reply cap.
+  expect(r.deepest && r.noOptionalHistory).toBe(cell.above);
   expect(r.faults).toEqual([]);
-  expect(r.notices).toEqual([]);
+  // A retried reply that stops again leaves the one length-stop notice (K10); a retry that finishes leaves none.
+  expect(r.notices.length).toBe(cell.twice ? 1 : 0);
  }, 300_000);
 }
 // ---- End thinking-only length recovery cells. ----
