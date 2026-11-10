@@ -3,6 +3,28 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.24] - 2026-11-10
+
+### Fixed
+
+- **A prompt's cut could reach a run it was not planned for.** pi-tuck plans a prompt's cut when the prompt arrives. When another extension
+  handled that prompt, no run started, and the plan waited for the next run:
+  - **A run started by a custom message** carried a cut sized for the prompt that never ran: deeper than needed.
+  - **After a move in the session tree (`/tree`),** the plan was applied on the new branch. Its kept entry was not on that branch, so the request
+    lost the custom message that started the run, even on a branch that needed no cut.
+
+  Now a run started by a custom message plans afresh, and a move in the tree drops any waiting plan.
+
+### Added
+
+- Lifecycle tests: a handled prompt, then a custom-message run, and the same with a move in the tree first.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.23:** 13,946 requests on 29 recordings, read per request, 0 differ beyond the
+  base's own run-to-run noise; clips 17 → 17; 0 lost and 0 dead tasks.
+- **Stress, 310 cells:** findings the same as 1.0.23, cell for cell. Tests (715) and CI.
+
 ## [1.0.23] - 2026-11-10
 
 ### Fixed
