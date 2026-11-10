@@ -1,3 +1,4 @@
+import { textOf } from "./tuck/core/content.js";
 import { branchReplyFloor, carriesPrompt } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
 import { createSemanticRecall, budgetSemantic, type SemanticRecallController } from "./semantic-recall";
@@ -104,6 +105,8 @@ export interface CompactionOptions {
  onSemanticSetting?: (enabled: boolean) => Promise<unknown>;
  semanticStatus?: () => unknown;
  diagnostics?: RecorderOptions;
+ /** Optional read-only observation of actual corrected budget checks; no request content. */
+ observeBudget?: (measurement: { rawTokens: number; tokens: number; factor: number; response: number; room: number; hardLine?: number; context: ExtensionContext }) => void;
 	/** Optional estimated complete-input ceiling, separate from physical output reservation.
 	 * The host owns final serialization/transport counting; this is not an exact wire-token cap. */
 	activeInputTokens?: number | ((ctx: ExtensionContext) => number);
@@ -212,6 +215,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let admittedRun = false;
     let runPrompt: string | undefined;
+    const protectedPrompt = (ctx: ExtensionContext) => runPrompt ? ctx.sessionManager.getBranch().findLast(entry =>
+        entry.type === "message" && entry.message.role === "user" && textOf(entry.message.content).includes(runPrompt!))?.id : undefined;
+    const promptRefusal = () => new Refusal("Prompt check failed: the whole starting prompt cannot fit after cutting to the band and room, shrinking the summary and clipping fresh results. Shorten the prompt or choose a model with a larger context window, then retry");
     let estimatedTokens = 0;
     // One serial request, one accounting identity; observations never certify new content. A new identity (the first request after a session
     // start, or a model switch) starts with the window its branch's newest receipt recorded for that identity, else that receipt's factor, else the model's measured undercount or 1 (`seedWindow`).
@@ -226,6 +232,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The factor is max(1, the last CALIBRATION_WINDOW paired ratios, overflow bounds and seed): it rises at once and a stale high ratio ages out.
     const learn = (value: number) => { ratios.push(value); if (ratios.length > CALIBRATION_WINDOW) ratios.shift(); factor = Math.max(1, ...ratios); };
     const corrected = (tokens: number, ctx: ExtensionContext) => { identityFor(ctx); return Math.ceil(tokens * factor); };
+    const observeBudget = (rawTokens: number, ctx: ExtensionContext) => {
+        if (options.observeBudget) options.observeBudget({ rawTokens, tokens: corrected(rawTokens, ctx), factor, ...limits(ctx), context: ctx });
+    };
     // The cut planner's raw reserve for the target limit, on the same factor as every other consumer.
     const planReserve = (target: Target, room: number, band: number, mandatory: number, ctx: ExtensionContext) => {
         identityFor(ctx);
@@ -461,6 +470,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
             const mandatory = system + host, band = decisionBand(ctx, room, system);
             const before = plannerMeasureFor(ctx)(saved);
+            observeBudget(before + mandatory, ctx);
             // Pi's own usage threshold (reason "threshold") counts the last reply's output tokens, reasoning included, plus the messages after
             // it: a basis this compactor does not plan on. It may ask for a cut on a request that fits. This compactor cuts only where its own
             // trigger would: nothing below the band, an opportunistic cut inside it, a due cut at or above the room. A refusal is a plain
@@ -480,7 +490,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
                     // Every cut asked while no run is admitted (an operator's cut) is planned for a run that has not begun: the session has moved on
                     // from any run that ended. A retry is inside its run.
-                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || !admittedRun);
+                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || !admittedRun, admittedRun ? protectedPrompt(ctx) : undefined);
                     return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction, reserve }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 },
@@ -541,6 +551,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const band = decisionBand(ctx, room, system);
         const host = hostSnapshot ?? hostTokens(ctx), measure = measureFor(ctx), before = measure(saved);
         const incoming = incomingPart + system, mandatory = incoming + host;
+        observeBudget(before + mandatory, ctx);
         estimatedTokens = corrected(before + mandatory, ctx);
         if (!fits(incoming, limits(ctx).hardLine, ctx))
             throw new CapacityError("Incoming Pi prompt and response reserve cannot fit the estimated request budget");
@@ -656,9 +667,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // request besides the fresh results. Reset per decision, so a retry sizes itself against the cut it is retrying, not an earlier attempt's.
         let previews: Messages[] = [];
         let floorKept: number | undefined;
+        let wholePromptFloor: number | undefined;
+        const protectedId = reason === "tool-loop" ? protectedPrompt(ctx) : undefined;
         const decide = (targetRoom = room, targetBand = band) => {
             previews = [];
             floorKept = undefined;
+            wholePromptFloor = undefined;
             const before = measure(saved);
             const gate = gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx) });
             if (gate.kind !== "plan") return gate;
@@ -667,8 +681,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>["compaction"]>; reserve: number }> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
-                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: densityTokens ?? before, previousSummary }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
+                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: densityTokens ?? before, previousSummary, protectedPromptEntryId: protectedId }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
                 if (!draft.compaction) {
+                    if (protectedId && draft.floorMessages) wholePromptFloor = measure(draft.floorMessages) + mandatory;
                     // The planner's own floor, so a clip's second budget is measured against what the smallest cut really keeps.
                     if (draft.floorMessages && event.toolResults) {
                         const fresh = new Set(event.toolResults.map(result => result.toolCallId));
@@ -714,6 +729,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         };
         tryClips(room, band);
         const before = measure(saved);
+        observeBudget(before + mandatory, ctx);
         estimatedTokens = corrected(before + mandatory, ctx);
         const { hardLine } = limits(ctx);
         if (hardLine > room && (decision.kind === "defer" || decision.kind === "fault")) {
@@ -721,7 +737,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             decision = decide(hardLine, hardLine);
             tryClips(hardLine, hardLine);
         }
-        if (decision.kind === "fault" && reason === "tool-loop") throw new (decision.capacity ? CapacityError : Refusal)(decision.message);
+        if (decision.kind === "fault" && reason === "tool-loop") {
+            if (wholePromptFloor !== undefined && !fits(wholePromptFloor, hardLine, ctx)) throw promptRefusal();
+            throw new (decision.capacity ? CapacityError : Refusal)(decision.message);
+        }
         if (decision.kind !== "cut") return;
         const compaction = captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, reason, before, true, false, previousSummary,
             { response, host, mandatory, target: decision.target, margin: room - band });
@@ -828,10 +847,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const messages = historyToolsEnabled(ctx) ? historyToolDeclarations(event.messages, toolShapes(pi.getActiveTools()), true) : event.messages;
             const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
             const tokens = system + conversationTokens(messages);
+            observeBudget(tokens, ctx);
             estimatedTokens = corrected(tokens, ctx);
             const { room, hardLine } = limits(ctx);
             if (runPrompt !== undefined && !carriesPrompt(messages, runPrompt))
-                throw new Refusal("Prompt check failed: the request is missing the whole text of the prompt that started this run");
+                throw new Refusal("Prompt check failed: the request is missing the whole text of the prompt that started this run. Shorten the prompt or choose a model with a larger context window, then retry");
 			if (!fits(tokens, hardLine, ctx))
 				throw new CapacityError("Complete Pi context and response reserve exceed the estimated request budget");
             if (estimatedTokens > room) receipt("above-room", "Request exceeds the room and fits the hard line", ctx);

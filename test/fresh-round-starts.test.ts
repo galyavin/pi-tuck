@@ -32,7 +32,7 @@ for (const [start, go] of Object.entries(throughPi))
 		const h = await harness({ ...refused, onBeforeCompact: event => tail(event.branchEntries), onPrompt: ctx => tail(ctx.sessionManager.getBranch()) });
 		try {
 			const first = await h.run();
-			expect(first.faults.join(' '), first.probe).toContain('cannot fit or reduce the request budget');
+			expect(first.faults.join(' '), first.probe).toContain('Prompt check failed: the whole starting prompt cannot fit');
 			const ended = h.manager.getBranch();
 			expect(isDiscarded(ended.at(-1)!), first.probe).toBe(true);
 			const marks = { faults: h.faults.length, cuts: h.compactions().length, requests: h.state.requests, tails: tails.length };

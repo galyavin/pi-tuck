@@ -52,14 +52,14 @@ import { prepareKeywordQuery } from "./tuck/core/keyword-query";
 import { searchEntriesDetailed } from "./tuck/core/search-entries";
 export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
 /** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation. */
-export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false, newPrompt = false) {
- return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual, newPrompt }, ctx, reserveTokens, measure, policy, retainCurrentInput);
+export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false, newPrompt = false, protectedPromptEntryId?: string) {
+ return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual, newPrompt, protectedPromptEntryId }, ctx, reserveTokens, measure, policy, retainCurrentInput);
 }
 /** Shared compiler observes canonical branch and current token estimate; no native preparation utility. */
 /** `newPrompt`: the cut is planned for a run that has not begun (a prompt Pi has not appended yet, an operator's manual cut, Pi's own cut before
  * a run a custom message starts); the session has moved on from an ended run.
  * `reRenderSummary`: the cut is due, so its summary may be re-rendered smaller (see the `no_live_messages` branch below). */
-export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean; reRenderSummary?: boolean }, ctx: ExtensionContext,
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
  const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
@@ -143,6 +143,9 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const current = entries[userPosition];
     const userContent = current?.type === "message" && current.message.role === "user" ? current.message.content : undefined;
     const textOnly = isTextOnly(userContent);
+    // Steering can become the latest user source while the run still owns its original prompt.
+    const startingPosition = entries.findIndex(entry => entry.id === input.protectedPromptEntryId && entry.type === "message" && entry.message.role === "user");
+    const starting = entries[startingPosition];
     // Anchor the actual first source only; a native omission never promotes a later prompt.
     const firstUser = branch.find(entry => entry.type === "message" && entry.message.role === "user");
     const firstUserPosition = entries.findIndex(entry => entry.id === firstUser?.id && entry.type === "message");
@@ -280,7 +283,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 if (index !== undefined && quoted.records.length) { selected.add(index); if (quoted.whole) whole.add(index); }
             };
             if (userPosition >= 0 && userPosition < boundary && textOnly) add(current!, Infinity);
-            for (const entry of anchors) if (entry.id !== current?.id && positions.get(entry.id)! < boundary) add(entry, length);
+            if (startingPosition >= 0 && startingPosition < boundary && starting?.id !== current?.id) add(starting!, Infinity);
+            for (const entry of anchors) if (entry.id !== current?.id && entry.id !== starting?.id && positions.get(entry.id)! < boundary) add(entry, length);
             const omissions: TranscriptRecord[] = [];
             for (const role of ["user", "assistant", "toolResult"] as const) {
                 const list = units[role], prefix = prefixes[role];

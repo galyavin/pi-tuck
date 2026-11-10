@@ -81,6 +81,8 @@ export interface Options {
  onWire?: (context: unknown) => void;
  /** Stable host text for replay comparisons; ordinary stress keeps its changing host witness. */
  stableHost?: boolean;
+ /** Observe pi-tuck refusals without changing their handling. */
+ onFailure?: (error: unknown) => void;
  /** Another model from the catalogue, for a case that depends on which API it uses. */
  model?: { provider: string; id: string };
  /** Persist the session to a file, then close it and open it again: the caller starts from a saved session. */
@@ -294,7 +296,7 @@ export async function harness(options: Options) {
     // The response reserve is Pi's setting, which is what the session actually holds; a case that needs an exact reserve passes its own below.
     requestReserve: () => ({ response: options.reserveTokens ?? 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
-    fail: e => faults.push(String(e) + (process.env.BUDGET_TRACE ? ' @ ' + String((e as Error).stack).split('\n').slice(1, 4).join(' | ') : '')), settings,
+    fail: e => { faults.push(String(e) + (process.env.BUDGET_TRACE ? ' @ ' + String((e as Error).stack).split('\n').slice(1, 4).join(' | ') : '')); options.onFailure?.(e); }, settings,
     ...options.compaction,
     ...(options.cutAtDefault ? { cutAt: undefined } : { cutAt: options.compaction?.cutAt ?? 1 }),
    });
@@ -511,7 +513,7 @@ export async function harness(options: Options) {
   const runEnd = () => allCompactions().filter(isRunEnd);
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
-   dir, manager, session, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
+   dir, manager, session, settings, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, extension: () => extension!, mandatory,
    // Open the session's file again the way Pi does when a saved session is resumed, and report how many messages came back. The run's own session is
    // left alone: this reads what reached the disk, which is all the operator has if the run ends where it stands.
    reopenFile: () => {
