@@ -114,6 +114,8 @@ interface Metrics {
 // the cut is judged by its ratio to it: a slow machine moves both, and CPU time leaves out the time other processes take, so a loaded machine passes
 // and a cut that got slower fails.
 const referenceHistory = Array.from({ length: 600 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `turn ${i}: ` + 'reference words '.repeat(40 + i % 17) }));
+// The goldens' cutPerReference values were recorded here (GOLDEN_RECORD=1 on Apple silicon).
+const GOLDEN_PLATFORM = 'darwin-arm64';
 const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
 function referenceCpuMs(): number {
 	const times: number[] = [];
@@ -262,10 +264,12 @@ for (const make of sessions) {
 			// A share is a ratio of few cuts: 0 stays 0, otherwise it may move by 10% of the golden or by 0.05, whichever is more.
 			if (Math.abs(m.lowYieldShare - g.lowYieldShare) > (g.lowYieldShare === 0 ? 0 : Math.max(g.lowYieldShare * 0.1, 0.05)))
 				violations.push(`lowYieldShare ${m.lowYieldShare}, golden ${g.lowYieldShare}`);
-			// Cut time against the same-run reference: at most three times the golden's ratio. A machine's speed and load move both, so a slow runner
-			// passes and a cut that got slower fails. Under 5 ms a cut is timer noise, and medianCutMs itself is a record, not a bound.
-			if (m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5 && m.cutPerReference! > g.cutPerReference * 3)
-				violations.push(`cutPerReference ${m.cutPerReference}, golden ${g.cutPerReference} (limit three times; median cut ${m.medianCutMs} ms)`);
+			// Cut time against the same-run reference: at most three times the golden's ratio on the platform the golden was recorded on, six times
+			// on another (the reference and the cut do not scale alike across CPUs: an x86 Linux runner read 3.6 times once). Load moves both, so a
+			// busy machine passes, and a tenfold slower cut fails everywhere. Under 5 ms a cut is timer noise; medianCutMs is a record, not a bound.
+			const limit = `${process.platform}-${process.arch}` === GOLDEN_PLATFORM ? 3 : 6;
+			if (m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5 && m.cutPerReference! > g.cutPerReference * limit)
+				violations.push(`cutPerReference ${m.cutPerReference}, golden ${g.cutPerReference} (limit ${limit} times; median cut ${m.medianCutMs} ms)`);
 			expect(violations, JSON.stringify({ got: m, golden: g })).toEqual([]);
 		}, 600_000);
 	}
