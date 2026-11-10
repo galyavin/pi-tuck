@@ -105,7 +105,26 @@ interface Metrics {
 	/** Boundaries where the decision was a fault, or a draft reported that the mandatory context cannot fit or reduce the request budget. */
 	refusals: number;
 	medianCutMs: number;
+	/** The median, over cuts, of a cut's CPU time over the CPU time of the reference workload run right after it. */
+	cutPerReference?: number;
 	note?: string;
+}
+
+// The reference workload: fixed string and JSON work on a fixed history, the kind of work a cut does. It is timed beside each cut in CPU time, and
+// the cut is judged by its ratio to it: a slow machine moves both, and CPU time leaves out the time other processes take, so a loaded machine passes
+// and a cut that got slower fails.
+const referenceHistory = Array.from({ length: 600 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `turn ${i}: ` + 'reference words '.repeat(40 + i % 17) }));
+const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+function referenceCpuMs(): number {
+	const times: number[] = [];
+	for (let s = 0; s < 3; s++) {
+		const started = cpuMs();
+		let n = 0;
+		for (const m of JSON.parse(JSON.stringify(referenceHistory)) as typeof referenceHistory) n += m.content.split(' ').filter(w => w.length > 3).join(' ').length;
+		if (n === 0) throw new Error('reference workload did nothing');
+		times.push(cpuMs() - started);
+	}
+	return times.sort((a, b) => a - b)[1]!;
 }
 
 function replay(session: Session, { window, response, mandatory }: Window, reference = false): Metrics & { refusalReasons: string[] } {
@@ -121,7 +140,7 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 	const room = window - response, band = bandOf(room, DEFAULT_CUT_AT), fits = (tokens: number, limit: number) => tokens < limit;
 	const carried = () => manager.buildSessionProjection().messages.reduce((n, m) => n + estimateTokens(m), 0);
 	let rounds = 0, refusals = 0, low = 0;
-	const refusalReasons: string[] = [], carriedAfter: number[] = [], chars: number[] = [], times: number[] = [];
+	const refusalReasons: string[] = [], carriedAfter: number[] = [], chars: number[] = [], times: number[] = [], ratios: number[] = [];
 	session.messages.forEach((message, i) => {
 		manager.appendMessage(message);
 		if (message.role !== 'toolResult' || session.messages[i + 1]?.role === 'toolResult') return;
@@ -131,7 +150,7 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 		const previousSummary = (saved.find(m => (m as { role: string }).role === 'compactionSummary') as { summary?: string } | undefined)?.summary;
 		let refused: string | undefined;
 		const plans: Record<string, unknown> = {};
-		const started = performance.now();
+		const started = performance.now(), startedCpu = cpuMs();
 		const decide = reference ? baselineBudget!.decideCut : decideCut;
 		const decision = decide({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
 			plan: (target): Plan<{ compaction: NonNullable<ReturnType<typeof tuckObservedDraft>['compaction']> }> => {
@@ -148,7 +167,7 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 				assertNativeToolRounds(messages);
 				return { draft: true, after: measure(messages as never[]), mode: draft.mode, compaction: draft.compaction };
 			} });
-		const ms = performance.now() - started;
+		const ms = performance.now() - started, cutCpu = cpuMs() - startedCpu;
         if (process.env.PART3_DECISION_REPORT && baseline && !reference) {
             const oldPlans: Record<string, unknown> = {};
             const oldDecision = baselineBudget!.decideCut({ total: before + mandatory, mandatory, before, room, band, fits, unreduced: UNREDUCED,
@@ -194,7 +213,7 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 		}
 		if (before - decision.plan.after < room / 10) low++;
         observation.carried = carried(); observations.push(observation);
-		carriedAfter.push(observation.carried); chars.push(c.summary.length); times.push(ms);
+		carriedAfter.push(observation.carried); chars.push(c.summary.length); times.push(ms); ratios.push(cutCpu / Math.max(referenceCpuMs(), 0.01));
 	});
 	const mean = (xs: number[]) => xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0;
 	const max = (xs: number[]) => Math.max(0, ...xs);
@@ -202,7 +221,7 @@ function replay(session: Session, { window, response, mandatory }: Window, refer
 	const cuts = carriedAfter.length;
 	return { rounds, cuts, cutsPer100Rounds: Math.round(cuts / rounds * 1e4) / 100, lowYieldShare: cuts ? Math.round(low / cuts * 1e4) / 1e4 : 0,
 		carriedMean: mean(carriedAfter), carriedMax: max(carriedAfter), summaryCharsMean: mean(chars), summaryCharsMax: max(chars),
-		refusals, medianCutMs: Math.round(median(times) * 10) / 10, ...(cuts ? {} : { note: 'never cuts at this window: the session stays below the band' }), refusalReasons };
+		refusals, medianCutMs: Math.round(median(times) * 10) / 10, ...(cuts ? { cutPerReference: Math.round(median(ratios) * 100) / 100 } : {}), ...(cuts ? {} : { note: 'never cuts at this window: the session stays below the band' }), refusalReasons };
 }
 
 const sessions: (() => Session)[] = [() => recording('prose-heavy'), () => recording('low-prose'), () => recording('large-tool-output'), () => syntheticLowProse(SYNTHETIC_TURNS)];
@@ -243,9 +262,10 @@ for (const make of sessions) {
 			// A share is a ratio of few cuts: 0 stays 0, otherwise it may move by 10% of the golden or by 0.05, whichever is more.
 			if (Math.abs(m.lowYieldShare - g.lowYieldShare) > (g.lowYieldShare === 0 ? 0 : Math.max(g.lowYieldShare * 0.1, 0.05)))
 				violations.push(`lowYieldShare ${m.lowYieldShare}, golden ${g.lowYieldShare}`);
-			// A runner can be many times slower than the laptop that recorded the golden, and a loaded laptop too (133.9 against 7.8 once, with two
-			// suites running side by side): twenty times its median, plus 100 ms. That still fails a cut whose time grows with the history.
-			if (m.medianCutMs > g.medianCutMs * 20 + 100) violations.push(`medianCutMs ${m.medianCutMs}, golden ${g.medianCutMs} (limit twenty times plus 100)`);
+			// Cut time against the same-run reference: at most three times the golden's ratio. A machine's speed and load move both, so a slow runner
+			// passes and a cut that got slower fails. Under 5 ms a cut is timer noise, and medianCutMs itself is a record, not a bound.
+			if (m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5 && m.cutPerReference! > g.cutPerReference * 3)
+				violations.push(`cutPerReference ${m.cutPerReference}, golden ${g.cutPerReference} (limit three times; median cut ${m.medianCutMs} ms)`);
 			expect(violations, JSON.stringify({ got: m, golden: g })).toEqual([]);
 		}, 600_000);
 	}
