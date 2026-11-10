@@ -220,8 +220,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let admittedRun = false;
     let runPrompt: string | undefined;
+    let runPromptMessageType: "user" | "custom" = "user";
     let thinkingRetryPending = false;
     const protectedPrompt = (ctx: ExtensionContext) => runPrompt ? ctx.sessionManager.getBranch().findLast(entry =>
+        runPromptMessageType === "custom" ? entry.type === "custom_message" && textOf(entry.content) === runPrompt :
         entry.type === "message" && entry.message.role === "user" && textOf(entry.message.content).includes(runPrompt!))?.id : undefined;
     const promptRefusal = () => new Refusal("Prompt check failed: the whole starting prompt cannot fit after cutting to the band and room, shrinking the summary and clipping fresh results. Shorten the prompt or choose a model with a larger context window, then retry");
     let estimatedTokens = 0;
@@ -699,7 +701,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // input, so no run started for it): plan afresh.
         const prompted = phase === "decided" && event.messageType !== "custom";
         phase = "starting";
-        runPrompt = event.messageType === "custom" ? undefined : event.prompt;
+        runPromptMessageType = event.messageType;
+        // Image-only and empty custom messages have no starting text to quote.
+        runPrompt = event.messageType === "custom" ? textOf(event.message.content) || undefined : event.prompt;
         try {
             syncHistoryTools(ctx);
             if (prompted) access(); // decided on input; a failure latched there still stops the run
@@ -915,7 +919,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         }
         if (decision.kind !== "cut") throw new CapacityError(clampMessage);
         const messages = projectedRequest(decision.plan.messages, view, hostInput, event.context.pendingMessages, ctx.getSystemPrompt(), pi.getActiveTools(), true);
-        if (runPrompt !== undefined && !carriesPrompt(messages, runPrompt)) throw promptRefusal();
+        if (runPrompt !== undefined && !carriesPrompt(messages, runPrompt, runPromptMessageType)) throw promptRefusal();
         const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
         const tokens = system + conversationTokens(messages), check = requestClamp(messages, view);
         const { response, room, hardLine } = limits(view);
@@ -1019,7 +1023,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             observeBudget(tokens, ctx);
             estimatedTokens = corrected(tokens, ctx);
             const { room, hardLine } = limits(ctx);
-            if (runPrompt !== undefined && !carriesPrompt(messages, runPrompt))
+            if (runPrompt !== undefined && !carriesPrompt(messages, runPrompt, runPromptMessageType))
                 throw new Refusal("Prompt check failed: the request is missing the whole text of the prompt that started this run. Shorten the prompt or choose a model with a larger context window, then retry");
 			if (!fits(tokens, hardLine, ctx))
 				throw new CapacityError("Complete Pi context and response reserve exceed the estimated request budget");

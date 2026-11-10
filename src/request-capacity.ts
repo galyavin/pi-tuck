@@ -84,17 +84,17 @@ export function requestReplyFloor(branch: readonly SessionEntry[], reserve: numb
     return maxTokens !== undefined && maxTokens > 0 ? Math.min(floor, maxTokens) : floor;
 }
 
-/** Check decoded text, including a whole verbatim user quote in our summary; never JSON-escaped substring matching. */
-export function carriesPrompt(messages: Messages, prompt: string): boolean {
+/** Check decoded starting text, native or quoted whole with its original role; never JSON-escaped substring matching. */
+export function carriesPrompt(messages: Messages, prompt: string, role: 'user' | 'custom' = 'user'): boolean {
     if (!prompt.length) return true;
     return messages.some(message => {
-        if (message.role === 'user') {
+        if (message.role === role) {
             const text = typeof message.content === 'string' ? message.content : message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
             return text.includes(prompt);
         }
         if (message.role !== 'compactionSummary') return false;
         const split = splitSummary(message.summary);
         return split !== null && split !== undefined && parseRecords(split.body, split.version).some(record =>
-            record.kind === 'excerpt' && record.role === 'user' && record.text.includes(prompt));
+            record.kind === 'excerpt' && record.role === role && record.text.includes(prompt));
     });
 }

@@ -74,7 +74,7 @@ function seeds(): number[] {
     if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff) throw new Error('LIFECYCLE_SEED must be a uint32 (decimal or 0x hexadecimal)');
     return [seed];
   }
-  return Array.from({ length: positiveInteger('LIFECYCLE_SEEDS', 3) }, (_, i) => (0x51ec7a11 + Math.imul(i, 0x9e3779b9)) >>> 0);
+  return [0, ...Array.from({ length: positiveInteger('LIFECYCLE_SEEDS', 3) }, (_, i) => (0x51ec7a11 + Math.imul(i, 0x9e3779b9)) >>> 0)];
 }
 
 test('seeded real-Pi lifecycle sequences preserve a single branch-local view', { timeout: 300000 }, async () => {

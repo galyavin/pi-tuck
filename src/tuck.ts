@@ -144,7 +144,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const userContent = current?.type === "message" && current.message.role === "user" ? current.message.content : undefined;
     const textOnly = isTextOnly(userContent);
     // Steering can become the latest user source while the run still owns its original prompt.
-    const startingPosition = entries.findIndex(entry => entry.id === input.protectedPromptEntryId && entry.type === "message" && entry.message.role === "user");
+    const startingPosition = entries.findIndex(entry => entry.id === input.protectedPromptEntryId &&
+        (entry.type === "custom_message" || entry.type === "message" && entry.message.role === "user"));
     const starting = entries[startingPosition];
     // Anchor the actual first source only; a native omission never promotes a later prompt.
     const firstUser = branch.find(entry => entry.type === "message" && entry.message.role === "user");
@@ -265,10 +266,12 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             let cached = quoteCache.get(key);
             if (cached) return cached;
             const index = indices.get(entry.id);
-            const text = entry.type === "message" && entry.message.role === "user" ? textOf(entry.message.content) : "";
+            const text = entry.type === "custom_message" ? textOf(entry.content) : entry.type === "message" && entry.message.role === "user" ? textOf(entry.message.content) : "";
             const sourceTimes = index === undefined ? undefined : [{ sourceIndex: index, ...resolveSourceTime(entry) }];
-            const records: TranscriptRecord[] = index === undefined ? [] : take === Infinity
-                ? [{ kind: "excerpt", role: "user", sourceIndex: index, text, sourceTimes }]
+            // Custom entries have a native identity but no global message index.
+            const records: TranscriptRecord[] = index === undefined && entry.type !== "custom_message" ? [] : take === Infinity
+                ? [{ kind: "excerpt", role: entry.type === "custom_message" ? "custom" : "user", ...(index === undefined ? {} : { sourceIndex: index }), text, sourceTimes,
+                    ...(entry.type === "custom_message" ? { sourceEntryId: entry.id } : {}) }]
                 : userPrefixRecords({ kind: "user", text, originalText: text, startsSource: true, sourceIndex: index }, undefined, take).map(record => ({ ...record, sourceTimes }));
             cached = { records, cost: lineCost(records), whole: take >= text.length };
             quoteCache.set(key, cached);
@@ -383,19 +386,23 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         for (const row of sourceRows) if (row.message.role === "user" && Array.isArray(row.message.content))
             imageLabels.set(row.index, new Set(row.message.content.flatMap(part => part.type === "image" ? [`[image: ${part.mimeType}]`] : [])));
         const compiledBoundary = boundary;
+        // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
+        const sourceKey = (record: TranscriptRecord) => starting?.type === "custom_message" && record.sourceEntryId === starting.id ? starting.id : record.sourceIndex;
         const assemble = (compiled: string, at = compiledBoundary) => {
             const split = compiled ? splitSummary(compiled) : undefined;
             if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
             const inputRecords = split ? parseRecords(split.body, split.version) : protectedView.omissions;
             const expanded = new Set(protectedView.kept.filter(record => record.kind === "excerpt" && inputRecords.some(row =>
-                row.kind === "excerpt" && row.role === "user" && row.sourceIndex === record.sourceIndex && row.text.startsWith(record.text!) && row.text.length >= record.text!.length)).map(record => record.sourceIndex));
-            const anchored = new Set(protectedView.kept.map(record => record.sourceIndex));
-            const moved = new Set(rows.filter(row => row.position >= at && row.position < compiledBoundary).map(row => row.index));
+                row.kind === "excerpt" && row.role === record.role && sourceKey(row) === sourceKey(record) && row.text.startsWith(record.text!) && row.text.length >= record.text!.length)).map(sourceKey));
+            const anchored = new Set(protectedView.kept.map(sourceKey));
+            const moved = new Set(rows.filter(row => row.position >= at && row.position < compiledBoundary).map(row =>
+                starting?.type === "custom_message" && row.id === starting.id ? row.id : row.index));
             const records = [...inputRecords.filter(record => {
-                if (record.sourceIndex !== undefined && moved.has(record.sourceIndex)) return false;
+                const key = sourceKey(record);
+                if (key !== undefined && moved.has(key)) return false;
                 if (record.kind === "excerpt" && record.role === "user" && imageLabels.get(record.sourceIndex)?.has(record.text)) return true;
-                return record.role !== "user" || record.sourceIndex === undefined || !anchored.has(record.sourceIndex) || expanded.has(record.sourceIndex);
-            }), ...protectedView.kept.filter(record => !expanded.has(record.sourceIndex) && !moved.has(record.sourceIndex))];
+                return record.role !== "user" && record.role !== "custom" || key === undefined || !anchored.has(key) || expanded.has(key);
+            }), ...protectedView.kept.filter(record => !expanded.has(sourceKey(record)) && !moved.has(sourceKey(record)))];
             // Mixed user turns keep their text opening, while their image
             // metadata remains in the ordinary lower-ranked dialogue lane.
             const wholeUser = new Set(records.filter(record => record.kind === "excerpt" && record.role === "user" && record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
