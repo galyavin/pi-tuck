@@ -3,6 +3,26 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.27] - 2026-11-10
+
+### Fixed
+
+- **A run that a custom message started could lose that message after a cut in the middle of the run.** pi-tuck protected only a prompt the
+  user typed. A tool-loop cut in a run that an extension started with a custom message kept the message neither whole nor quoted, so later
+  requests lacked the instruction that started the run. Now such a message gets the same protection as a typed prompt: it is kept, or
+  quoted whole in the summary, and the guard checks it. Runs started by typed prompts are unchanged. A custom message with no text has
+  nothing to quote and stays unprotected, as before.
+
+### Added
+
+- A seeded lifecycle sequence test drives real Pi through orders of prompts, handled prompts, custom-message runs, tree moves, new
+  sessions, compactions and aborts. It checks invariants read from outputs only. It reproduces 1.0.23's stale-cut bug and found this one.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.26 exactly:** 13,946 requests, 0 different, 0 dead tasks, clips 17 → 17.
+  Strict stress: 0 findings. Tests (745) and CI. The packed tarball loaded in the real installed Pi.
+
 ## [1.0.26] - 2026-11-10
 
 ### Fixed
