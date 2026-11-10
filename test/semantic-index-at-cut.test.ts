@@ -55,7 +55,8 @@ test('a session that searched before: a cut indexes the conversation that left t
 test('a session that never searched indexes at a cut, gives its worker back when done, and its first search ranks without re-embedding', async()=>{
  const f=fixture();f.append('first decision');f.append('second decision');cutAll(f);
  f.c.indexAtCut(f.provider);
- const status=await settled(f.c,f.internal);await f.internal.idling;
+ const status=await settled(f.c,f.internal);
+ for(let i=0;i<500&&(f.internal.active||f.internal.idling);i++){await f.internal.idling;await new Promise(done=>setTimeout(done,10));} // the give-back runs after the indexing task settles
  expect(f.embeddings).toBeGreaterThan(0);expect(status.indexingComplete).toBe(true);
  expect(status.window?.conversation.indexedCharacters).toBe(status.window?.conversation.outOfViewCharacters);
  expect(f.internal.active).toBe(false); // worker given back
