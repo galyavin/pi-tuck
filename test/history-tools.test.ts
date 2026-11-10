@@ -62,8 +62,10 @@ test('before any cut every request is byte-identical to Pi without pi-tuck, acro
                 captured.push(f.requests);
             } finally { await f.close(); }
         }
-        expect(captured[1]).toEqual(captured[0]);
-        expect(JSON.stringify(captured[1])).toBe(JSON.stringify(captured[0]));
+        // Pi times each reply with a clock the Date.now mock does not fix, so `durationMs` is zeroed on both sides; every other byte is compared.
+        const stable = (requests: Context[]) => JSON.stringify(requests, (key, value) => key === 'durationMs' ? 0 : value);
+        expect(JSON.parse(stable(captured[1]!))).toEqual(JSON.parse(stable(captured[0]!)));
+        expect(stable(captured[1]!)).toBe(stable(captured[0]!));
     } finally { time.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
 });
 
