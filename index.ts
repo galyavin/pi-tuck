@@ -53,7 +53,7 @@ export default async function (pi: ExtensionAPI) {
 		pi.on("session_start", () => { semanticRecall.setSetup("off-settings"); });
 		return;
 	}
-	let session = 0, said = "", setup: Promise<unknown> | undefined;
+	let session = 0, said = "", announced = false, setup: Promise<unknown> | undefined;
 	// A context outlives its session (a setup can finish after /new); a notice to an ended session is dropped.
 	// With no UI (pi -p), Pi shows no notices, so a settings error or an off or failing semantic recall would go unsaid: write each to stderr
 	// instead, once per session. stderr is the operator's; it never enters the model's context.
@@ -83,15 +83,18 @@ export default async function (pi: ExtensionAPI) {
 		// setup, which would outlast a one-shot run, and it says why, so tuck_search and /tuck name the real state.
 		const installed = existsSync(runtimeConfigPath(defaultRoot()));
 		if (!ctx.hasUI && !installed) return announce(ctx, "not-installed");
-		semanticRecall.setSetup("starting", { installed });
+		// The download's announcement outlives the session that made it: a session that starts while the shared setup is still running
+		// owes the "set up" notice once, as before the refactor.
+		semanticRecall.setSetup("starting", { installed, announced });
 		setup ??= ensureSemanticRuntime(defaultRoot(), message => {
+			announced = true;
 			if (current === session && semanticRecall.status().setup !== "off-user") announce(ctx, "starting", { installed, notice: message, announced: true });
 		});
 		setup.then(async () => {
 			if (current !== session || semanticRecall.status().setup === "off-user") return;
 			try {
 				await handle.setSemanticEnabled(true, ctx);
-				if (current === session && semanticRecall.status().setup !== "off-user") announce(ctx, "ready");
+				if (current === session && semanticRecall.status().setup !== "off-user") { announce(ctx, "ready", { announced }); announced = false; }
 			} catch (error) {
 				if (current === session && semanticRecall.status().setup !== "off-user") announce(ctx, "failed", { stage: "start", reason: reason(error) });
 			}

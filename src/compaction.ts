@@ -291,12 +291,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // 6,000-token prompt refuse. The overflow branch above learns from a refusal, where the count is a lower bound, and the ceiling is unchanged.
         if (input > 0 && input <= ctx.model.contextWindow && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
     });
-    pi.on("agent_start", () => { run ??= createRun("admitted"); run.phase = "admitted"; run.thinkingRetryPending = false; run.lengthStop = false; pending = undefined; });
-    // Only the final assistant reply decides the once-per-run operator notice; a successful retry clears it.
-    pi.on("message_end", event => { if (run && event.message.role === "assistant") run.lengthStop = event.message.stopReason === "length"; });
+    // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
+    // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
+    let lengthStop = false;
+    pi.on("agent_start", () => { run ??= createRun("admitted"); run.phase = "admitted"; run.thinkingRetryPending = false; lengthStop = false; pending = undefined; });
+    pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason === "length"; });
     pi.on("agent_settled", (_event, ctx) => {
         try {
-            if (!run?.lengthStop || !active()) return;
+            if (!lengthStop || !active()) return;
+            lengthStop = false;
             const message = "pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
             try { if (ctx.hasUI === false) process.stderr.write(message + "\n"); else ctx.ui.notify(message, "warning"); } catch { /* ended */ }
         } finally { resetRun(); }
@@ -414,10 +417,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // means for the session, anything else as it is (an attempt that ended with no word looked like a hang).
         const previous = failure(), notify = !previous;
         const fault = previous instanceof CommitFault ? previous : error instanceof Error ? error : new Error(String(error));
-        const receipted = run?.refusalReceipted, lengthStop = run?.lengthStop ?? false;
+        const receipted = run?.refusalReceipted;
         resetRun();
         // Keep only a terminal attempt record until Pi settles: its fresh abort controller must still see the refusal.
-        run = createRun("failed"); run.failure = fault; run.refusalReceipted = true; run.lengthStop = lengthStop;
+        run = createRun("failed"); run.failure = fault; run.refusalReceipted = true;
         if (fault instanceof CommitFault) commitFault = fault;
         try {
             if (!receipted) receipt("refusal", fault.message, ctx);

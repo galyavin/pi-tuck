@@ -34,3 +34,8 @@ test('with no UI (pi -p) the notice goes to stderr', async()=>{
  try{await fire('agent_start');await fire('message_end',{message:{role:'assistant',stopReason:'length',content:[]}});await fire('agent_settled');
   expect(write.mock.calls.filter(c=>String(c[0]).startsWith("pi-tuck: the last reply stopped"))).toHaveLength(1);}finally{write.mockRestore();}
 });
+test('a tree move or a failure before pi-tuck settles does not erase the notice', async()=>{
+ // Another extension's agent_settled handler can move in the tree first; pi-tuck's run reset must not drop the operator's notice.
+ const f=await fixture();await f.fire('agent_start');await f.reply('length');await f.fire('session_tree');await f.fire('agent_settled');
+ expect(f.notices.filter(n=>n===NOTICE)).toHaveLength(1);
+});
