@@ -3,6 +3,33 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.28] - 2026-11-10
+
+### Changed
+
+- **One owner for each piece of state that had several, the user-approved state refactor.** Requests are unchanged.
+  - The **pending cut** has one view, which every consumer reads: the request, `tuck_search`, the history tools, Pi's threshold path, the
+    band, the boundary save, `/tuck`, and the clamp, deepest-cut and retry previews.
+  - The **run** is one record, reset in one place. It holds the starting prompt as an entry, a typed prompt or a custom message.
+  - **Reply fit** has one reader behind the reserve and the floor.
+  - **Semantic setup** has an explicit state, which `/tuck` and the notices derive from.
+
+### Fixed
+
+- **A plan made for a prompt that another extension handled could still answer Pi's own compaction check before a later run.** A plan now
+  answers that check only until the next tick, unless its own run starts. The cut it made was valid but deeper than needed.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.27:** 13,946 requests on 29 recordings, 0 lost and 0 dead tasks, clips
+  17 → 17. In the final run, one recording (live32-t02-M) showed 32 differing requests. Two more runs of this build on that recording matched
+  1.0.27 exactly, as did two more runs of 1.0.27, so it was noise.
+- **Strict stress:** 0 findings.
+- **The lifecycle sequence test:** 41 seeds and 1,107 events, clean.
+- **An independent review** found 2 notice-only differences from 1.0.27, both fixed with tests: the length-stop notice after a tree move
+  inside another extension's settle, and the "set up" notice for a setup that finishes in a later session.
+- Tests (802) and CI. The packed tarball loaded in the real installed Pi.
+
 ## [1.0.27] - 2026-11-10
 
 ### Fixed
