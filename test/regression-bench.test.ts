@@ -264,10 +264,11 @@ for (const make of sessions) {
 			// A share is a ratio of few cuts: 0 stays 0, otherwise it may move by 10% of the golden or by 0.05, whichever is more.
 			if (Math.abs(m.lowYieldShare - g.lowYieldShare) > (g.lowYieldShare === 0 ? 0 : Math.max(g.lowYieldShare * 0.1, 0.05)))
 				violations.push(`lowYieldShare ${m.lowYieldShare}, golden ${g.lowYieldShare}`);
-			// Cut time against the same-run reference: at most three times the golden's ratio on the platform the golden was recorded on, six times
-			// on another (the reference and the cut do not scale alike across CPUs: an x86 Linux runner read 3.6 times once). Load moves both, so a
+			// Cut time against the same-run reference: at most three times the golden's ratio on a machine like the one that recorded it, six times
+			// on any CI runner or other platform (the reference and the cut do not scale alike across CPUs: an x86 Linux runner read 3.6 times, and
+			// GitHub's Apple-silicon runner 3.1 times over three cuts). Load moves both, so a
 			// busy machine passes, and a tenfold slower cut fails everywhere. Under 5 ms a cut is timer noise; medianCutMs is a record, not a bound.
-			const limit = `${process.platform}-${process.arch}` === GOLDEN_PLATFORM ? 3 : 6;
+			const limit = !process.env.CI && `${process.platform}-${process.arch}` === GOLDEN_PLATFORM ? 3 : 6;
 			if (m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5 && m.cutPerReference! > g.cutPerReference * limit)
 				violations.push(`cutPerReference ${m.cutPerReference}, golden ${g.cutPerReference} (limit ${limit} times; median cut ${m.medianCutMs} ms)`);
 			expect(violations, JSON.stringify({ got: m, golden: g })).toEqual([]);
