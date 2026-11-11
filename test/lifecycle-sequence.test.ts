@@ -1,5 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { expect, test } from 'vitest';
 import type { Context } from '@earendil-works/pi-ai';
 import { emptyCoverage, inputPresence, runSequence, type Event } from './lifecycle-sequence-fixture';
@@ -79,8 +80,7 @@ function seeds(): number[] {
 
 test('seeded real-Pi lifecycle sequences preserve a single branch-local view', { timeout: 300000 }, async () => {
   const started = Date.now(), chosen = seeds(), failures: string[] = [], coverage = emptyCoverage();
-  const scratch = '/private/tmp/claude-501';
-  mkdirSync(scratch, { recursive: true });
+  const scratch = mkdtempSync(join(tmpdir(), 'pi-tuck-lifecycle-'));
   const agentDir = mkdtempSync(join(scratch, 'lifecycle-agent-'));
   const previousTmp = process.env.TMPDIR, previousAgent = process.env.PI_CODING_AGENT_DIR;
   process.env.TMPDIR = scratch;
@@ -114,7 +114,7 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
   } finally {
     if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
     if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgent;
-    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(agentDir, { recursive: true, force: true }); rmSync(scratch, { recursive: true, force: true });
   }
   process.stderr.write(`lifecycle seeds=${chosen.join(',')} runtime=${((Date.now() - started) / 1000).toFixed(2)}s coverage=${JSON.stringify(coverage)}\n`);
   // No silent successes from a generator which never actually cuts or searches.
