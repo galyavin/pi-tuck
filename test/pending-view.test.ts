@@ -14,7 +14,7 @@ vi.mock('../src/budget', async original => {
 });
 
 async function fixture(compactAll = false) {
-  const manager = SessionManager.inMemory('/private/tmp/claude-501/pending-view');
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/pending-view');
   const runtime = await scriptedModelRuntime({ contextWindow: 32768, maxTokens: 4096 });
   const model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -30,7 +30,7 @@ async function fixture(compactAll = false) {
     getAllTools: () => [...tools.values()], getActiveTools: () => active, setActiveTools: (names: string[]) => { active = names; },
     appendEntry: (type: string, data: unknown) => manager.appendCustomEntry(type, data),
   } as unknown as ExtensionAPI;
-  const ctx = { cwd: '/private/tmp/claude-501/pending-view', sessionManager: manager, model, signal: new AbortController().signal,
+  const ctx = { cwd: '/virtual/pi-tuck-test/pending-view', sessionManager: manager, model, signal: new AbortController().signal,
     isIdle: () => true, getSystemPrompt: () => 'Follow the current task.', abort: () => {}, ui: { notify: (message: string) => { notices.push(message); } },
   } as unknown as ExtensionContext;
   const semantic = createSemanticRecall();
@@ -102,7 +102,7 @@ test('threshold uses the resolved kept entry when the prompt already exists', as
 });
 
 test('compact-all resolves at the plan boundary, before later steering and after capacity receipts', () => {
-  const manager = SessionManager.inMemory('/private/tmp/claude-501/pending-owner'), pending = new PendingCut(), ctx = { cwd: '/private/tmp/claude-501/pending-owner', sessionManager: manager };
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/pending-owner'), pending = new PendingCut(), ctx = { cwd: '/virtual/pi-tuck-test/pending-owner', sessionManager: manager };
   manager.appendMessage({ role: 'user', content: 'old', timestamp: 0 });
   const length = manager.getBranch().length;
   pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: '', tokensBefore: 10, details: { compactor: 'pi-tuck' } }, length);
@@ -117,7 +117,7 @@ test('compact-all resolves at the plan boundary, before later steering and after
 });
 
 test('starting prompt binds once to its entry, including repeated text in steering', () => {
-  const manager = SessionManager.inMemory('/private/tmp/claude-501/prompt-owner'), prompt = new StartingPrompt('start', 0);
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/prompt-owner'), prompt = new StartingPrompt('start', 0);
   expect(prompt.id(manager.getBranch())).toBeUndefined();
   const id = manager.appendMessage({ role: 'user', content: 'start', timestamp: 1 });
   expect(prompt.id(manager.getBranch())).toBe(id);
@@ -127,7 +127,7 @@ test('starting prompt binds once to its entry, including repeated text in steeri
 });
 
 test('a custom starting prompt binds by role and entry id before later identical custom text', () => {
-  const manager = SessionManager.inMemory('/private/tmp/claude-501/custom-prompt-owner');
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/custom-prompt-owner');
   manager.appendCustomMessageEntry('old', 'start', false);
   const prompt = new StartingPrompt('start', manager.getBranch().length, 'custom');
   manager.appendMessage({ role: 'user', content: 'start', timestamp: 0 });
@@ -141,8 +141,8 @@ test('a custom starting prompt binds by role and entry id before later identical
 });
 
 test('retry boundary drafts use the same view as their committed session', () => {
-  const manager = SessionManager.inMemory('/private/tmp/claude-501/retry-view'), cut = new PendingCut();
-  const ctx = { cwd: '/private/tmp/claude-501/retry-view', sessionManager: manager };
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/retry-view'), cut = new PendingCut();
+  const ctx = { cwd: '/virtual/pi-tuck-test/retry-view', sessionManager: manager };
   const id = manager.appendMessage({ role: 'user', content: 'omitted failed reply witness', timestamp: 0 });
   const entries = [
     { type: 'context_edit' as const, targetId: id, replacement: null },
@@ -221,8 +221,8 @@ test('fail drops a pending cut and keeps the failed attempt blocked until settle
 
 
 test('the live view follows saved cuts and tree moves after a pending cut is consumed', () => {
-  const manager = SessionManager.inMemory('/private/tmp/claude-501/live-view'), cut = new PendingCut();
-  const ctx = { cwd: '/private/tmp/claude-501/live-view', sessionManager: manager };
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/live-view'), cut = new PendingCut();
+  const ctx = { cwd: '/virtual/pi-tuck-test/live-view', sessionManager: manager };
   const first = manager.appendMessage({ role: 'user', content: 'first', timestamp: 0 });
   expect(cut.view(ctx)).toMatchObject({ session: manager, hasTuckCut: false, viewStart: 0 });
   const kept = manager.appendMessage({ role: 'user', content: 'kept', timestamp: 1 });

@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { SemanticRecallController } from '../src/semantic-recall';
 import { RUNTIME_ID } from '../src/assets';
@@ -12,7 +13,7 @@ const fixture = vi.hoisted(() => ({ controller: undefined as SemanticRecallContr
 vi.mock('../src/compaction', async original => ({ ...(await original<typeof import('../src/compaction')>()),
   installCompaction: async (_pi: unknown, options: { semanticRecall: SemanticRecallController; onSemanticSetting: typeof fixture.setting }) => {
     fixture.controller = options.semanticRecall; fixture.setting = options.onSemanticSetting;
-    return { setSemanticEnabled: async () => { options.semanticRecall.configure({ pythonPath: '/usr/bin/python3', runtimeRoot: '/private/tmp/claude-501/setup-runtime', indexDirectory: '/private/tmp/claude-501/setup-index' }); options.semanticRecall.enable(); } };
+    return { setSemanticEnabled: async () => { options.semanticRecall.configure({ pythonPath: '/usr/bin/python3', runtimeRoot: join(tmpdir(), 'pi-tuck-setup-runtime'), indexDirectory: join(tmpdir(), 'pi-tuck-setup-index') }); options.semanticRecall.enable(); } };
   },
 }));
 vi.mock('../src/setup', () => ({ ensureSemanticRuntime: async () => {
@@ -27,7 +28,7 @@ for (const hasUI of [false, true]) for (const installed of [false, true]) for (c
 for (const userOff of [false, true]) for (const fails of [false, true])
 test(`setup table: UI=${hasUI} installed=${installed} settingsOff=${settingsOff} userOff=${userOff} fails=${fails}`, async () => {
   Object.defineProperty(process, 'platform', { value: 'darwin' }); Object.defineProperty(process, 'arch', { value: 'arm64' });
-  const dir = mkdtempSync('/private/tmp/claude-501/tuck-setup-'), agentDir = join(dir, 'agent'), project = join(dir, 'project');
+  const dir = mkdtempSync(join(tmpdir(), 'tuck-setup-')), agentDir = join(dir, 'agent'), project = join(dir, 'project');
   mkdirSync(agentDir); mkdirSync(project);
   if (installed) { const runtime = join(agentDir, 'pi-tuck', 'runtime', RUNTIME_ID); mkdirSync(runtime, { recursive: true }); writeFileSync(join(runtime, 'semantic-recall.json'), '{}'); }
   if (settingsOff) writeFileSync(join(agentDir, 'pi-tuck.json'), '{"semanticRecall":false}');
