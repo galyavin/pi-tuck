@@ -2,14 +2,15 @@ import { test, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { SemanticRecallController } from '../src/semantic-recall';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 // `"cutAt"` in pi-tuck.json in Pi's agent folder is read by index.ts and handed to installCompaction; any value that is not a number above
 // 0 and at most 1 is a settings error, reported at the next session start with the other settings errors, and the default applies.
 // installCompaction is replaced by a recorder (it is covered by cut-at.test.ts), so that the option the extension passes can be read.
-const state = vi.hoisted(() => ({ options: [] as { cutAt?: number }[] }));
+const state = vi.hoisted(() => ({ options: [] as { cutAt?: number; semanticRecall: SemanticRecallController }[] }));
 vi.mock('../src/compaction', () => ({
-	installCompaction: vi.fn(async (_pi: unknown, options: { cutAt?: number }) => { state.options.push(options); return { setSemanticEnabled: async () => {} }; }),
+	installCompaction: vi.fn(async (_pi: unknown, options: { cutAt?: number; semanticRecall: SemanticRecallController }) => { state.options.push(options); return { setSemanticEnabled: async () => {} }; }),
 }));
 
 async function load(file: string | undefined) {
@@ -29,7 +30,7 @@ async function load(file: string | undefined) {
 		// A session start without a UI: nothing is downloaded, whatever the platform.
 		const ctx = { hasUI: true, cwd: join(agentDir, 'project'), ui: { notify: (message: string, level: string) => { notices.push({ message, level }); } } } as unknown as ExtensionContext;
 		for (const handler of handlers.get('session_start') ?? []) await handler({}, ctx);
-		return { cutAt: state.options[0]!.cutAt, notices, path, listening: handlers.has('session_start') };
+		return { cutAt: state.options[0]!.cutAt, notices, path, setup: state.options[0]!.semanticRecall.status().setup };
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(agentDir, { recursive: true, force: true });
@@ -52,7 +53,8 @@ test(`${file}: the cut point is passed on and nothing is reported`, async () => 
 test('with semantic recall off the cut point still applies', async () => {
 	const r = await load('{"semanticRecall": false, "cutAt": 0.6}');
 	expect(r.cutAt).toBe(0.6);
-	expect(r.listening).toBe(false);
+	expect(r.setup).toBe('off-settings');
+	expect(r.notices).toEqual([]);
 });
 
 for (const bad of ['0', '-0.5', '1.01', '2', '"0.6"', 'null', 'true', '[0.6]', '{}', '"fast"'])

@@ -136,17 +136,17 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         if (!prefix.ok) return { unavailable: "No reducible history before the fresh shell output" };
         cut = cutBefore(cut, freshBash, prefix);
     }
-    // Preserve the actual latest user source, never an inferred task/decision.
-    // Explicit omission of it must not promote an earlier user source instead.
+    // The latest user source still owns first exposure and non-text native floors. An omission never promotes an older source.
     const latestUser = retainCurrentInput ? branch.findLast(entry => entry.type === "message" && entry.message.role === "user") : undefined;
-    const userPosition = entries.findIndex(entry => entry.id === latestUser?.id && entry.type === "message");
-    const current = entries[userPosition];
-    const userContent = current?.type === "message" && current.message.role === "user" ? current.message.content : undefined;
-    const textOnly = isTextOnly(userContent);
-    // Steering can become the latest user source while the run still owns its original prompt.
-    const startingPosition = entries.findIndex(entry => entry.id === input.protectedPromptEntryId &&
+    const latestPosition = entries.findIndex(entry => entry.id === latestUser?.id && entry.type === "message");
+    const latest = entries[latestPosition];
+    const latestContent = latest?.type === "message" && latest.message.role === "user" ? latest.message.content : undefined;
+    const latestTextOnly = isTextOnly(latestContent);
+    // During a run, current input is the run owner's starting entry, even after steering. Manual cuts use the latest source.
+    const currentId = input.protectedPromptEntryId ?? latestUser?.id;
+    const currentPosition = entries.findIndex(entry => entry.id === currentId &&
         (entry.type === "custom_message" || entry.type === "message" && entry.message.role === "user"));
-    const starting = entries[startingPosition];
+    const current = entries[currentPosition];
     // Anchor the actual first source only; a native omission never promotes a later prompt.
     const firstUser = branch.find(entry => entry.type === "message" && entry.message.role === "user");
     const firstUserPosition = entries.findIndex(entry => entry.id === firstUser?.id && entry.type === "message");
@@ -154,10 +154,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const selectedBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === selectedKeptId);
     // An unobserved input or non-text input stays native. Quoting cannot deliver
     // its pixels/unknown blocks, and must not count as first exposure.
-    if (userPosition >= 0 && userPosition < selectedBoundary && (!textOnly || userPosition > lastResponse)) {
-        const prefix = tuck.buildOwnCut(entries.slice(0, userPosition), 0);
+    if (latestPosition >= 0 && latestPosition < selectedBoundary && (!latestTextOnly || latestPosition > lastResponse)) {
+        const prefix = tuck.buildOwnCut(entries.slice(0, latestPosition), 0);
         if (!prefix.ok) return { unavailable: "No reducible history before the current user input" };
-        cut = cutBefore(cut, userPosition, prefix);
+        cut = cutBefore(cut, latestPosition, prefix);
     }
 
 	if (cut.messages.length !== cut.selectedIds.length || (!cut.compactAll && !entries.some((e) => e.id === cut.firstKeptEntryId)))
@@ -166,7 +166,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     let preferredBoundary = cut.compactAll ? entries.length : entries.findIndex(entry => entry.id === cut.firstKeptEntryId);
     let floorBoundary = freshRound ? lastResponse : entries.length;
     if (freshBash >= 0) floorBoundary = Math.min(floorBoundary, freshBash);
-    if (userPosition >= 0 && (!textOnly || userPosition > lastResponse)) floorBoundary = Math.min(floorBoundary, userPosition);
+    if (latestPosition >= 0 && (!latestTextOnly || latestPosition > lastResponse)) floorBoundary = Math.min(floorBoundary, latestPosition);
     // One fill owns the summary and the contiguous native suffix. Protocol/current-input
     // floors are representation constraints; every other source competes by rank.
     return rankedFill();
@@ -285,9 +285,9 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 kept.push(...quoted.records); cost += quoted.cost;
                 if (index !== undefined && quoted.records.length) { selected.add(index); if (quoted.whole) whole.add(index); }
             };
-            if (userPosition >= 0 && userPosition < boundary && textOnly) add(current!, Infinity);
-            if (startingPosition >= 0 && startingPosition < boundary && starting?.id !== current?.id) add(starting!, Infinity);
-            for (const entry of anchors) if (entry.id !== current?.id && entry.id !== starting?.id && positions.get(entry.id)! < boundary) add(entry, length);
+            if (latestPosition >= 0 && latestPosition < boundary && latestTextOnly) add(latest!, Infinity);
+            if (currentPosition >= 0 && currentPosition < boundary && current?.id !== latest?.id) add(current!, Infinity);
+            for (const entry of anchors) if (entry.id !== latest?.id && entry.id !== current?.id && positions.get(entry.id)! < boundary) add(entry, length);
             const omissions: TranscriptRecord[] = [];
             for (const role of ["user", "assistant", "toolResult"] as const) {
                 const list = units[role], prefix = prefixes[role];
@@ -387,7 +387,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             imageLabels.set(row.index, new Set(row.message.content.flatMap(part => part.type === "image" ? [`[image: ${part.mimeType}]`] : [])));
         const compiledBoundary = boundary;
         // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
-        const sourceKey = (record: TranscriptRecord) => starting?.type === "custom_message" && record.sourceEntryId === starting.id ? starting.id : record.sourceIndex;
+        const sourceKey = (record: TranscriptRecord) => current?.type === "custom_message" && record.sourceEntryId === current.id ? current.id : record.sourceIndex;
         const assemble = (compiled: string, at = compiledBoundary) => {
             const split = compiled ? splitSummary(compiled) : undefined;
             if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
@@ -396,7 +396,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 row.kind === "excerpt" && row.role === record.role && sourceKey(row) === sourceKey(record) && row.text.startsWith(record.text!) && row.text.length >= record.text!.length)).map(sourceKey));
             const anchored = new Set(protectedView.kept.map(sourceKey));
             const moved = new Set(rows.filter(row => row.position >= at && row.position < compiledBoundary).map(row =>
-                starting?.type === "custom_message" && row.id === starting.id ? row.id : row.index));
+                current?.type === "custom_message" && row.id === current.id ? row.id : row.index));
             const records = [...inputRecords.filter(record => {
                 const key = sourceKey(record);
                 if (key !== undefined && moved.has(key)) return false;

@@ -9,7 +9,7 @@ import { scriptedModelRuntime } from './model-fixture';
 
 // pi-tuck plans a prompt's cut on `input`. When a later extension handles that input, no run starts for it, and the plan must not reach the
 // next run: one a custom message starts, or one on another branch after a move in the tree.
-async function lifecycle(handled: boolean, treeTo?: number) {
+async function lifecycle(handled: boolean, treeTo?: number, aboveThreshold = false) {
   const dir = mkdtempSync(join(tmpdir(), 'tuck-stale-plan-'));
   const runtime = await scriptedModelRuntime({ contextWindow: 32768, maxTokens: 4096 });
   const model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
@@ -21,10 +21,15 @@ async function lifecycle(handled: boolean, treeTo?: number) {
     manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: `Done ${i}. ` + 'answer '.repeat(400) }], api: model.api, provider: model.provider,
       model: model.id, stopReason: 'stop', timestamp: i, usage } as AssistantMessage);
   }
-  const faults: string[] = [], requests: Context[] = [];
+  if (aboveThreshold) {
+    const last = manager.getBranch().findLast(e => e.type === 'message' && e.message.role === 'assistant');
+    if (last?.type === 'message' && last.message.role === 'assistant') last.message.usage = { ...usage, input: 30000, totalTokens: 30000 };
+  }
+  const faults: string[] = [], requests: Context[] = [], thresholdCuts: string[] = [];
   const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true,
     noPromptTemplates: true, noThemes: true, systemPrompt: 'Follow the current task.', extensionFactories: [
-      async (api: ExtensionAPI) => { await installCompaction(api, { settings, fail: error => faults.push(String(error)) }); },
+      async (api: ExtensionAPI) => { await installCompaction(api, { settings, fail: error => faults.push(String(error)) });
+        api.on('session_compact', event => { if (event.reason === 'threshold') thresholdCuts.push(event.compactionEntry.summary); }); },
       async (api: ExtensionAPI) => { api.on('input', event => event.text.includes('HANDLE-ME') ? { action: 'handled' } : undefined); },
     ] } as never);
   await loader.reload();
@@ -40,6 +45,7 @@ async function lifecycle(handled: boolean, treeTo?: number) {
   };
   try {
     if (handled) await session.prompt('HANDLE-ME ' + 'handled prompt text '.repeat(1500));
+    if (aboveThreshold) await new Promise<void>(resolve => setImmediate(resolve));
     expect(requests).toHaveLength(0);
     if (treeTo !== undefined) await session.navigateTree(manager.getEntries().filter(e => e.type === 'message')[treeTo].id);
     await session.sendCustomMessage({ customType: 'report', content: 'CUSTOM-RUN a short report', display: false }, { triggerTurn: true });
@@ -49,7 +55,7 @@ async function lifecycle(handled: boolean, treeTo?: number) {
     for (const cut of cuts) expect(manager.getBranch(cut.id).map(e => e.id)).toContain(cut.firstKeptEntryId);
     const request = JSON.stringify(requests[0]);
     expect(request).toContain('CUSTOM-RUN');
-    return { messages: requests[0].messages.length, chars: request.length, cuts: cuts.length };
+    return { messages: requests[0].messages.length, chars: request.length, cuts: cuts.length, thresholdCuts };
   } finally { await session.abort(); session.dispose(); rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -59,4 +65,11 @@ test('a run a custom message starts plans afresh after a handled input', async (
 
 for (const treeTo of [7, 15]) test(`a move in the tree drops the plan of a handled input (to message ${treeTo})`, async () => {
   expect(await lifecycle(true, treeTo)).toEqual(await lifecycle(false, treeTo));
+});
+
+
+test("an expired handled input cannot answer Pi's above-threshold check for a custom run", async () => {
+  const handled = await lifecycle(true, undefined, true), control = await lifecycle(false, undefined, true);
+  expect(control.thresholdCuts).toHaveLength(1); // Pi really checked and committed a cut before before_agent_start.
+  expect(handled).toEqual(control);
 });

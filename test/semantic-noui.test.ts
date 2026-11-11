@@ -14,10 +14,15 @@ vi.mock('../src/compaction', async original => ({
 	installCompaction: vi.fn(async () => ({ setSemanticEnabled: spies.enabled })),
 }));
 vi.mock('../src/setup', () => ({ ensureSemanticRuntime: spies.setup }));
-vi.mock('../src/semantic-recall', async original => ({
-	...(await original<typeof import('../src/semantic-recall')>()),
-	createSemanticRecall: () => ({ status: () => ({ configured: false }), refuse: (message: string) => { spies.refused.push(message); } }),
-}));
+vi.mock('../src/semantic-recall', async original => {
+ const real = await original<typeof import('../src/semantic-recall')>();
+ return { ...real, createSemanticRecall: () => {
+  const controller = new real.SemanticRecallController();
+  const set = controller.setSetup.bind(controller);
+  controller.setSetup = (state, detail) => { set(state, detail); const message = controller.status().setupMessage; if (message) spies.refused.push(message); };
+  return controller;
+ } };
+});
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!, arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
 afterEach(() => { Object.defineProperty(process, 'platform', platform); Object.defineProperty(process, 'arch', arch); });

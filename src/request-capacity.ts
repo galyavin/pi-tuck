@@ -62,20 +62,26 @@ export const thinkingOnlyLength = (message: AgentMessage): boolean => message.ro
 export const needsFullReplyReserve = (message: AgentMessage): boolean => message.role === 'assistant' &&
     (message.stopReason === 'length' && !thinkingOnlyLength(message) || message.stopReason === 'error' && isContextOverflow(message));
 
-/** Read the whole current branch, including replies before cuts. No session-local fallback flag. */
-export function branchReplyFloor(branch: readonly SessionEntry[], reserve: number): number {
-    let largest = REPLY_FLOOR_MIN, thinkingStop = false;
+/** One branch reader for the reserve override and reply floor, including history before cuts. */
+export function replyFit(branch: readonly SessionEntry[]): { failed: boolean; largestOutput: number; thinkingStop: boolean } {
+    let failed = false, largestOutput = 0, thinkingStop = false;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;
-        if (needsFullReplyReserve(message)) return reserve;
+        failed ||= needsFullReplyReserve(message);
         thinkingStop ||= thinkingOnlyLength(message);
         const output = message.usage?.output;
-        if (typeof output === 'number' && Number.isFinite(output) && output > largest) largest = output;
+        if (typeof output === 'number' && Number.isFinite(output) && output > largestOutput) largestOutput = output;
     }
-    // Include the exhausted thinking reply itself, even across later cuts/restarts. Its observed output must fit again;
-    // requestReplyFloor applies the model cap. Ordinary branches retain their existing reserve cap.
-    return thinkingStop ? Math.ceil(largest) : Math.min(reserve, Math.ceil(largest));
+    return { failed, largestOutput, thinkingStop };
+}
+
+export function branchReplyFloor(branch: readonly SessionEntry[], reserve: number): number {
+    const { failed, largestOutput, thinkingStop } = replyFit(branch);
+    if (failed) return reserve;
+    // Include exhausted thinking output across cuts/restarts; requestReplyFloor applies the model cap.
+    const largest = Math.ceil(Math.max(REPLY_FLOOR_MIN, largestOutput));
+    return thinkingStop ? largest : Math.min(reserve, largest);
 }
 
 /** Admission never promises more output than a model with a positive reply cap can produce. */

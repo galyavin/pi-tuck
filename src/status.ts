@@ -16,6 +16,7 @@ export function statusText(input: {
     version: string;
     active: boolean;
     branch: readonly { type: string; tokensBefore?: unknown; details?: unknown; customType?: unknown; data?: unknown }[];
+    pending?: boolean;
     cutAt: number | undefined;
     search: boolean;
     semantic: { state: SemanticState; lastError: string | null };
@@ -24,7 +25,7 @@ export function statusText(input: {
     const cuts = input.branch.filter(e => e.type === "compaction"), ours = cuts.filter(e => (e.details as { compactor?: unknown } | null | undefined)?.compactor === "pi-tuck");
     const last = ours.at(-1), before = last?.tokensBefore, after = (last?.details as { tokensAfter?: unknown } | undefined)?.tokensAfter;
     const count = (n: number) => n.toLocaleString("en-US");
-    const cutLine = ours.length === 0 ? "Cuts: none yet in this session. The recall tools appear after the first cut."
+    const cutLine = ours.length === 0 ? input.pending ? "Cuts: none saved yet in this session." : "Cuts: none yet in this session. The recall tools appear after the first cut."
         : `Cuts: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
     const native = cuts.length - ours.length;
     const retries = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity" &&
@@ -37,6 +38,7 @@ export function statusText(input: {
         `pi-tuck ${input.version} (the version this session loaded; restart Pi after an update).`,
         cutLine,
         ...(retries ? [`Retries: ${retries} after thinking-only length stops in this session.`] : []),
+        ...(input.pending ? ["A cut is pending: requests already carry it; the first boundary saves it."] : []),
         ...(native > 0 ? [`Pi's own compaction cut ${native} time${native === 1 ? "" : "s"} in this session.`] : []),
         input.cutAt === undefined ? "Cut point: adapts by itself." : `Cut point: fixed at cutAt ${input.cutAt} of the input room. Remove cutAt from pi-tuck.json to let it adapt.`,
         searchLine,
