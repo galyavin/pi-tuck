@@ -1,4 +1,4 @@
-import { createAssistantMessageEventStream, getCurrentTools, type Context } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, normalizeContext, type Context } from '@earendil-works/pi-ai';
 import {
   convertToLlm, createAgentSession, DefaultResourceLoader, SessionManager, sessionEntryToContextMessages,
   type CompactionEntry, type SessionEntry,
@@ -29,6 +29,9 @@ export type Coverage = {
 export const emptyCoverage = (): Coverage => ({ requests: 0, promptCuts: 0, boundaryCuts: 0, fresh: 0,
   searches: 0, modelSearches: 0, searchBoundaries: 0, disabledSearches: 0, noCutRequests: 0, savedViews: 0, quotedPrompts: 0,
   aborts: 0, handled: 0, sessions: 0, treeMoves: 0, manual: 0, semantic: 0, semanticNotices: 0 });
+export const emptyAppendOnlyCoverage = () => ({ checked: 0,
+  exempt: { new: 0, tree: 0, manual: 0, abort: 0, summary: 0, historyTools: 0 } });
+type AppendOnlyExemption = keyof ReturnType<typeof emptyAppendOnlyCoverage>['exempt'];
 
 const textOf = (content: unknown): string => typeof content === 'string' ? content : Array.isArray(content)
   ? content.map(c => c.type === 'text' ? c.text : '').join('') : '';
@@ -49,6 +52,41 @@ const requestText = (content: unknown): string => typeof content === 'string' ? 
   ? content.filter(block => block.type === 'text').map(block => block.text).join('\n') : '';
 const summaryOf = (text: string): string | undefined => text.startsWith(SUMMARY_PREFIX) && text.endsWith(SUMMARY_SUFFIX)
   ? text.slice(SUMMARY_PREFIX.length, -SUMMARY_SUFFIX.length) : undefined;
+
+function providerInput(context: Context) {
+  const { messages } = normalizeContext(context), tools = getCurrentTools(messages);
+  return { tools,
+    summaries: messages.flatMap(message => {
+      const summary = summaryOf(requestText(message.content));
+      return summary === undefined ? [] : [summary];
+    }),
+    // Replay Pi's system/tool deltas as the provider sees them, then compare
+    // every conversation message. Only the message metadata timestamp is
+    // omitted: a tool argument or schema property named timestamp is still data.
+    items: [JSON.stringify(getCurrentSystemPrompt(messages)), JSON.stringify(tools),
+      ...messages.filter(message => message.role !== 'system').map(({ timestamp: _timestamp, ...message }) => JSON.stringify(message))],
+  };
+}
+
+export function appendOnlyPair(previous: Context, current: Context): { exempt?: 'summary' | 'historyTools'; difference?: string } {
+  const a = providerInput(previous), b = providerInput(current);
+  if (b.summaries.length && JSON.stringify(a.summaries) !== JSON.stringify(b.summaries)) return { exempt: 'summary' };
+  const changed = a.items.findIndex((item, index) => item !== b.items[index]);
+  if (changed < 0) return {};
+  const history = ['tuck_recall', 'tuck_search'];
+  // The first pending cut can declare history tools one request before its
+  // summary appears. Exempt exactly that addition, preserving all other items.
+  if (!a.summaries.length && !b.summaries.length && changed === 1
+    && !a.tools.some(tool => history.includes(tool.name)) && b.tools.length === a.tools.length + 2
+    && JSON.stringify(b.tools.slice(0, a.tools.length)) === JSON.stringify(a.tools)
+    && JSON.stringify(b.tools.slice(a.tools.length).map(tool => tool.name).sort()) === JSON.stringify(history)
+    && a.items.every((item, index) => index === 1 || item === b.items[index])) return { exempt: 'historyTools' };
+  const label = changed === 0 ? 'system prompt' : changed === 1 ? 'tools' : `message ${changed - 1}`;
+  const before = a.items[changed], after = b.items[changed];
+  let offset = 0;
+  while (after !== undefined && offset < before.length && before[offset] === after[offset]) offset++;
+  return { difference: `${label} changed at character ${offset}: ${before.slice(offset, offset + 120)} -> ${after?.slice(offset, offset + 120) ?? '(missing item)'}` };
+}
 
 // Decode the model-facing transcript format locally: no planner, guard, or
 // transcript parser from the product is used as the expected answer.
@@ -155,14 +193,17 @@ async function search(rig: Rig, id: string): Promise<string[]> {
   return result.content.filter(c => c.type === 'text').map(c => c.text);
 }
 
-function provider(rig: Rig, event: Event, marker: string, requests: Request[], inspectSearch: boolean) {
+function provider(rig: Rig, event: Event, marker: string, requests: Request[], inspectSearch: boolean, observeRequest?: (context: Context) => void) {
   let round = 0;
   let searched = false;
   let reached!: () => void;
   const ready = new Promise<void>(resolve => { reached = resolve; });
   rig.session.agent.streamFunction = async (_model, context, options) => {
+    // Isolate the received request from Pi's live state, including test faults.
+    context = structuredClone(context);
+    observeRequest?.(context);
     const branch = structuredClone(rig.manager.getBranch());
-    const request: Request = { context: structuredClone(context), view: viewOf(context, branch),
+    const request: Request = { context, view: viewOf(context, branch),
       hasSavedCut: branch.some(entry => entry.type === 'compaction'), search: [] };
     requests.push(request);
     if (inspectSearch && getCurrentTools(context.messages).some(tool => tool.name === 'tuck_search')) {
@@ -197,8 +238,8 @@ function provider(rig: Rig, event: Event, marker: string, requests: Request[], i
   return ready;
 }
 
-async function start(rig: Rig, event: Event, marker: string, requests: Request[], inspectSearch = true) {
-  const ready = provider(rig, event, marker, requests, inspectSearch);
+async function start(rig: Rig, event: Event, marker: string, requests: Request[], inspectSearch = true, observeRequest?: (context: Context) => void) {
+  const ready = provider(rig, event, marker, requests, inspectSearch, observeRequest);
   const content = body(marker, event.tokens ?? 200);
   const run = event.kind === 'custom'
     ? rig.session.sendCustomMessage({ customType: 'sequence', content, display: false }, { triggerTurn: true })
@@ -272,7 +313,7 @@ async function checkSemantic(rig: Rig, noticeStart: number, report: (n: number, 
 }
 
 export async function runSequence(seed: number, events: Event[]) {
-  const findings: Finding[] = [], coverage = emptyCoverage(), trace: string[] = [];
+  const findings: Finding[] = [], coverage = emptyCoverage(), appendOnly = emptyAppendOnlyCoverage(), trace: string[] = [];
   const rig = await open();
   let at = -1;
   const report = (invariant: number | 'harness', message: string) => {
@@ -281,6 +322,38 @@ export async function runSequence(seed: number, events: Event[]) {
     if (!findings.some(f => f.invariant === invariant && f.at === at && f.message === message)) {
       findings.push({ invariant, check, at, message, scenario: events[at]?.scenario });
     }
+  };
+  let previousRequest: Context | undefined, previousAt = -1, requestNumber = 0, faultInjected = false;
+  const boundaries = new Set<AppendOnlyExemption>();
+  const observeRequest = (context: Context) => {
+    requestNumber++;
+    if (previousRequest) {
+      // Count each exempt pair once. Completed public lifecycle actions take
+      // precedence over summary/tool changes visible in the requests themselves.
+      const boundary = (['new', 'tree', 'manual', 'abort'] as const).find(reason => boundaries.has(reason));
+      let pair = appendOnlyPair(previousRequest, context);
+      if (!boundary && !pair.exempt && !pair.difference && !faultInjected && process.env.LIFECYCLE_FAULT === 'reorder') {
+        const oldCount = previousRequest.messages.filter(message => message.role !== 'system'
+          && summaryOf(requestText(message.content)) === undefined).length;
+        const old = context.messages.map((message, index) => ({ message, index }))
+          .filter(({ message }) => message.role !== 'system' && summaryOf(requestText(message.content)) === undefined).slice(0, oldCount);
+        if (old.length >= 2) {
+          const [left, right] = old.slice(-2).map(({ index }) => index);
+          [context.messages[left], context.messages[right]] = [context.messages[right], context.messages[left]];
+          faultInjected = true;
+          pair = appendOnlyPair(previousRequest, context);
+        }
+      }
+      const exemption = boundary ?? pair.exempt;
+      if (exemption) appendOnly.exempt[exemption]++;
+      else {
+        appendOnly.checked++;
+        if (pair.difference) report(6, `requests ${requestNumber - 1}->${requestNumber} (events ${previousAt + 1}->${at + 1}): ${pair.difference}`);
+      }
+    }
+    previousRequest = context;
+    previousAt = at;
+    boundaries.clear();
   };
   try {
     seedHistory(rig, `${seed}-initial`);
@@ -301,6 +374,7 @@ export async function runSequence(seed: number, events: Event[]) {
           await rig.session.extensionRunner.emit({ type: 'session_start', reason: 'new' });
           seedHistory(rig, `${seed}-${at}`);
           coverage.sessions++;
+          boundaries.add('new');
         } else if (event.kind === 'tree') {
           const candidates = rig.manager.getEntries().filter(e => e.type === 'message' && e.message.role === 'assistant');
           if (!candidates.length) throw new Error('No earlier entry for tree move');
@@ -310,14 +384,15 @@ export async function runSequence(seed: number, events: Event[]) {
           const result = await rig.session.navigateTree(target.id, { summarize: false });
           if (result.cancelled || result.aborted) throw new Error('Tree move was cancelled');
           coverage.treeMoves++;
+          boundaries.add('tree');
         } else if (event.kind === 'compact') {
-          try { await rig.session.compact(); coverage.manual++; }
+          try { await rig.session.compact(); coverage.manual++; boundaries.add('manual'); }
           catch (error) { if (!/Already compacted|Nothing to compact/i.test(String(error))) throw error; }
         } else if (event.kind === 'semantic') {
           await rig.session.prompt(`/tuck-semantic ${event.enabled ? 'on' : 'off'}`);
         } else if (event.kind === 'handled') {
           const requests: Request[] = [];
-          provider(rig, event, marker, requests, false);
+          provider(rig, event, marker, requests, false, observeRequest);
           await rig.session.prompt(body(marker, event.tokens ?? 8000));
           if (requests.length) report('harness', 'the later extension failed to handle input');
           coverage.handled++;
@@ -327,9 +402,9 @@ export async function runSequence(seed: number, events: Event[]) {
           // Retain the stress fixture's actual effect transport and large tool
           // results; change its callback through the supported option below.
           effectTokens = event.resultTokens ?? 7000;
-          const content = await start(rig, event, marker, requests);
+          const content = await start(rig, event, marker, requests, true, observeRequest);
           coverage.requests += requests.length;
-          if (event.kind === 'abort') coverage.aborts++;
+          if (event.kind === 'abort') { coverage.aborts++; boundaries.add('abort'); }
           if (!requests.length) report('harness', 'starting event reached no provider request');
           for (const [index, request] of requests.entries()) {
             const presence = inputPresence(request.context, content, event.kind === 'custom' ? 'custom' : 'user');
@@ -385,7 +460,7 @@ export async function runSequence(seed: number, events: Event[]) {
         for (const fault of rig.h.faults.slice(oldFaults)) report('harness', fault);
       } catch (error) { report('harness', String(error)); }
     }
-    return { seed, findings, coverage, trace };
+    return { seed, findings, coverage, appendOnly, trace };
   } finally { await rig.close(); }
 }
 

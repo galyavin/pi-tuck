@@ -3,7 +3,47 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, test } from 'vitest';
 import type { Context } from '@earendil-works/pi-ai';
-import { emptyCoverage, inputPresence, runSequence, type Event } from './lifecycle-sequence-fixture';
+import { appendOnlyPair, emptyAppendOnlyCoverage, emptyCoverage, inputPresence, runSequence, type Event } from './lifecycle-sequence-fixture';
+
+test('append-only comparison sees provider prompts, tools and whole messages while ignoring message timestamps', () => {
+  const tool = { name: 'effect', description: 'Effect', parameters: { type: 'object', properties: { timestamp: { type: 'number' } } } };
+  const a: Context = { systemPrompt: 'Stable host', tools: [tool], messages: [
+    { role: 'user', content: 'Old input', timestamp: 1 },
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'old-call', name: 'effect', arguments: { timestamp: 1 } }],
+      api: 'openai-responses', provider: 'openai', model: 'fixture', stopReason: 'toolUse', timestamp: 2,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } },
+  ] };
+  const b = structuredClone(a);
+  b.messages.forEach(message => { message.timestamp += 100; });
+  b.messages.push({ role: 'user', content: 'New input', timestamp: 200 });
+  expect(appendOnlyPair(a, b)).toEqual({});
+  for (const mutate of [
+    (context: Context) => { context.systemPrompt += ' changed'; },
+    (context: Context) => { context.tools![0].description += ' changed'; },
+    (context: Context) => { context.messages.reverse(); },
+    (context: Context) => { context.messages.splice(0, 1); },
+    (context: Context) => {
+      const message = context.messages[1];
+      if (message.role === 'assistant' && message.content[0].type === 'toolCall') message.content[0].arguments.timestamp = 2;
+    },
+  ]) {
+    const changed = structuredClone(b);
+    mutate(changed);
+    expect(appendOnlyPair(a, changed).difference).toBeDefined();
+  }
+  const firstCut = structuredClone(b);
+  firstCut.tools!.push(...['tuck_recall', 'tuck_search'].map(name => ({ ...tool, name })));
+  expect(appendOnlyPair(a, firstCut)).toEqual({ exempt: 'historyTools' });
+  firstCut.messages[0].content = 'Edited old input';
+  expect(appendOnlyPair(a, firstCut).difference).toBeDefined();
+  const summary = 'The conversation history before this point was compacted into the following summary:\n\n<summary>\nSaved or pending cut\n</summary>';
+  const cut: Context = { ...b, messages: [{ role: 'user', content: summary, timestamp: 0 }, ...b.messages.slice(1)] };
+  expect(appendOnlyPair(a, cut)).toEqual({ exempt: 'summary' });
+  expect(appendOnlyPair(cut, a).difference).toBeDefined();
+  const sameCut = structuredClone(cut);
+  sameCut.messages[1].content = [];
+  expect(appendOnlyPair(cut, sameCut).difference).toBeDefined();
+});
 
 for (const version of [1, 2]) test(`prompt preservation accepts whole decoded quotes, never partial quotes (transcript v${version})`, () => {
   const prompt = 'Need "the whole task"\nC:\\task\rEND';
@@ -79,7 +119,7 @@ function seeds(): number[] {
 }
 
 test('seeded real-Pi lifecycle sequences preserve a single branch-local view', { timeout: 300000 }, async () => {
-  const started = Date.now(), chosen = seeds(), failures: string[] = [], coverage = emptyCoverage();
+  const started = Date.now(), chosen = seeds(), failures: string[] = [], coverage = emptyCoverage(), appendOnly = emptyAppendOnlyCoverage();
   const scratch = mkdtempSync(join(tmpdir(), 'pi-tuck-lifecycle-'));
   const agentDir = mkdtempSync(join(scratch, 'lifecycle-agent-'));
   const previousTmp = process.env.TMPDIR, previousAgent = process.env.PI_CODING_AGENT_DIR;
@@ -89,6 +129,8 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
     for (const seed of chosen) {
       const events = sequence(seed), result = await runSequence(seed, events);
       for (const key of Object.keys(coverage) as (keyof typeof coverage)[]) coverage[key] += result.coverage[key];
+      appendOnly.checked += result.appendOnly.checked;
+      for (const reason of Object.keys(appendOnly.exempt) as (keyof typeof appendOnly.exempt)[]) appendOnly.exempt[reason] += result.appendOnly.exempt[reason];
       // Every invariant is evaluated after EVERY event, so the earliest failing
       // event gives an exhaustive prefix shrink, without assuming failures are
       // monotone across different orders. Replay that shortest prefix as proof.
@@ -109,14 +151,14 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
         failures.push(message);
         console.error(message);
       }
-      process.stderr.write(`lifecycle seed=${seed} events=${events.length} coverage=${JSON.stringify(result.coverage)}\n`);
+      process.stderr.write(`lifecycle seed=${seed} events=${events.length} coverage=${JSON.stringify(result.coverage)} appendOnly=${JSON.stringify(result.appendOnly)}\n`);
     }
   } finally {
     if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
     if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgent;
     rmSync(agentDir, { recursive: true, force: true }); rmSync(scratch, { recursive: true, force: true });
   }
-  process.stderr.write(`lifecycle seeds=${chosen.join(',')} runtime=${((Date.now() - started) / 1000).toFixed(2)}s coverage=${JSON.stringify(coverage)}\n`);
+  process.stderr.write(`lifecycle seeds=${chosen.join(',')} runtime=${((Date.now() - started) / 1000).toFixed(2)}s coverage=${JSON.stringify(coverage)} appendOnly=${JSON.stringify(appendOnly)}\n`);
   // No silent successes from a generator which never actually cuts or searches.
   for (const key of ['requests', 'promptCuts', 'boundaryCuts', 'fresh', 'modelSearches', 'savedViews', 'quotedPrompts', 'aborts', 'handled', 'sessions', 'treeMoves', 'manual', 'semantic', 'semanticNotices'] as const) {
     expect(coverage[key], `no lifecycle coverage: ${key}`).toBeGreaterThan(0);
@@ -125,4 +167,5 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
   // A regression may itself turn every expected cut-free request into a cut;
   // report that regression before checking coverage of the passing sequence.
   expect(coverage.noCutRequests, 'no request exercised the cut-free tool-absence rule').toBeGreaterThan(0);
+  expect(appendOnly.checked, 'no consecutive requests exercised append-only preservation').toBeGreaterThan(0);
 });
