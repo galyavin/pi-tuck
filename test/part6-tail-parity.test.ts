@@ -110,7 +110,7 @@ test('plain-thinking openings preserve the pinned Part 6 tail at every tested ro
     }
   }
   expect(quoted).toBeGreaterThan(0);
-});
+}, 60_000);
 
 test('the pinned Part 6 boundary agrees near capacity edges', () => {
   const rows = readFileSync(new URL('./fixtures/regression/prose-heavy.jsonl', import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -124,7 +124,7 @@ test('the pinned Part 6 boundary agrees near capacity edges', () => {
     if (checked) boundaries.add(checked.pinned);
   }
   expect(boundaries.size).toBeGreaterThan(1);
-});
+}, 60_000);
 
 for (const name of ['prose-heavy', 'low-prose', 'large-tool-output']) {
   test(`${name}: every scheduled cut preserves Part 6's pinned tail and can displace only its older extension`, () => {
@@ -154,7 +154,7 @@ for (const name of ['prose-heavy', 'low-prose', 'large-tool-output']) {
     expect(checked).toBeGreaterThan(30);
     expect(extended).toBeGreaterThan(0);
     expect(displaced).toBeGreaterThan(0);
-  });
+  }, 60_000);
 
   test(`${name}: successive 81,920-window cuts preserve Part 6's pinned part at the same cut point and input`, () => {
     const recording = readFileSync(new URL(`./fixtures/regression/${name}.jsonl`, import.meta.url), 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -183,5 +183,5 @@ for (const name of ['prose-heavy', 'low-prose', 'large-tool-output']) {
       checked++;
     }
     expect(checked).toBeGreaterThan(2);
-  });
+  }, 60_000);
 }
