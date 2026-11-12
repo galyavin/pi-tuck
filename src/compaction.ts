@@ -814,6 +814,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const gate = required && fits(mandatory, targetRoom, ctx) ? { kind: "plan" as const, opportunistic: false } :
                 gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx) });
             if (gate.kind !== "plan") return gate;
+            // Between the rounds of a run, cut only when the cut is due (the request would not fit the room). The early cut at the band stays
+            // at a prompt and at run end, where it lands between tasks rather than in the middle of one.
+            if (reason === "tool-loop" && gate.opportunistic) return { kind: "none" as const };
             return chooseCut({
             opportunistic: gate.opportunistic, mandatory, before, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
