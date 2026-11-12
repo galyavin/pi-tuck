@@ -181,6 +181,9 @@ test('room pressure removes older observations per item while their pointer line
   expect(fileGaveWay).toBe(true);
 });
 
-test('the closing instruction directs command recall and preserves the file reread instruction', () => {
-  expect(CLOSING_INSTRUCTION).toBe('Only the dialogue and the actions and files listed above carry over. Files created by commands are not listed: Before re-running a command listed above, read its output with tuck_recall instead. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.');
+test('the closing instruction directs recall and preserves the file reread instruction', () => {
+  // A1 replaced F's closing line whole (recall-framing.test.ts pins its wording); F's two duties stay.
+  expect(CLOSING_INSTRUCTION).toContain('Before redoing a step or deciding from memory, look it up:');
+  expect(CLOSING_INSTRUCTION).toContain('tuck_recall by #N or keyword');
+  expect(CLOSING_INSTRUCTION).toContain('Files made by commands are not listed. Re-read a file before editing or importing it.');
 });
