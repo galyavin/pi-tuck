@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import { BAND, HOST, ROOM, harness } from './budget-fixture';
+import { SessionManager } from '@earendil-works/pi-coding-agent';
 
 // No failure carries over to the next prompt: each one ends with its attempt, and the next prompt plans afresh from the session as it is.
 // Twice a single failure left a session unusable for good (an aborted reply that made an old result look unseen; Pi's "nothing to compact"
@@ -33,16 +34,18 @@ for (const [name, site] of Object.entries(sites))
 // The one exception: a cut this compactor supplied that Pi failed to commit. The session holds a cut its file lacks, and what is written after
 // would build on it, so the failure stays until the session restarts.
 test('a cut Pi failed to commit stays a fault for the next prompt', async () => {
-	const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST });
+ const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST, persist: true });
 	try {
 		const manager = h.manager as unknown as { _persist: (entry: { type: string }) => void };
 		const persist = manager._persist.bind(manager);
 		manager._persist = entry => { if (entry.type === 'compaction') throw new Error('ENOSPC: no space left on device'); persist(entry); };
 		await h.run();
-		expect(h.faults.join(' | ')).toContain('boundary draft remained unconfirmed');
+  expect(h.faults.join(' | ')).toContain('boundary cut was not saved in the session file');
+  expect(h.manager.getBranch().some(e => e.type === 'compaction')).toBe(true);
+  expect(SessionManager.open(h.manager.getSessionFile()!, h.dir).getBranch().some(e => e.type === 'compaction')).toBe(false);
 		const requests = h.state.requests;
 		await h.session.prompt('A short prompt');
 		expect(h.state.requests - requests, JSON.stringify(h.faults)).toBe(0);
-		expect(h.faults.at(-1)).toContain('boundary draft remained unconfirmed');
+  expect(h.faults.at(-1)).toContain('boundary cut was not saved in the session file');
 	} finally { await h.cleanup(); }
 }, 120000);

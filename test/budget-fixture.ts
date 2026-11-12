@@ -49,6 +49,8 @@ export interface Options {
  piRequestPath?: boolean;
  /** Keep the scripted provider and host/probes, but do not install pi-tuck. Native Pi owns all cuts. */
  plainPi?: boolean;
+ /** Start a fresh AgentSession from a saved branch, including learned-budget receipts. */
+ branch?: SessionEntry[];
  /** Capture normalized request hashes only for comparisons that need them. */
  fingerprintWire?: boolean;
  /** A scripted provider context-overflow error on a particular request, independent of Pi's output clamp. */
@@ -228,6 +230,7 @@ export async function harness(options: Options) {
   // A reopened session has to be a persisted one, so its entries reach a file and come back from it. `persist` stops short of the reopen: the file
   // exists, the run never leaves it.
   let manager = options.reopen || options.persist ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
+  if (options.branch) manager = SessionManager.inMemory(dir, undefined, [manager.getHeader()!, ...options.branch]);
   // A complete assistant message of this content. `replyOf` builds one without recording it, for measuring a reply that has not been sent yet.
   const replyOf = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
   const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return replyOf(content, stopReason); };
@@ -261,7 +264,7 @@ export async function harness(options: Options) {
   // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
   // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
   let nativeSummarizing = false, nativeBefore = 0, nativeReason = '';
-  const providerRequests: { summary: boolean; measuredPrompt: number; prompt: number; maxTokens: number; availableOutput: number; refused: boolean; length: boolean }[] = [];
+  const providerRequests: { summary: boolean; measuredPrompt: number; prompt: number; maxTokens: number; availableOutput: number; output: number; refused: boolean; length: boolean }[] = [];
   const state = { nativeSummaries: [] as Awaited<ReturnType<typeof providerRequest>>[], nativeCuts: [] as { afterRequest: number; reason: string; before: number; after: number; freed: number }[], requestFingerprints: [] as string[], clampEvents: [] as { request: number; wanted: number; cap: number }[], requestOptions: [] as Awaited<ReturnType<typeof providerRequest>>[], clampStops: 0, requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
   const wholePrompt: boolean[] = [];
@@ -479,7 +482,7 @@ export async function harness(options: Options) {
      options.providerWindow !== undefined && options.replyWindow === 'refuse' && count + request.maxTokens > providerWindow);
     const length = !refused && options.providerWindow !== undefined && options.replyWindow === 'clip' && message.usage.output > availableOutput;
     if (options.providerWindow !== undefined) {
-     providerRequests.push({ summary: true, measuredPrompt, prompt: count, maxTokens: request.maxTokens, availableOutput, refused, length });
+     providerRequests.push({ summary: true, measuredPrompt, prompt: count, maxTokens: request.maxTokens, availableOutput, output: refused ? 0 : length ? availableOutput : message.usage.output, refused, length });
      message.usage.input = count;
      message.usage.totalTokens = count + message.usage.output;
     }
@@ -516,7 +519,7 @@ export async function harness(options: Options) {
    const providerRefused = Boolean(options.providerOverflowAt?.(state.requests) ||
     options.replyWindow === 'refuse' && count + maxTokens > providerWindow ||
     options.rejectOverWindow && options.truncateOverWindow === undefined && count > providerWindow);
-   const observed = { summary: false, measuredPrompt: guard.at(-1) ?? 0, prompt: count, maxTokens, availableOutput: Math.min(maxTokens, Math.max(0, providerWindow - count)), refused: providerRefused, length: false };
+   const observed = { summary: false, measuredPrompt: guard.at(-1) ?? 0, prompt: count, maxTokens, availableOutput: Math.min(maxTokens, Math.max(0, providerWindow - count)), output: 0, refused: providerRefused, length: false };
    if (options.providerWindow !== undefined) providerRequests.push(observed);
    // A provider that enforces its own window refuses the request rather than answering it, and Pi runs its one compact-and-retry on the error.
    // A server that keeps the end of an oversize request instead (`truncateOverWindow`) answers it, and the reply below carries its usage.
@@ -603,6 +606,7 @@ export async function harness(options: Options) {
    if (options.providerWindow !== undefined) {
     message.timestamp = responseTime();
     observed.length = message.stopReason === 'length';
+    observed.output = message.usage.output;
     // The physical-window cells report the complete usage, including output beside the factored input.
     message.usage.totalTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + message.usage.output;
    }

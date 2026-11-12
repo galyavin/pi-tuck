@@ -83,13 +83,13 @@ test('a planner exception inside an opportunistic cut is still a fault: a latche
 // memory before it writes the file, so a write that fails (ENOSPC, EIO) leaves the session holding a cut that the file lacks. That must fault.
 // A prompt's cut is saved at its run's first boundary, after the request that carried it.
 test('an opportunistic cut the compactor proposed and Pi then fails to commit is a fault: nothing swallows it', async () => {
-	const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST });
+	const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST, persist: true });
 	try {
 		const manager = h.manager as unknown as { _persist: (entry: { type: string }) => void };
 		const persist = manager._persist.bind(manager);
 		manager._persist = (entry) => { if (entry.type === 'compaction') throw new Error('ENOSPC: no space left on device'); persist(entry); };
 		const r = await h.run();
-		expect(r.faults.join(' | '), r.probe).toContain('boundary draft remained unconfirmed');
+		expect(r.faults.join(' | '), r.probe).toContain('boundary cut was not saved in the session file');
 		// Control: the very same run with a working disk cuts and sends the request.
 		const ok = await scenario({ at: 'prompt', complete: BAND + 100, host: HOST });
 		expect(ok.faults, ok.probe).toEqual([]);

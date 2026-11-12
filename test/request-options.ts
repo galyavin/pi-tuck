@@ -16,7 +16,7 @@ export async function providerRequest(model: Model<Api>, context: TranscriptCont
  const requestModel = { ...model, api, baseUrl: 'https://fixture.invalid/v1' };
  const requestOptions: SimpleStreamOptions = { ...options, apiKey: 'sk-scripted-fixture', transport: 'sse',
   fetch: async () => { throw new Error('Scripted request escaped onPayload'); },
-  onPayload: value => { payload = value as Record<string, unknown>; throw sentinel; },
+  onPayload: async value => { payload = (await options?.onPayload?.(value, model) ?? value) as Record<string, unknown>; throw sentinel; },
  };
  const stream = api === 'openai-completions'
   ? completions(requestModel as Model<'openai-completions'>, context, requestOptions)

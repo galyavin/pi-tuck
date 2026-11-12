@@ -37,6 +37,7 @@ import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget
 import { thinkingLengthCell, thinkingLengthCells } from '../length-retry-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 import { overflowNotice, CALIBRATION_CEILING } from '../../src/compaction.js';
+import { seedContextWindow } from '../../src/request-capacity.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
@@ -359,13 +360,13 @@ async function measureCell(cell: Cell, plainPi: boolean) {
  * Recovery probes are counted separately, so an extra short answer cannot improve the workload's answer count. */
 async function measureWrongWindow(cell: Cell, plainPi: boolean) {
  cell.reset?.();
- let toolsWanted = () => false, opening = '', missing = false, lastRequest = 0, factor = 1;
+ let toolsWanted = () => false, opening = '', missing = false, carried = false, lastRequest = 0, factor = 1;
  const factors: { afterRequest: number; factor: number }[] = [];
  const compactAttempts: { afterRequest: number; reason: string }[] = [];
  const compactFailures: { afterRequest: number; reason: string; aborted: boolean; errorMessage?: string }[] = [];
  const options = optionsOf(cell, () => toolsWanted());
  const h = await harness({ ...options, plainPi,
-  onWire: context => { missing ||= !JSON.stringify(context).includes(opening); options.onWire?.(context); },
+  onWire: context => { carried = JSON.stringify(context).includes(opening); missing ||= !carried; options.onWire?.(context); },
   onRequest: (request, ctx) => { lastRequest = request; options.onRequest?.(request, ctx); },
   onBeforeCompact: (event, ctx) => { compactAttempts.push({ afterRequest: lastRequest, reason: event.reason }); options.onBeforeCompact?.(event, ctx); },
   compaction: { ...options.compaction, observeBudget: budget => {
@@ -377,21 +378,23 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
  });
  try {
   h.hostInput();
-  const prompts: { prompt: number; tokens: number; requests: number; stops: string[]; answered: boolean; hung: boolean; threw: string; cuts: string[] }[] = [];
+  const prompts: { prompt: number; tokens: number; requests: number; stops: string[]; completed: boolean; answered: boolean; hung: boolean; threw: string; cuts: string[] }[] = [];
   const recovery: { afterPrompt: number; requests: number; hung: boolean; threw: string }[] = [];
   const lostTasks = new Set<number>(), watched: { prompt: number; opening: string }[] = [];
   for (let i = 0; i < cell.prompts.length; i++) {
    const body = h.sized(cell.prompts[i]!);
-   opening = JSON.stringify(body.slice(0, 80)).slice(1, -1); missing = false;
+   opening = JSON.stringify(body.slice(0, 80)).slice(1, -1); missing = false; carried = false;
    const start = h.state.requests, stop = h.state.stops.length;
    const cuts = h.manager.getEntries().filter(e => e.type === 'compaction').length;
    const roundEnd = h.state.effects + (cell.rounds[i] ?? 0);
    toolsWanted = () => h.state.effects < roundEnd;
    const outcome = await drive(h, body, PROMPT_MS);
    const requests = h.state.requests - start, stops = h.state.stops.slice(stop);
-   const answered = outcome === 'ended' && !lastThrew && stops.includes('stop');
+   const completed = outcome === 'ended' && !lastThrew && stops.includes('stop');
+   // A model's normal stop is not an answer to a task its request no longer contains. Keep the old turn-completion count visible.
+   const answered = completed && carried;
    const newCuts = h.manager.getEntries().filter(e => e.type === 'compaction').slice(cuts);
-   prompts.push({ prompt: i + 1, tokens: est({ role: 'user', content: body, timestamp: 0 }), requests, stops, answered, hung: outcome === 'hung', threw: lastThrew,
+   prompts.push({ prompt: i + 1, tokens: est({ role: 'user', content: body, timestamp: 0 }), requests, stops, completed, answered, hung: outcome === 'hung', threw: lastThrew,
     cuts: newCuts.map(e => (e.details as { diagnosticReceipt?: { reason?: string } } | undefined)?.diagnosticReceipt?.reason ?? 'native'),
    });
    if (requests) {
@@ -402,7 +405,7 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
     const saved = JSON.stringify(h.saved());
     for (const task of [watched[0], ...watched.slice(-8)]) if (task && !saved.includes(task.opening)) lostTasks.add(task.prompt);
    }
-   if (!answered) {
+   if (!completed) {
     toolsWanted = () => false;
     const short = h.sized(60); opening = JSON.stringify(short.slice(0, 80)).slice(1, -1);
     const before = h.state.requests;
@@ -426,12 +429,14 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
   const reached = h.state.results.length > 0 && prompts.reduce((sum, p) => sum + p.tokens, 0) + h.state.results.reduce((a, b) => a + b, 0) > 2 * providerWindow &&
    (cell.wrongWindow === 'prompt-over' ? work.some(r => r.refused && r.prompt > providerWindow) :
     cell.wrongWindow === 'prompt-plus-reply-over' ? work.some(r => r.refused && r.prompt <= providerWindow && r.prompt + r.maxTokens > providerWindow) :
-    work.some(r => r.length && !r.refused && r.prompt <= providerWindow && r.maxTokens > r.availableOutput));
+    work.some(r => r.length && !r.refused && r.prompt <= providerWindow && r.output === providerWindow - r.prompt && r.output < r.maxTokens));
   let reopened = true;
   try { reopened = h.reopenFile() >= nonSystemCount(h.saved()); } catch { reopened = false; }
   return {
    name: cell.name, plainPi, configuredWindow: cell.window, providerWindow, usageFactor: cell.usageRatio,
    answered: prompts.filter(p => p.answered).length, refused: prompts.filter(p => !p.answered && !p.hung).length,
+   completedTurns: prompts.filter(p => p.completed).length,
+   learnedWindow: seedContextWindow(h.manager.getBranch(), JSON.stringify([h.session.model!.provider, h.session.model!.api, h.session.model!.id])) ?? null,
    lostTasks: lostTasks.size, lostTaskPrompts: [...lostTasks], stuckSessions: recovery.some(r => r.requests === 0 || r.hung) ? 1 : 0,
    hungPrompts: prompts.filter(p => p.hung).length,
    lengthStops: h.state.stops.filter(s => s === 'length').length, providerOverflows: h.state.overflows,
@@ -455,9 +460,9 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
 }
 
 function wrongWindowOutcome(measured: Awaited<ReturnType<typeof measureWrongWindow>>) {
- const { name, plainPi, answered, refused, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
+ const { name, plainPi, answered, refused, completedTurns, learnedWindow, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
   calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached } = measured;
- return { name, plainPi, answered, refused, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
+ return { name, plainPi, answered, refused, completedTurns, learnedWindow, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
   summaryOverflows, summaryLengthStops, calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached };
 }
 
@@ -1005,7 +1010,7 @@ function wrongWindowCells(): Cell[] {
    rejectStatus: 400,
    rejectWith: mode === 'prompt-plus-reply-over'
     ? ({ prompt, maxTokens, window }) => `This model's maximum context length is ${window} tokens. However, you requested ${prompt + maxTokens} tokens (${prompt} in the messages, ${maxTokens} in the completion).`
-    : 'the request exceeds the available context size, try increasing it',
+    : '{"message":"prompt exceeds the context window","type":"invalid_request_error","code":"context_length_exceeded"}',
    ...(mode === 'prompt-plus-reply-over' ? { replyWindow: 'refuse' as const } :
     mode === 'silent-shrink' ? { replyWindow: 'clip' as const, replyWindowOutput: () => 16_384 } : {}),
   },

@@ -83,9 +83,10 @@ export interface Run {
     cut: PendingCut;
     clips: Map<string, Clip>;
     pendingBoundaryCommit: boolean;
+    pendingBoundaryReceipts: string[];
     thinkingRetryPending: boolean;
     failure?: Error;
     refusalReceipted: boolean;
 }
 export const createRun = (phase: Run['phase']): Run => ({ phase, claimed: false, expired: false,
-    cut: new PendingCut(), clips: new Map(), pendingBoundaryCommit: false, thinkingRetryPending: false, refusalReceipted: false });
+    cut: new PendingCut(), clips: new Map(), pendingBoundaryCommit: false, pendingBoundaryReceipts: [], thinkingRetryPending: false, refusalReceipted: false });
