@@ -4,6 +4,7 @@ import { parseRecords, serializeRecord, splitSummary, transcriptHeader } from '.
 import { textOf } from "./tuck/core/content";
 import { isDiscardedResponse } from "./protocol";
 import { createRecall, type RecallPolicy } from './recall';
+import { twinNotes } from './twin-note';
 /** Native branch edits supply exclusion; original global indices supply provenance. */
 export function omittedSourceIndices(entries: readonly SessionEntry[], branch: readonly SessionEntry[]): ReadonlySet<number> {
  const edits = new Set<string>();
@@ -98,6 +99,7 @@ type ProjectedMessages = ReturnType<ExtensionContext['sessionManager']['buildSes
 /** The saved conversation as this compactor delivers it: native omissions and ineligible custom quotes removed from summaries. */
 function projectMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy: RecallPolicy | undefined, allowForeign: boolean): ProjectedMessages {
  const entries = ctx.sessionManager.getEntries(), branch = ctx.sessionManager.getBranch();
+ const twinNote = twinNotes(ctx.sessionManager, entries, branch);
  const omitted = omittedSourceIndices(entries, branch);
  const lastCut = branch.findLastIndex(entry => entry.type === 'compaction');
  const cut = branch[lastCut];
@@ -108,9 +110,15 @@ function projectMessages(messages: ProjectedMessages, ctx: ExtensionContext, pol
    const index = indices.get(entry.targetId); if (index !== undefined) afterCut.add(index);
   }
  }
- return messages.map(message => message.role === 'compactionSummary' && (!allowForeign || splitSummary(message.summary) !== undefined)
-  ? { ...message, summary: filterCustomQuotes(filterOmittedSummary(message.summary, omitted, entries,
-      cut?.type === 'compaction' && cut.summary === message.summary ? afterCut : new Set()), entries, branch, policy) } : message);
+ return messages.map(message => {
+  if (message.role === 'toolResult' && !message.isError && message.toolName !== 'tuck_recall' && message.toolName !== 'tuck_search' && message.content.every(part => part.type === 'text')) {
+   const note = twinNote(message.toolCallId), last = message.content.at(-1);
+   if (note && !(last?.type === 'text' && last.text === note)) return { ...message, content: [...message.content, { type: 'text' as const, text: note }] };
+  }
+  return message.role === 'compactionSummary' && (!allowForeign || splitSummary(message.summary) !== undefined)
+   ? { ...message, summary: filterCustomQuotes(filterOmittedSummary(message.summary, omitted, entries,
+       cut?.type === 'compaction' && cut.summary === message.summary ? afterCut : new Set()), entries, branch, policy) } : message;
+ });
 }
 export function projectedMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy?: RecallPolicy): ProjectedMessages {
  return projectMessages(messages, ctx, policy, false);

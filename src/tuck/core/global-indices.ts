@@ -20,11 +20,20 @@ export const isCountedMessageEntry = (entry: any): boolean =>
  * without a usable id still occupy an index. Duplicate ids are dropped
  * fail-closed so callers emit no ref instead of a wrong one.
  */
-export const buildGlobalIndexById = (entries: readonly any[]): Map<string, number> => {
-  const byId = new Map<string, number>();
-  const ambiguous = new Set<string>();
-  let messageIndex = 0;
-  for (const entry of entries) {
+export interface GlobalIndexCursor {
+  byId: Map<string, number>;
+  ambiguous: Set<string>;
+  messageIndex: number;
+  through: number;
+}
+
+/** An optional cursor extends the same index over append-only session entries without recounting history. */
+export const buildGlobalIndexById = (entries: readonly any[], cursor: GlobalIndexCursor = {
+  byId: new Map(), ambiguous: new Set(), messageIndex: 0, through: 0,
+}): Map<string, number> => {
+  const { byId, ambiguous } = cursor;
+  for (let at = cursor.through; at < entries.length; at++) {
+    const entry = entries[at];
     if (!isCountedMessageEntry(entry)) continue;
     const id = entry?.id;
     if (typeof id === "string" && id.length > 0) {
@@ -32,10 +41,11 @@ export const buildGlobalIndexById = (entries: readonly any[]): Map<string, numbe
         byId.delete(id);
         ambiguous.add(id);
       } else {
-        byId.set(id, messageIndex);
+        byId.set(id, cursor.messageIndex);
       }
     }
-    messageIndex++;
+    cursor.messageIndex++;
   }
+  cursor.through = entries.length;
   return byId;
 };

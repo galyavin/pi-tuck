@@ -1,10 +1,14 @@
-import {afterAll,expect,test} from 'vitest';
+import {afterAll,expect,test,vi} from 'vitest';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SessionManager,type ExtensionAPI} from '@earendil-works/pi-coding-agent';
+import {SessionManager,type ExtensionAPI,type ExtensionContext} from '@earendil-works/pi-coding-agent';
 import {installCompaction} from '../../src/compaction';
 import {createSemanticRecall} from '../../src/semantic-recall';
+import {projectedMessages} from '../../src/omissions';
+import * as content from '../../src/tuck/core/content';
+import {serializeTranscript} from '../../src/tuck/core/transcript';
+import {DIALOGUE_SUFFIX} from '../../src/tuck/core/format';
 
 // Search on a session of a real long-running agent's size: about 85 MB, growing between searches, with the next plan still preparing when a
 // search comes. Three field defects lived only there (2026-11-10): the keyword half's time limit failed the whole search; a search answered
@@ -34,6 +38,36 @@ function fixture(){
    if(input.action==='score'){const found=input.keys.filter((k:string)=>stored.has(k));return {ranked:found.slice(0,24).map((key:string)=>({key,score:1})),observed:found.length};}return {};}
   throw new Error('unexpected RPC '+op);}});
  return {c,state};
+}
+
+/** Use this same 85 MB fixture, rather than a small proxy: a warm projection reads no old output text, and an append reads only the new
+ * result. The spy proves incremental work without depending on a wall-clock threshold; timings include the normal projection filters. */
+function checkTwinProjection(m:SessionManager){
+ const text=Array.from({length:6},(_,i)=>`Twin stress substantive line ${i}: retained original evidence.`).join('\n');
+ const append=()=>{
+  const id='call_'+(++calls);
+  m.appendMessage({role:'assistant',content:[{type:'toolCall',id,name:'read',arguments:{path:'twin.txt'}}],api:'openai-completions',provider:'fixture',model:'fixture',usage,stopReason:'toolUse',timestamp:++at});
+  m.appendMessage({role:'toolResult',toolCallId:id,toolName:'read',content:[{type:'text',text}],isError:false,timestamp:++at});
+  return id;
+ };
+ append();
+ const keep=m.appendMessage({role:'user',content:'Continue with the stress fixture.',timestamp:++at});
+ m.appendCompaction(serializeTranscript([{kind:'omission',reason:'Earlier outputs are out of view.'}])+DIALOGUE_SUFFIX,keep,10000,{compactor:'pi-tuck'},true);
+ const repeated=append(),ctx={sessionManager:m,cwd:join(root,'project')} as unknown as ExtensionContext;
+ const reads=vi.spyOn(content,'textOf');
+ try{
+  const messages=m.buildSessionProjection().messages,start=performance.now(),cold=projectedMessages(messages,ctx),coldMs=performance.now()-start;
+  const result=cold.find(message=>message.role==='toolResult'&&message.toolCallId===repeated);
+  expect(result).toMatchObject({content:[{type:'text',text},{type:'text',text:expect.stringContaining('[pi-tuck: all 6 lines')}]});
+  expect(reads.mock.calls.length).toBeGreaterThan(1000);reads.mockClear();
+  const warm:number[]=[];
+  for(let i=0;i<20;i++){const start=performance.now(),projected=projectedMessages(messages,ctx);warm.push(performance.now()-start);expect(projected).toEqual(cold);}
+  expect(reads).not.toHaveBeenCalled();
+  append();
+  const grown=m.buildSessionProjection().messages,startAppend=performance.now();projectedMessages(grown,ctx);const appendMs=performance.now()-startAppend;
+  expect(reads).toHaveBeenCalledTimes(1);
+  process.stdout.write(`twin projection at ~${TARGET_MB} MB: cold ${coldMs.toFixed(1)} ms, warm median ${warm.sort((a,b)=>a-b)[10]!.toFixed(2)} ms, append ${appendMs.toFixed(2)} ms; old outputs rescanned: 0\n`);
+ }finally{reads.mockRestore();}
 }
 
 test.skipIf(!RUN)(`search on a ~${TARGET_MB} MB session that grows between searches, with the next plan still preparing`,async()=>{
@@ -68,4 +102,5 @@ test.skipIf(!RUN)(`search on a ~${TARGET_MB} MB session that grows between searc
   for(let k=0;k<600&&!(c.status() as any).indexingComplete;k++)await new Promise(r=>setTimeout(r,50));
  }
  await c.close();
+ checkTwinProjection(m);
 },30*60*1000);
