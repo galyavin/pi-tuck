@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, scenario } from './budget-fixture';
+import { BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, scenario } from './budget-fixture';
 
 test('combined sizing keeps exact-reserve admission strict at equality', async () => {
  for (const d of [-1, 0, 1]) {
@@ -33,15 +33,15 @@ test('calibrated room equality is actually reached and rejected, not skipped by 
  expect(seen.some(n => n > ROOM)).toBe(true);
 });
 
-test('omitted-summary request crosses the band at equality, not one token early', async () => {
+test('omitted-summary tool request crosses the room at equality, not one token early', async () => {
  const base = { at: 'tool' as const, host: HOST, summary: true, omitted: 40000 };
- const first = await scenario({ ...base, complete: BAND, compactionEnabled: false });
- const shift = BAND - first.guard[1]!;
+ const first = await scenario({ ...base, complete: ROOM, compactionEnabled: false });
+ const shift = ROOM - first.guard[1]!;
  expect(shift).toBeGreaterThan(5000);
  for (const d of [-1, 0, 1]) {
-  const complete = BAND + shift + d;
+  const complete = ROOM + shift + d;
   const off = await scenario({ ...base, complete, compactionEnabled: false });
-  expect(off.guard[1], off.probe).toBe(BAND + d);
+  expect(off.guard[1], off.probe).toBe(ROOM + d);
   const on = await scenario({ ...base, complete });
   expect(on.cuts, on.probe).toBe(d < 0 ? 0 : 1);
   expect(on.faults, on.probe).toEqual([]);

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { BAND, HOST, ROOM, harness, receiptOf, scenario } from './budget-fixture';
+import { HOST, ROOM, harness, receiptOf, scenario } from './budget-fixture';
 import { conversationTokens, measurableConversationTokens, planningReserve, projectedConversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft, type DraftMode, type Tuck } from '../src/tuck';
 import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
@@ -138,7 +138,7 @@ test('real cuts record a mode that matches their view and content', async () => 
 });
 
 test('a cut at the tool boundary records its mode', async () => {
-	const r = await scenario({ at: 'tool', complete: BAND + 100, host: HOST });
+	const r = await scenario({ at: 'tool', complete: ROOM + 100, fresh: 6000, host: HOST });
 	expect(r.cuts, r.probe).toBe(1);
 	expect(MODES).toContain(receiptOf(r.entries[0]!).mode);
 });

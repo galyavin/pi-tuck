@@ -6,7 +6,7 @@ import { DEFAULT_CUT_AT, TRIGGER_MARGIN_FRACTION, bandOf, decideCut, validCutAt,
 import { installCompaction } from '../src/compaction';
 
 // The cut point `cutAt` (F): a cut is triggered at, and preferably planned to, the band min(room - margin, floor(F * room)). The exact room
-// stays the limit of every throw, fault and the guard. F = 1 is the default and leaves every decision as it was.
+// stays the limit of every throw, fault and the guard. At every F tool boundaries wait for the room; F still controls their cut target.
 // The settings file is read by index.ts (cut-at-settings.test.ts). decide-cut-property.test.ts, trigger-guard-property.test.ts and
 // cut-yield.test.ts run their properties at F = 0.6 as well.
 const F = 0.6, LEAN = bandOf(ROOM, F);
@@ -163,7 +163,7 @@ test('a capped band still plans the band first even when the room plan would lan
 test('the lean band is what the test below walks across', () => { expect(LEAN).toBe(86400); expect(LEAN).toBeLessThan(BAND); });
 
 for (const at of ['prompt', 'tool'] as const)
-test(`${at} boundary, cutAt 0.6: a request is cut from the first token at the lean band and not before`, async () => {
+test(`${at} boundary, cutAt 0.6: only a prompt cuts from the first token at the lean band`, async () => {
 	const seen: { d: number; cuts: number }[] = [];
 	for (const d of AROUND) {
 		const r = await scenario({ at, complete: LEAN + d, host: HOST, compaction: { cutAt: F } });
@@ -181,21 +181,22 @@ test(`${at} boundary, cutAt 0.6: a request is cut from the first token at the le
 		seen.push({ d, cuts: r.cuts });
 	}
 	const probe = JSON.stringify(seen);
-	for (const s of seen) expect(s.cuts > 0, probe).toBe(s.d >= 0);
+	for (const s of seen) expect(s.cuts > 0, probe).toBe(at === 'prompt' && s.d >= 0);
 });
 
 for (const at of ['prompt', 'tool'] as const)
-test(`${at} boundary: a request inside the lean band is cut at cutAt 0.6 and left alone by the default`, async () => {
+test(`${at} boundary: inside the lean band cutAt 0.6 cuts at a prompt and waits at a tool boundary`, async () => {
 	// 100,000 is inside the lean band and far below the default one.
-	const lean = await scenario({ at, complete: 100000, host: HOST, compaction: { cutAt: F } });
-	const standard = await scenario({ at, complete: 100000, host: HOST });
+	const lean = await scenario({ at, complete: 100000, host: HOST, fresh: 20000, compaction: { cutAt: F } });
+	const standard = await scenario({ at, complete: 100000, host: HOST, fresh: 20000 });
 	expect(lean.faults, lean.probe).toEqual([]);
 	expect(standard.faults, standard.probe).toEqual([]);
-	expect(lean.cuts, lean.probe).toBeGreaterThanOrEqual(1);
+	expect(lean.cuts, lean.probe).toBe(at === 'prompt' ? 1 : 0);
+	expect(lean.requests, lean.probe).toBe(at === 'prompt' ? 1 : 2);
 	expect(standard.cuts, standard.probe).toBe(0);
 });
 
-test('cutAt 0.6, Pi\'s own threshold ask: below the lean band it is declined, from the lean band up it yields the compactor\'s own decision', async () => {
+test('cutAt 0.6, Pi\'s own threshold ask: below the lean band it is declined, at the lean band it cuts after the tool boundary waits', async () => {
 	// Pi's usage threshold (window less compaction.reserveTokens) counts the last reply's output tokens too, so a large output makes it
 	// ask for a cut on a request the compactor measures lower. The compactor answers with the same gate as its own triggers.
 	const lean = bandOf(ROOM, F), GROWTH = 12000, CLEAR = 20;
@@ -211,8 +212,8 @@ test('cutAt 0.6, Pi\'s own threshold ask: below the lean band it is declined, fr
 	expect(below.faults, below.probe).toEqual([]); expect(below.aborts, below.probe).toBe(0); expect(below.cuts, below.probe).toBe(0);
 	expect(below.requests, below.probe).toBe(2);
 	for (const guarded of below.guard) expect(guarded, below.probe).toBeLessThan(ROOM);
-	// At the first token of the lean band: the compactor's own trigger (the host view grows before the boundary) and Pi's call (it grows just
-	// after the boundary's decision, so only Pi's later call sees all of it) make the same cut, down to the arithmetic it reserved. The two
+	// At the first token of the lean band the tool boundary waits in both runs. Pi's threshold path sees the same grown host
+	// whether it arrived before or after that boundary, and makes the same cut with the same reserved arithmetic. The two
 	// conversations are built to the same size from differently sized tool results, so the size left may differ by a few tokens of rounding.
 	const own = await observed({ ...base, complete: lean, afterDecision: (index, api) => { if (index === 0) api.growHost(GROWTH); } });
 	const pi = await observed({ ...base, complete: lean - GROWTH, fresh: base.fresh - GROWTH, afterDecision: (index, api) => { if (index === 1) api.growHost(GROWTH); } });
@@ -224,7 +225,7 @@ test('cutAt 0.6, Pi\'s own threshold ask: below the lean band it is declined, fr
 	const decision = (entry: (typeof own.entries)[number]) => { const r = receiptOf(entry); return { target: r.target, mode: r.mode, view: r.view, mandatory: r.mandatoryInputTokens, host: r.hostInputTokens, reserved: r.draftReservedTokens, margin: r.triggerMarginTokens, cutAt: r.cutAt }; };
 	expect(pi.entries.map(decision), probe).toEqual(own.entries.map(decision));
 	for (let i = 0; i < own.entries.length; i++) expect(Math.abs(receiptOf(pi.entries[i]!).tokensAfter - receiptOf(own.entries[i]!).tokensAfter), probe).toBeLessThanOrEqual(20);
-	for (const entry of own.entries) expect(receiptOf(entry).reason, probe).toBe('tool-loop');
+	for (const entry of own.entries) expect(receiptOf(entry).reason, probe).toBe('threshold');
 	for (const entry of pi.entries) expect(receiptOf(entry).reason, probe).toBe('threshold');
 });
 
@@ -240,9 +241,9 @@ test('cutAt 0.6, exact reply reserve: the band follows the exact room of the hos
 	}
 });
 
-// An irreducible request: a large prompt (protected from every cut), a little old history, a tiny tool result. The best cut removes only
+// An irreducible prompt: a large protected input and a little old history. The best cut removes only
 // the old history, so it reaches the band only when the request is within that reduction of it.
-const IRREDUCIBLE = { at: 'tool' as const, host: HOST, history: 1500, fresh: 100 };
+const IRREDUCIBLE = { at: 'prompt' as const, host: HOST, history: 1500 };
 const CAPACITY = "pi-tuck's mandatory context cannot fit or reduce the request budget";
 
 test('cutAt 0.6, the guard is the exact room: between the lean band and the room a request that no cut can reduce is no fault; over the room it is', async () => {
@@ -253,7 +254,7 @@ test('cutAt 0.6, the guard is the exact room: between the lean band and the room
 			expect(r.measured!.complete, r.probe).toBe(band + d);
 			// Sent as it stands, or cut to below the band: never a fault and never a rejection, up to the very last token below the room.
 			expect(r.faults, r.probe).toEqual([]);
-			expect(r.requests, r.probe).toBe(2); expect(r.effects, r.probe).toBe(1);
+			expect(r.requests, r.probe).toBe(1); expect(r.effects, r.probe).toBe(0);
 			for (const guarded of r.guard) expect(guarded, r.probe).toBeLessThan(ROOM);
 			for (const entry of r.entries) expect(receiptOf(entry).tokensAfter + receiptOf(entry).mandatoryInputTokens!, r.probe).toBeLessThan(band);
 			seen.push({ d, cuts: r.cuts });
@@ -346,15 +347,24 @@ test('receipts: cutAt is recorded when it is not 1, and a default receipt is as 
 	expect(receiptOf(standard.entries[0]!).triggerMarginTokens).toBe(2880);
 });
 
-test('the default cut point is 0.6: with no cutAt a request past 60% of the room is cut, and its receipt records the cut point', async () => {
+test('the default cut point is 0.6: prompts cut at the band, tools at the room, and receipts record the cut point', async () => {
 	expect(DEFAULT_CUT_AT).toBe(0.6);
 	for (const at of ['prompt', 'tool'] as const) {
 		const lean = bandOf(ROOM, DEFAULT_CUT_AT);
 		const below = await scenario({ at, complete: lean - 1, host: HOST, cutAtDefault: true });
 		expect(below.cuts, below.probe).toBe(0);
-		const inside = await scenario({ at, complete: Math.floor((lean + BAND) / 2), host: HOST, cutAtDefault: true });
-		expect(inside.cuts, inside.probe).toBe(1);
-		expect(inside.entries.map(receiptOf)[0]?.cutAt, inside.probe).toBe(DEFAULT_CUT_AT);
+		const inside = await scenario({ at, complete: Math.floor((lean + BAND) / 2), host: HOST, fresh: 40000, cutAtDefault: true });
+		expect(inside.cuts, inside.probe).toBe(at === 'prompt' ? 1 : 0);
+		if (at === 'prompt') expect(receiptOf(inside.entries[0]!).cutAt, inside.probe).toBe(DEFAULT_CUT_AT);
+		else {
+			expect(inside.requests, inside.probe).toBe(2);
+			const due = await scenario({ at, complete: ROOM, host: HOST, fresh: ROOM - lean + 6000, cutAtDefault: true });
+			expect(due.cuts, due.probe).toBe(1);
+			expect(receiptOf(due.entries[0]!).reason, due.probe).toBe('tool-loop');
+			expect(receiptOf(due.entries[0]!).cutAt, due.probe).toBe(DEFAULT_CUT_AT);
+			expect(due.faults, due.probe).toEqual([]);
+			expect(due.requests, due.probe).toBe(2);
+		}
 		expect(inside.faults, inside.probe).toEqual([]);
 	}
 });

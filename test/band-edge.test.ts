@@ -3,13 +3,13 @@ import { BAND, HOST, ROOM, expectParity, harness, receiptOf, scenario } from './
 
 const PROMPT = 2; // 'Continue'
 
-// A cut is triggered 2% of the room early (the band). Walk the request across both edges, at both boundaries, token by token near them.
-// Inside the band a cut is opportunistic: it is taken when it can reach the band; when it cannot, nothing happens and the request
+// Prompts cut at the band, 2% before the room; tool boundaries wait for the room. Walk both edges token by token.
+// At a prompt, a cut inside the band is opportunistic: it is taken when it can reach the band; when it cannot, nothing happens and the request
 // goes to the guard, which admits it. Above the room nothing changes: the request is cut or the attempt fails closed.
 const AROUND = [-30, -20, -10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10, 20, 30];
 
 for (const at of ['prompt', 'tool'] as const)
-test(`${at} boundary: a request is cut from the first token inside the band and not before`, async () => {
+test(`${at} boundary: only a prompt cuts from the first token inside the band`, async () => {
  const seen: { d: number; cuts: number }[] = [];
  for (const d of AROUND) {
   const r = await scenario({ at, complete: BAND + d, host: HOST });
@@ -23,7 +23,7 @@ test(`${at} boundary: a request is cut from the first token inside the band and 
   seen.push({ d, cuts: r.cuts });
  }
  const probe = JSON.stringify(seen);
- for (const s of seen) expect(s.cuts > 0, probe).toBe(s.d >= 0);
+ for (const s of seen) expect(s.cuts > 0, probe).toBe(at === 'prompt' && s.d >= 0);
 });
 
 for (const at of ['prompt', 'tool'] as const)
@@ -32,7 +32,7 @@ test(`${at} boundary: around the room the request is cut and sent, never rejecte
   const r = await scenario({ at, complete: ROOM + d, host: HOST });
   expect(r.measured!.complete, r.probe).toBe(ROOM + d);
   expect(r.faults, r.probe).toEqual([]);
-  expect(r.cuts, r.probe).toBe(1);
+  expect(r.cuts, r.probe).toBe(at === 'prompt' || d >= 0 ? 1 : 0);
   expect(r.requests, r.probe).toBe(at === 'tool' ? 2 : 1);
   for (const guarded of r.guard) expect(guarded, r.probe).toBeLessThan(ROOM);
   expectParity(r, { host: HOST, incoming: at === 'prompt' ? PROMPT : 0 });
@@ -46,7 +46,10 @@ const IRREDUCIBLE = { at: 'tool' as const, host: HOST, history: 1500, fresh: 100
 test('inside the band, a cut that can reach the band is taken; one that cannot is no cut and no fault, and the request is sent', async () => {
  // Find, by bisection, how deep into the band a cut is still taken: it removes the old history, and it is taken only while the exact room
  // could plan a cut with the same summary view. Beyond that depth nothing is done and nothing must happen.
- const run = (d: number) => scenario({ ...IRREDUCIBLE, complete: BAND + d });
+ const run = async (d: number) => {
+  const h = await harness({ at: 'prompt', host: HOST, history: IRREDUCIBLE.history, complete: BAND + d });
+  try { return { ...await h.run(), incoming: h.promptTokens() }; } finally { await h.cleanup(); }
+ };
  let reach = 0, beyond = ROOM - BAND - 1;
  expect((await run(reach)).cuts).toBe(1);
  expect((await run(beyond)).cuts).toBe(0);
@@ -58,12 +61,12 @@ test('inside the band, a cut that can reach the band is taken; one that cannot i
   const r = await run(d);
   expect(r.measured!.complete, r.probe).toBe(BAND + d);
   expect(r.faults, r.probe).toEqual([]);
-  expect(r.requests, r.probe).toBe(2); expect(r.effects, r.probe).toBe(1);
+  expect(r.requests, r.probe).toBe(1); expect(r.effects, r.probe).toBe(0);
   // Sent as it stands or cut to below the band: either way the guard admitted every request.
   for (const guarded of r.guard) expect(guarded, r.probe).toBeLessThan(ROOM);
   for (const entry of r.entries) expect(receiptOf(entry).tokensAfter + receiptOf(entry).mandatoryInputTokens!, r.probe).toBeLessThan(BAND);
-  // The cut is at the tool boundary or, while the old history alone is cut, at the prompt boundary (where the prompt is mandatory).
-  if (r.entries.every(entry => receiptOf(entry).reason === 'tool-loop')) expectParity(r, { host: HOST });
+  for (const entry of r.entries) expect(receiptOf(entry).reason, r.probe).toBe('prompt');
+  expectParity(r, { host: HOST, incoming: r.incoming });
   seen.push({ d, cuts: r.cuts });
  }
  const probe = JSON.stringify({ reach, beyond, seen });
@@ -78,7 +81,7 @@ test('a plan-bound cut inside the band: no commit and no fault at the boundary, 
  expect(r.cuts, r.probe).toBe(0);
  expect(r.faults, r.probe).toEqual([]);
  expect(r.requests, r.probe).toBe(4); expect(r.effects, r.probe).toBe(3);
- // Every request was in the band (cut would have been due) and the guard passed it.
+ // Every request was in the band, below the tool due line, and the guard passed it.
  expect(r.guard.length, r.probe).toBe(4);
  for (const guarded of r.guard) { expect(guarded, r.probe).toBeGreaterThanOrEqual(BAND); expect(guarded, r.probe).toBeLessThan(ROOM); }
 });

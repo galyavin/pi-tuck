@@ -58,7 +58,7 @@ test(`Pi's threshold fires on a request just below the band, ${shape.name}: no c
  for (const guarded of r.guard) expect(guarded, probe).toBeLessThan(ROOM_EXACT);
 });
 
-// The same request, once as the compactor's own trigger meets it and once as Pi's threshold call meets it. The conversation and the host input
+// The same request with growth before or after the tool boundary. Only a due boundary cuts first; inside the band Pi's threshold path cuts. The conversation and the host input
 // are identical (the history is the same and so is the fresh tool result): in one run the host view grows before the boundary (the trigger
 // sees it), in the other just after the trigger decided (only Pi's call, which comes later, sees it). The pair's `complete` and `fresh`
 // differ by the growth so that both runs build the very same conversation. The growth is large enough that the boundary, which does not see
@@ -69,7 +69,7 @@ for (const where of [
  { name: 'the first token inside the band', complete: BAND_EXACT },
  { name: 'at the room', complete: ROOM_EXACT },
 ])
-test(`at or above the band Pi's threshold call yields the compactor's own decision: ${where.name}`, async () => {
+test(`Pi's threshold keeps the band trigger while tool boundaries wait for the room: ${where.name}`, async () => {
  const options = { ...base, at: 'tool' as const, outputTokens: 50000 };
  // Own trigger: the host view grows at the first decision (before the prompt's request); the boundary then meets the full request.
  const own = await observed({ ...options, complete: where.complete, fresh: 100000, afterDecision: (index, api) => { if (index === 0) api.growHost(GROWTH); } });
@@ -83,7 +83,7 @@ test(`at or above the band Pi's threshold call yields the compactor's own decisi
  expect(pi.cuts > 0, probe).toBe(where.complete >= BAND_EXACT);
  const decision = (entry: (typeof own.entries)[number]) => { const r = receiptOf(entry); return { target: r.target, mode: r.mode, view: r.view, tokensAfter: r.tokensAfter, mandatory: r.mandatoryInputTokens, host: r.hostInputTokens, reserved: r.draftReservedTokens, margin: r.triggerMarginTokens, factor: r.calibrationFactor }; };
  expect(pi.entries.map(decision), probe).toEqual(own.entries.map(decision));
- for (const entry of own.entries) expect(receiptOf(entry).reason, probe).toBe('tool-loop');
+ for (const entry of own.entries) expect(receiptOf(entry).reason, probe).toBe(where.complete >= ROOM_EXACT ? 'tool-loop' : 'threshold');
  for (const entry of pi.entries) expect(receiptOf(entry).reason, probe).toBe('threshold');
  // Only the first request differs (it carries the growth in one run); the request after the boundary is the same, cut or not.
  expect(pi.guard.at(-1), probe).toBe(own.guard.at(-1));

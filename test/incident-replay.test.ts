@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BAND, HOST, harness } from './budget-fixture';
+import { ROOM, HOST, harness } from './budget-fixture';
 import { inspectIncident } from '../src/diagnostic-replay';
 import type { IncidentRecord } from '../src/diagnostics';
 
@@ -39,7 +39,7 @@ for (const how of ['operator cut', 'tool-boundary cut'] as const)
 test(`a recorded ${how} shows the arithmetic it was made with`, async () => {
 	const directory = mkdtempSync(join(tmpdir(), 'pi-incident-'));
 	const h = await harness(how === 'operator cut' ? { at: 'prompt', complete: 60000, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } }
-		: { at: 'tool', complete: BAND + 100, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } });
+		: { at: 'tool', complete: ROOM + 100, fresh: 6000, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } });
 	try {
 		await h.session.prompt('/tuck-incident on');
 		if (how === 'operator cut') await h.session.compact(); else await h.run();

@@ -9,7 +9,7 @@ import { eligibilityKey, memoizedEligibleSources } from '../src/eligibility-cach
 import { installCompaction } from '../src/compaction';
 import { tuckRecall } from '../src/tuck';
 import type { RecallPolicy } from '../src/recall';
-import { BAND, HOST, EXACT_RESERVE, harness } from './budget-fixture';
+import { ROOM, HOST, EXACT_RESERVE, harness } from './budget-fixture';
 
 // The eligible-history snapshot is memoized per session manager on a cheap key. `access()` still runs on every call, a hit never hands out the
 // stored object (the controller fills `units`, `complete`, `indexed` and `window` on what it is given, and reads `viewStart` to place the window), and
@@ -744,7 +744,7 @@ test(`a real Pi session writes nothing in place: ${name}`, async () => {
 	};
 	const h = await harness(overflow
 		? { at: 'prompt', complete: 60000, host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE, replies: ['overflow'] }
-		: { at: 'tool', complete: BAND + 100, host: HOST, onBoundary });
+		: { at: 'tool', complete: ROOM + 100, fresh: 6000, host: HOST, onBoundary });
 	try {
 		pin(h.manager);
 		const swallowed: string[] = [];

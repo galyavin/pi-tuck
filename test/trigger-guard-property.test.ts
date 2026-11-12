@@ -1,6 +1,6 @@
 import { mulberry32 as prng } from './random-sessions';
 import { test, expect } from 'vitest';
-import { HOST, ROOM, scenario, type Options } from './budget-fixture';
+import { HOST, ROOM, receiptOf, scenario, type Options } from './budget-fixture';
 import { bandOf } from '../src/budget';
 
 // "The trigger says it fits, so the guard passes." A Pi session with a scripted model runs randomized message mixes near the edge of the
@@ -32,33 +32,46 @@ test(`the unseen growth of the property fixture stays under the margin${label}`,
 function feasible(seed: number): Options {
 	const rng = prng(seed), int = (n: number) => Math.floor(rng() * n);
 	const rounds = 1 + int(3);
+	const complete = BAND - 5000 + int(5500);
 	return {
-		at: 'tool', host: HOST, complete: BAND - 5000 + int(5500), fresh: 1500 + int(3500), rounds, laterResult: 50 + int(2500),
+		at: 'tool', host: HOST, complete, fresh: 1500 + int(3500), rounds, laterResult: 50 + int(2500),
 		summary: rng() < 0.4, queued: [0, 0, 500, 2500][int(4)]!, dormant: 1000, afterDecision: unseen(rng, rounds),
 	};
 }
 
 test(`feasible cuts: whenever the trigger says a request fits, or cuts it, the guard passes it, and nothing faults${label}`, async () => {
-	let cuts = 0, fits = 0;
-	for (let seed = 1; seed <= 60; seed++) {
+	let cuts = 0, fits = 0, waited = 0;
+	for (const due of [false, true]) for (let seed = 1; seed <= 60; seed++) {
 		const options = feasible(seed);
+		// Retain the original band grid and add due cuts, keeping the first prompt below the band.
+		if (due) { options.complete += ROOM - BAND + 5000; options.fresh! += ROOM - BAND + 10000; }
 		const r = await run(options);
-		const why = `seed ${seed} ` + r.probe;
+		const why = `seed ${seed} ${due ? 'due' : 'band'} ` + r.probe;
 		expect(r.faults, why).toEqual([]);
 		// Every boundary was followed by its request; steered messages left over at the end each add a turn that no boundary precedes.
 		expect(r.requests, why).toBeGreaterThanOrEqual((options.rounds ?? 1) + 1);
 		for (const guarded of r.guard) expect(guarded, why).toBeLessThan(ROOM);
-		// Decision by decision: what the trigger measured, what it did, and what the guard then saw.
+		// Later steering can trigger a prompt cut carried by a request before it is saved at the next boundary.
+		// Its raw probe then predates that pending cut. Check every tool cut against its own recorded pre-cut view.
+		for (const entry of r.entries) {
+			const receipt = receiptOf(entry);
+			if (receipt.reason !== 'tool-loop') continue;
+			const before = (entry.details as { diagnosticReceipt: { before: { value: number } } }).diagnosticReceipt.before.value;
+			expect(Math.ceil((before + receipt.mandatoryInputTokens!) * receipt.calibrationFactor!), why).toBeGreaterThanOrEqual(ROOM);
+		}
+		cuts += r.entries.length;
 		for (let i = 0; i < r.probes.length; i++) {
-			const measured = r.probes[i]!.complete + r.probes[i]!.queued;
-			const cutHere = r.cutsAtRequest[i]! - r.cutsAtProbe[i]!;
-			expect(cutHere > 0, why + ` decision ${i}: ${measured}`).toBe(measured >= BAND);
-			if (cutHere > 0) cuts++; else fits++;
+			const probe = r.probes[i]!, measured = probe.complete + probe.queued;
+			if (r.cutsAtRequest[probe.after] === r.cutsAtProbe[i]) {
+				fits++;
+				if (probe.at === 'tool' && measured >= BAND && measured < ROOM) waited++;
+			}
 		}
 	}
 	// Both kinds of decision were made, many times.
 	expect(cuts).toBeGreaterThan(20);
 	expect(fits).toBeGreaterThan(60);
+	expect(waited).toBeGreaterThan(20);
 });
 
 test(`irreducible requests: an in-band request that cannot be cut is no fault; only a request really over the room is rejected${label}`, async () => {

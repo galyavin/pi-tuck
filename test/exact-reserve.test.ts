@@ -54,7 +54,7 @@ test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('a reserve o
 });
 
 for (const at of ['prompt', 'tool'] as const)
-test(`${at} boundary, exact reserve: a cut is triggered from the first token inside the band of the exact room, and the room is the window less 32,768`, async () => {
+test(`${at} boundary, exact reserve: the prompt cuts at the band and tools wait for the window less 32,768`, async () => {
  const seen: { d: number; cuts: number }[] = [];
  for (const d of AROUND) {
   const r = await scenario({ at, complete: BAND_EXACT + d, ...(at === 'tool' ? TOOL : {}), host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE });
@@ -67,7 +67,7 @@ test(`${at} boundary, exact reserve: a cut is triggered from the first token ins
   seen.push({ d, cuts: r.cuts });
  }
  const probe = JSON.stringify(seen);
- for (const s of seen) expect(s.cuts > 0, probe).toBe(s.d >= 0);
+ for (const s of seen) expect(s.cuts > 0, probe).toBe(at === 'prompt' && s.d >= 0);
 });
 
 for (const at of ['prompt', 'tool'] as const)
@@ -76,9 +76,10 @@ test(`${at} boundary, exact reserve: around the exact room the request is cut an
   const r = await scenario({ at, complete: ROOM_EXACT + d, ...(at === 'tool' ? TOOL : {}), host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE });
   expect(r.measured!.complete, r.probe).toBe(ROOM_EXACT + d);
   expect(r.faults, r.probe).toEqual([]);
-  expect(r.cuts, r.probe).toBe(1);
+  expect(r.cuts, r.probe).toBe(at === 'prompt' || d >= 0 ? 1 : 0);
   expect(r.requests, r.probe).toBe(at === 'tool' ? 2 : 1);
   for (const guarded of r.guard) expect(guarded, r.probe).toBeLessThan(ROOM_EXACT);
+  for (const entry of r.entries) { expect(receiptOf(entry).responseReserveTokens, r.probe).toBe(32768); expect(receiptOf(entry).tokensAfter + receiptOf(entry).mandatoryInputTokens!, r.probe).toBeLessThan(BAND_EXACT); }
   expectParity(r, { host: HOST, incoming: at === 'prompt' ? PROMPT : 0 }, { room: ROOM_EXACT, band: BAND_EXACT });
  }
 });

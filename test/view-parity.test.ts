@@ -10,7 +10,8 @@ interface Planned { mode: DraftMode; after: number; summary: string }
 type Plan = Planned | null;
 const planned = (d: { compaction?: { summary: string }; after?: number; mode?: DraftMode }): Plan => d.compaction ? { mode: d.mode!, after: d.after!, summary: d.compaction.summary } : null;
 type Expected = { kind: 'none' } | { kind: 'fault' } | { kind: 'cut'; target: 'band' | 'room'; plan: Planned };
-function rule(room: Plan, band: Plan, before: number, mandatory: number, total: number): Expected {
+function rule(room: Plan, band: Plan, before: number, mandatory: number, total: number, at: 'prompt' | 'tool' = 'prompt'): Expected {
+	if (at === 'tool' && total < ROOM) return { kind: 'none' };
 	const fitsBand = (p: Planned) => p.after < before && p.after + mandatory < BAND;
 	if (total < ROOM) return band && fitsBand(band) ? { kind: 'cut', target: 'band', plan: band } : { kind: 'none' };
 	if (!band && !room) return { kind: 'fault' };
@@ -79,7 +80,7 @@ async function boundary(options: { history: number; oneTurn: boolean; complete: 
 }
 
 test('at a tool boundary a cut follows the rule', async () => {
-	const seen = { 'band cut': 0, 'declined: out of reach': 0, 'forced band plan': 0, 'forced room plan only': 0 };
+	const seen = { 'waited: band reachable': 0, 'waited: out of reach': 0, 'forced band plan': 0, 'forced room plan only': 0 };
 	// A fresh result of 6,000 tokens brings the request over the band only at the tool boundary, so the prompt makes no cut of its own.
 	for (const fresh of [100, 6000]) for (const oneTurn of [false, true]) for (const history of [1500, 3000, 6000]) for (const d of [100, 600, 1200, 1800, 2400, 2800, 3200, 4000]) {
 		const { r, found, tool, promptCut } = await boundary({ history, oneTurn, complete: BAND + d, fresh });
@@ -91,22 +92,25 @@ test('at a tool boundary a cut follows the rule', async () => {
 		expect(found, why).toHaveLength(1);
 		const receipt = tool.entry && tool.cut ? receiptOf(tool.entry) : undefined;
 		if (f.total < BAND) { expect(tool.cut, why).toBe(0); continue; }
-		const expected = rule(f.room, f.band, f.before, f.mandatory, f.total);
+		const expected = rule(f.room, f.band, f.before, f.mandatory, f.total, 'tool');
 		if (expected.kind === 'fault') continue; // fails closed, as before the margin
 		if (expected.kind === 'none') {
 			expect(tool.cut, why).toBe(0); expect(r.faults, why).toEqual([]);
-			seen['declined: out of reach']++;
+			expect(r.requests, why).toBe(2);
+			for (const guarded of r.guard) expect(guarded, why).toBeLessThan(ROOM);
+			seen[f.band && f.band.after + f.mandatory < BAND ? 'waited: band reachable' : 'waited: out of reach']++;
 			continue;
 		}
 		expect([tool.cut, receipt?.target, receipt?.mode, receipt?.tokensAfter], why).toEqual([1, expected.target, expected.plan.mode, expected.plan.after]);
 		expect(tool.entry!.summary === expected.plan.summary, why).toBe(true);
 		if (expected.target === 'room') seen['forced room plan only']++;
-		else seen[f.total < ROOM ? 'band cut' : 'forced band plan']++;
+		else seen['forced band plan']++;
 	}
 	// Numeric landing and fallback branches remain covered by real tool rounds.
 	const stats = JSON.stringify(seen);
-	expect(seen['declined: out of reach'], stats).toBeGreaterThan(0);
-	expect(seen['band cut'] + seen['forced band plan'], stats).toBeGreaterThan(0);
+	expect(seen['waited: out of reach'], stats).toBeGreaterThan(0);
+	expect(seen['waited: band reachable'], stats).toBeGreaterThan(0);
+	expect(seen['forced band plan'], stats).toBeGreaterThan(0);
 	expect(seen['forced room plan only'], stats).toBeGreaterThan(0);
 }, 120000);
 
@@ -117,7 +121,7 @@ test('a tool boundary with different plan forms follows the amount-only rule', a
 	const f = found[0]!;
 	expect(f.room?.mode, r.probe).toBe('dialogue');
 	expect(f.band === null || f.band.mode !== f.room!.mode, r.probe).toBe(true);
-	const expected = rule(f.room, f.band, f.before, f.mandatory, f.total);
+	const expected = rule(f.room, f.band, f.before, f.mandatory, f.total, 'tool');
 	expect(tool.cut, r.probe).toBe(expected.kind === 'cut' ? 1 : 0);
 	expect(r.faults, r.probe).toEqual([]);
 	expect(r.requests, r.probe).toBe(2);
@@ -163,11 +167,11 @@ test('at the prompt a cut follows the same rule', async () => {
 });
 
 
-test('a band draft is taken to the byte even when the room plan also lands below the band', async () => {
+test('a due tool cut takes the band draft to the byte even when the room plan also lands below the band', async () => {
 	// Even when both targets produce the same diagnostic form and fit the band,
 	// the saved bytes must come from the band draft.
 	for (const history of [60000, 90000, 110000, 125000]) {
-		const { r, found, tool } = await boundary({ history, oneTurn: true, complete: BAND + 100 });
+		const { r, found, tool } = await boundary({ history, oneTurn: true, complete: ROOM + 100, fresh: 3000 });
 		const f = found[0]!, why = JSON.stringify({ history, room: f.room && [f.room.mode, f.room.after, f.room.summary.length], band: f.band && [f.band.mode, f.band.after, f.band.summary.length], probe: r.probe });
 		expect(f.room && f.band, why).toBeTruthy();
 		// The precondition: the same mode and a room plan far below the band.

@@ -10,8 +10,9 @@ for (const at of ['prompt', 'tool'] as const)
 test(`the observed prompt and tools are charged at the edge to the token, whatever the rounding of the prompt: ${at}, ${pad} extra characters`, async () => {
  const seen: { d: number; cuts: number }[] = [];
  for (const d of AROUND) {
-  const r = await scenario({ at, complete: BAND + d, host: HOST, pad });
-  expect(r.measured!.complete, r.probe).toBe(BAND + d);
+  const edge = at === 'prompt' ? BAND : ROOM;
+  const r = await scenario({ at, complete: edge + d, host: HOST, pad });
+  expect(r.measured!.complete, r.probe).toBe(edge + d);
   expect(r.faults, r.probe).toEqual([]);
   seen.push({ d, cuts: r.cuts });
  }
@@ -24,8 +25,8 @@ test('the guard formula over the saved system message is charged when it is larg
  // observed prompt and tools are never allowed to discount it), however much larger than the observed measure that is.
  const seen: { d: number; cuts: number }[] = [];
  for (const d of AROUND) {
-  const r = await scenario({ at: 'tool', complete: BAND + d, host: HOST, ballast: 2000 });
-  expect(r.measured!.complete, r.probe).toBe(BAND + d);
+  const r = await scenario({ at: 'tool', complete: ROOM + d, host: HOST, ballast: 2000 });
+  expect(r.measured!.complete, r.probe).toBe(ROOM + d);
   expect(r.faults, r.probe).toEqual([]);
   // The request that is then sent no longer carries the tool: the count was conservative by about its size.
   if (!r.cuts) expect(r.guard.at(-1)!, r.probe).toBeLessThan(r.measured!.complete - 1500);
@@ -53,10 +54,10 @@ const RATIO = 1.1;
 const factorOf = (guarded: number) => Math.ceil(guarded * RATIO) / guarded; // the scripted reply reports ceil(guard * ratio) input tokens
 const calibrated = (raw: number, factor: number) => Math.ceil(raw * factor);
 
-test('the calibration factor scales the trigger at the band to the token, and the margin does not enter it', async () => {
+test('the calibration factor scales the tool trigger at the room to the token, and the margin does not enter it', async () => {
  const seen: { raw: number; calibrated: number; cuts: number }[] = [];
  for (let d = -6; d <= 6; d++) {
-  const r = await scenario({ at: 'tool', complete: Math.floor(BAND / RATIO) + d, host: HOST, usageRatio: RATIO });
+  const r = await scenario({ at: 'tool', complete: Math.floor(ROOM / RATIO) + d, host: HOST, usageRatio: RATIO });
   expect(r.faults, r.probe).toEqual([]);
   const factor = factorOf(r.guard[0]!);
   expect(factor, r.probe).toBeGreaterThan(RATIO);
@@ -65,7 +66,7 @@ test('the calibration factor scales the trigger at the band to the token, and th
   seen.push({ raw, calibrated: calibrated(raw, factor), cuts: r.cuts });
  }
  const probe = JSON.stringify(seen);
- for (const s of seen) expect(s.cuts > 0, probe).toBe(s.calibrated >= BAND);
+ for (const s of seen) expect(s.cuts > 0, probe).toBe(s.calibrated >= ROOM);
  expect(seen.some(s => s.cuts > 0) && seen.some(s => s.cuts === 0), probe).toBe(true);
 });
 
@@ -87,7 +88,7 @@ test('the calibration factor scales the guard at the room to the token', async (
 test('the calibration factor never goes below one: a reply that reports fewer tokens than estimated does not loosen anything', async () => {
  const seen: { d: number; cuts: number }[] = [];
  for (const d of [-2, -1, 0, 1, 2]) {
-  const r = await scenario({ at: 'tool', complete: BAND + d, host: HOST, usageRatio: 0.8 });
+  const r = await scenario({ at: 'tool', complete: ROOM + d, host: HOST, usageRatio: 0.8 });
   expect(r.faults, r.probe).toEqual([]);
   seen.push({ d, cuts: r.cuts });
  }
@@ -101,14 +102,14 @@ test('a summary with a record omitted by a native context edit is counted as the
 	// where the case wants it, with triggers off, then run the same session with triggers on.
 	const base = { at: 'tool' as const, host: HOST, summary: true, omitted: 40000 };
 	const off = (complete: number) => scenario({ ...base, complete, compactionEnabled: false });
-	const first = await off(BAND);
-	const shift = BAND - first.guard[1]!;
+	const first = await off(ROOM);
+	const shift = ROOM - first.guard[1]!;
 	expect(shift).toBeGreaterThan(5000); // the saved summary really is larger than what is sent
 	const seen: { d: number; cuts: number }[] = [];
 	for (const d of AROUND) {
-		const complete = BAND + shift + d;
+		const complete = ROOM + shift + d;
 		const real = await off(complete);
-		expect(real.guard[1], real.probe).toBe(BAND + d); // the request the guard counts, token for token
+		expect(real.guard[1], real.probe).toBe(ROOM + d); // the request the guard counts, token for token
 		const r = await scenario({ ...base, complete });
 		expect(r.faults, r.probe).toEqual([]);
 		seen.push({ d, cuts: r.cuts });
