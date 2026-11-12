@@ -3,6 +3,18 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.30] - Unreleased
+
+### Changed
+
+- **The summary's closing line and the history tools' descriptions now say when to look something up.** Before redoing a step or deciding
+  from memory, the agent is pointed to tuck_search (by meaning, where offered) and to tuck_recall (by a summary's #N or by keyword). The
+  old line tied recall only to re-running a listed command, and agents in live checks made no history lookups at all.
+- **tuck_search asks for the exact command, path or identifier first, then a description.** Searching by the exact command or path found
+  the earlier output far more often than searching by the agent's own description.
+- **tuck_recall's `around` takes a summary's #N as well as an entry ID.** An all-digit entry ID that finds nothing now says how to read it
+  as an index.
+
 ## [1.0.29] - 2026-11-11
 
 ### Fixed
