@@ -3,6 +3,36 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.29] - 2026-11-11
+
+### Fixed
+
+- **When Pi's configured window was larger than the server's, a session could get stuck after one overflow.** pi-tuck learned the right
+  correction from the server's refusal, then went on refusing every prompt. It mistook a cut Pi had saved for one Pi had failed to save. It
+  now checks the session file before treating a save as failed.
+- **A server that silently shrinks the reply to fit its real window went unnoticed** (mac-studio does this when prompt plus reply cap is
+  over its window). pi-tuck answered fewer prompts than plain Pi.
+  - A reply that stops for length below the reply cap Pi sent was cut off by the server, so its input plus output is the server's real
+    window. pi-tuck now learns that window, keeps it for the model in the session, plans with the smaller window, and retries that turn
+    once.
+  - A reply that stops at the cap Pi sent is still a genuine length stop, under 1.0.25's rules.
+
+### Added
+
+- **Stress cells for a configured window (81,920) larger than the server's (68,000), each against plain Pi:**
+  - a prompt over the window, with mac-studio's exact refusal;
+  - a prompt plus reply cap over the window;
+  - the reply cut off at exactly the window.
+
+  pi-tuck now answers at least as many prompts as plain Pi in all three, loses no task and strands no session. Stress counts a reply as an
+  answer only when its request carries the task.
+
+### Release gates
+
+- **Shipped without a live gate, because its replay matches 1.0.28:** 13,946 requests, 0 different beyond noise, 0 dead tasks, clips
+  17 → 17.
+- **Strict stress, 313 cells:** 0 findings. Tests (810) and CI. The packed tarball loaded in the real installed Pi.
+
 ## [1.0.28] - 2026-11-10
 
 ### Changed
