@@ -153,6 +153,8 @@ export interface Options {
   * measure itself when that ratio is not a finite number above 0) exceeds the model's window, the request is refused with the overflow error
   * instead of answered. Density above 1 then meets the window, and Pi's overflow recovery runs. */
  rejectOverWindow?: boolean;
+ /** Physical server capacity when the catalogue's configured context window is wrong. */
+ providerWindow?: number;
  /** A provider that reports no usage at all: the reply carries no usage object for pi-tuck to calibrate against. */
  noUsage?: boolean;
  /** Every scripted reply reports this many output tokens (reasoning included) beside its input usage. Pi's usage threshold counts them; the compactor's calibration does not. */
@@ -173,7 +175,7 @@ export interface Options {
  /** Tokens of the system prompt, counted the way the guard counts them: text whose own estimate is the number given. A cell that names a setup uses this, so the setup a run carries is the setup the cell says it carries. */
  systemTokens?: number;
  /** The wording a request over the window comes back with, as the provider in question words its refusal. */
- rejectWith?: string;
+ rejectWith?: string | ((request: { prompt: number; maxTokens: number; window: number }) => string);
  /** The HTTP status the transport reports beside that wording (a gateway's bodyless 413 carries none). */
  rejectStatus?: number;
  /** A server that does not refuse an oversize request: it keeps the end of it and answers as if nothing had happened. 'stop' reports input usage
@@ -208,13 +210,17 @@ function sessionBase() {
 }
 
 export async function harness(options: Options) {
+ // Physical-window recovery compares replies with compaction timestamps. Keep Date deterministic for these cells, advancing at each
+ // provider response; real timers still drive the prompt watchdog. Otherwise a fast retry can fall on either side of a millisecond boundary.
+ const physicalClock = options.providerWindow !== undefined;
+ if (physicalClock) { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-01-01T00:00:00.001Z')); }
  // A timestamp on an exact second is written 4 characters shorter (source-time.ts), which moves a summary by a token. Tests that walk a cut's edge
  // token by token must not depend on the clock, so a message is never stamped on an exact second here.
  const realNow = Date.now;
  Date.now = () => { const now = realNow(); return now % 1000 ? now : now + 1; };
  const dir = mkdtempSync(join(sessionBase(), 'pi-host-input-')); let session: AgentSession | undefined;
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
- const cleanup = async () => { Date.now = realNow; if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
+ const cleanup = async () => { Date.now = realNow; if (physicalClock) vi.useRealTimers(); if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
   const runtime = await scriptedModelRuntime(options.limits, options.model), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
@@ -255,6 +261,7 @@ export async function harness(options: Options) {
   // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
   // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
   let nativeSummarizing = false, nativeBefore = 0, nativeReason = '';
+  const providerRequests: { summary: boolean; measuredPrompt: number; prompt: number; maxTokens: number; availableOutput: number; refused: boolean; length: boolean }[] = [];
   const state = { nativeSummaries: [] as Awaited<ReturnType<typeof providerRequest>>[], nativeCuts: [] as { afterRequest: number; reason: string; before: number; after: number; freed: number }[], requestFingerprints: [] as string[], clampEvents: [] as { request: number; wanted: number; cap: number }[], requestOptions: [] as Awaited<ReturnType<typeof providerRequest>>[], clampStops: 0, requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
   const wholePrompt: boolean[] = [];
@@ -433,15 +440,24 @@ export async function harness(options: Options) {
   }
   const cutsBefore = manager.getEntries().filter(e => e.type === 'compaction').length;
   const rounds = options.rounds ?? 1;
+  const providerWindow = options.providerWindow ?? model.contextWindow;
+  const density = Number.isFinite(options.usageRatio) && (options.usageRatio ?? 0) > 0 ? options.usageRatio! : 1;
+  const overflowText = (prompt: number, maxTokens: number) => typeof options.rejectWith === 'function'
+   ? options.rejectWith({ prompt, maxTokens, window: providerWindow }) : options.rejectWith ?? OVERFLOW_TEXT;
+  const responseTime = () => {
+   const newest = manager.getEntries().reduce((latest, e) => e.type === 'compaction' ? Math.max(latest, Date.parse(e.timestamp)) : latest, 0);
+   const at = Math.max(Date.now(), newest + 1);
+   if (physicalClock) { vi.setSystemTime(at + 10); return Date.now(); }
+   return at;
+  };
   // A provider's refusal of an oversized request: the overflow error a real transport returns. Pi ignores a reply no newer than the last cut, so
   // the refusal is stamped after it.
   const refuse = (wording = OVERFLOW_TEXT, status?: number) => {
-   const newest = manager.getEntries().reduce((latest, e) => e.type === 'compaction' ? Math.max(latest, Date.parse(e.timestamp)) : latest, 0);
    const failed = answer([], 'error');
    failed.errorMessage = wording;
    // A gateway that answers with a bare 413 carries no wording at all, which is the case Pi's second rule is written for.
    if (status !== undefined) (failed as unknown as { status?: number }).status = status;
-   failed.timestamp = Math.max(Date.now(), newest + 1);
+   failed.timestamp = responseTime();
    return failed;
   };
   session.agent.streamFunction = async (_m, _ctx, streamOptions) => {
@@ -452,13 +468,29 @@ export async function harness(options: Options) {
     const request = await providerRequest(_m, _ctx, streamOptions);
     state.nativeSummaries.push(request);
     const message = replyOf([{ type: 'text', text: 'Finished' }]);
-    message.timestamp = Date.now();
+    message.timestamp = physicalClock ? responseTime() : Date.now();
     message.usage.input = estimateContextTokens(_ctx).tokens;
     message.usage.output = est(message); message.usage.totalTokens = message.usage.input + message.usage.output;
     const stream = createAssistantMessageEventStream();
-    if (options.rejectOverWindow && _ctx.messages.reduce((sum, m) => sum + est(m), 0) > model.contextWindow) {
-     message.content = []; message.stopReason = 'error'; message.errorMessage = OVERFLOW_TEXT;
+    const measuredPrompt = _ctx.messages.reduce((sum, m) => sum + est(m), 0);
+    const count = Math.ceil(measuredPrompt * density);
+    const availableOutput = Math.min(request.maxTokens, Math.max(0, providerWindow - count));
+    const refused = Boolean(options.rejectOverWindow && count > providerWindow ||
+     options.providerWindow !== undefined && options.replyWindow === 'refuse' && count + request.maxTokens > providerWindow);
+    const length = !refused && options.providerWindow !== undefined && options.replyWindow === 'clip' && message.usage.output > availableOutput;
+    if (options.providerWindow !== undefined) {
+     providerRequests.push({ summary: true, measuredPrompt, prompt: count, maxTokens: request.maxTokens, availableOutput, refused, length });
+     message.usage.input = count;
+     message.usage.totalTokens = count + message.usage.output;
+    }
+    if (refused) {
+     message.content = []; message.stopReason = 'error'; message.errorMessage = overflowText(count, request.maxTokens);
+     if (options.rejectStatus !== undefined) (message as unknown as { status?: number }).status = options.rejectStatus;
      stream.push({ type: 'error', reason: 'error', error: message });
+    } else if (length) {
+     message.content = [{ type: 'text', text: sized(availableOutput) }]; message.stopReason = 'length';
+     message.usage.output = availableOutput; message.usage.totalTokens = count + availableOutput;
+     stream.push({ type: 'done', reason: 'length', message });
     } else stream.push({ type: 'done', reason: 'stop', message });
     stream.end(message); return stream;
    }
@@ -478,9 +510,14 @@ export async function harness(options: Options) {
    // What the provider's tokenizer makes of this request: the guard's measure of it times the density the case declares. A ratio that is not a
    // finite number above 0 is no observation of density at all, so the count is the measure. `known` says a reply before this one reported a
    // finite input, which is what makes the provider's density a fact of the session rather than a guess.
-   const density = Number.isFinite(options.usageRatio) && (options.usageRatio ?? 0) > 0 ? options.usageRatio! : 1;
    const count = guard.length ? Math.ceil(guard.at(-1)! * density) : 0;
    state.counts.push({ count, known: state.reports > 0 });
+   const maxTokens = request?.maxTokens ?? model.maxTokens;
+   const providerRefused = Boolean(options.providerOverflowAt?.(state.requests) ||
+    options.replyWindow === 'refuse' && count + maxTokens > providerWindow ||
+    options.rejectOverWindow && options.truncateOverWindow === undefined && count > providerWindow);
+   const observed = { summary: false, measuredPrompt: guard.at(-1) ?? 0, prompt: count, maxTokens, availableOutput: Math.min(maxTokens, Math.max(0, providerWindow - count)), refused: providerRefused, length: false };
+   if (options.providerWindow !== undefined) providerRequests.push(observed);
    // A provider that enforces its own window refuses the request rather than answering it, and Pi runs its one compact-and-retry on the error.
    // A server that keeps the end of an oversize request instead (`truncateOverWindow`) answers it, and the reply below carries its usage.
    const truncated = options.truncateOverWindow !== undefined && count > model.contextWindow;
@@ -490,11 +527,10 @@ export async function harness(options: Options) {
     state.answers.push(failed);
     stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
    }
-   if (options.providerOverflowAt?.(state.requests) || (options.replyWindow === 'refuse' && count + (request?.maxTokens ?? model.maxTokens) > model.contextWindow) ||
-    (options.rejectOverWindow && !truncated && count > model.contextWindow)) {
+   if (providerRefused) {
     state.overflows++;
     state.assistantSizes[state.requests - 1] = 0; // the model sent no content at all for this request
-    const failed = refuse(options.rejectWith ?? OVERFLOW_TEXT, options.rejectStatus);
+    const failed = refuse(overflowText(count, maxTokens), options.rejectStatus);
     state.answers.push(failed);
     stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
    }
@@ -522,7 +558,7 @@ export async function harness(options: Options) {
    }
    const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
    // Exercise actual output exhaustion, distinct from the existing input-truncation fake. Tool rounds stay small; final answers try the cap.
-   const outputRoom = Math.min(request?.maxTokens ?? Infinity, Math.max(0, model.contextWindow - count));
+   const outputRoom = Math.min(request?.maxTokens ?? Infinity, Math.max(0, providerWindow - count));
    const output = Math.min(model.maxTokens, options.replyWindowOutput?.(state.requests) ?? model.maxTokens);
    const clippedReply = options.replyWindow === 'clip' && !toolRound && output > outputRoom;
    if (options.replyWindow === 'clip' && !toolRound) reply.splice(0, reply.length, { type: 'text', text: sized(Math.min(output, outputRoom)) });
@@ -540,10 +576,11 @@ export async function harness(options: Options) {
    const clampStop = request !== undefined && wanted > request.maxTokens && request.maxTokens < request.requestedMaxTokens;
    if (clampStop) { state.clampStops++; state.clampEvents.push({ request: state.requests, wanted, cap: request.maxTokens }); }
    if (!thinkingStop && request && wanted > request.maxTokens) {
-    message.content = [{ type: 'text', text: sized(request.maxTokens) }];
+    const emitted = options.providerWindow !== undefined && options.replyWindow === 'clip' ? Math.min(request.maxTokens, outputRoom) : request.maxTokens;
+    message.content = [{ type: 'text', text: sized(emitted) }];
     message.stopReason = 'length';
     state.stops[state.stops.length - 1] = 'length';
-    state.assistantSizes[state.requests - 1] = request.maxTokens;
+    state.assistantSizes[state.requests - 1] = emitted;
    }
    if (options.replyWindow) { message.usage.input = count; message.usage.output = est(replyOf(reply)); message.usage.totalTokens = count + message.usage.output; }
    if (clippedReply) state.truncations++;
@@ -559,10 +596,16 @@ export async function harness(options: Options) {
    }
    if (options.usageAt) Object.assign(message.usage, options.usageAt(state.requests, guard.at(-1) ?? 0));
    if (thinkingStop || request && wanted > request.maxTokens) {
-    message.usage.output = request?.maxTokens ?? model.maxTokens;
+    message.usage.output = options.providerWindow !== undefined && options.replyWindow === 'clip' ? Math.min(maxTokens, outputRoom) : maxTokens;
     message.usage.totalTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + message.usage.output;
    }
    if (options.noUsage) delete (message as { usage?: unknown }).usage;
+   if (options.providerWindow !== undefined) {
+    message.timestamp = responseTime();
+    observed.length = message.stopReason === 'length';
+    // The physical-window cells report the complete usage, including output beside the factored input.
+    message.usage.totalTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite + message.usage.output;
+   }
    // A reply that reports a finite input is the session's first proof of the provider's density; NaN, Infinity and no usage object report nothing.
    if (Number.isFinite((message as { usage?: { input?: number } }).usage?.input)) state.reports++; else state.nonFinite++;
    // Every reply is measured as pi-tuck measures it, so a caller can weigh the assistant content a run just added to the session.
@@ -575,7 +618,7 @@ export async function harness(options: Options) {
   const runEnd = () => allCompactions().filter(isRunEnd);
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
-   dir, manager, session, settings, state, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
+   dir, manager, session, settings, state, providerRequests, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
    // Open the session's file again the way Pi does when a saved session is resumed, and report how many messages came back. The run's own session is
    // left alone: this reads what reached the disk, which is all the operator has if the run ends where it stands.
    reopenFile: () => {

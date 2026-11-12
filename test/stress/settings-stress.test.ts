@@ -19,10 +19,10 @@
  *   STRESS=1 STRESS_CELLS=20 STRESS_REPORT=1 npx vitest run test/stress
  *   STRESS=1 STRESS_SETUP=1 npx vitest run test/stress
  *
- * STRESS_PLAIN_PI=1 measures the two thinking cells and setup 40000/window 65536 with pi-tuck not installed; STRESS_ONLY selects one.
+ * STRESS_PLAIN_PI=1 measures the thinking, setup 40000/window 65536 and wrong-window cells with pi-tuck not installed; STRESS_ONLY selects one.
  * Native summary calls are reported separately from workload requests.
  *
- * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures to test/stress/failures.json,
+ * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures under os.tmpdir(),
  * STRESS_TRACE="a piece of a cell name" prints what happened to each of that cell's prompts, and STRESS_STRICT=1 turns the table into a failing
  * run. Without STRESS_STRICT the run reports: a finding is a finding whether or not it is fixed yet, and the grid keeps running after the first.
  * STRESS_SETUP="a piece of a cell name" runs only the cells that carry a setup size — the sampled ones and the named grid — which is the part that
@@ -30,10 +30,13 @@
  */
 import { mulberry32 } from '../random-sessions';
 import { afterAll, expect, test } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget-fixture';
 import { thinkingLengthCell, thinkingLengthCells } from '../length-retry-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
+import { overflowNotice, CALIBRATION_CEILING } from '../../src/compaction.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
@@ -46,6 +49,7 @@ const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const CELLS = Math.max(1, Number(process.env.STRESS_CELLS) || 200);
 const SEED = (Number(process.env.STRESS_SEED) || 0x5eed) >>> 0;
 const REPORT = process.env.STRESS_REPORT;
+const REPORT_PATH = REPORT ? join(mkdtempSync(join(tmpdir(), 'pi-tuck-stress-')), 'failures.json') : undefined;
 /** Make the table a gate. Off by default, so a known finding does not turn every run red before it is fixed. */
 const STRICT = /^(1|true|yes)$/i.test(process.env.STRESS_STRICT ?? '');
 /** Ten sampled cells, evenly spaced, are run twice and compared as the named ones are; a seeded grid must give the same answer on the same seed. */
@@ -114,6 +118,7 @@ let usefulExemptCuts = 0;
 const thinkingNames = new Set(['openai-codex-responses', 'openai-completions'].map(api => `36000 characters of thinking replayed at a 32k window (${api})`));
 const usefulCellName = 'setup 40000 at window 65536 (Pi defaults)';
 const nativeMeasurements: Record<string, unknown>[] = [];
+const wrongWindowRows: Record<string, unknown>[] = [];
 const thinkingParity: Record<string, unknown>[] = [];
 const acceptedFindings: { cell: string; rule: Rule; why: string }[] = [];
 const exemptRefusals = { 'past-window': 0, 'failed-reply': 0, 'reply-floor': 0 };
@@ -191,6 +196,7 @@ type Reached = { state: string; check: (e: Evidence) => boolean };
 
 interface Cell {
  name: string;
+ wrongWindow?: 'prompt-over' | 'prompt-plus-reply-over' | 'silent-shrink';
  window: number;
  /** Pi's reserve setting, raised to the output cap only after a length stop or a context-overflow refusal on this branch. */
  reserve: number;
@@ -347,6 +353,138 @@ async function measureCell(cell: Cell, plainPi: boolean) {
    overflows: h.state.overflows, faults: [...h.faults], notices: [...h.notices],
   };
  } finally { await h.cleanup(); }
+}
+
+/** Same logical prompts and completed tool rounds on both installations. Failed attempts do not consume a tool round.
+ * Recovery probes are counted separately, so an extra short answer cannot improve the workload's answer count. */
+async function measureWrongWindow(cell: Cell, plainPi: boolean) {
+ cell.reset?.();
+ let toolsWanted = () => false, opening = '', missing = false, lastRequest = 0, factor = 1;
+ const factors: { afterRequest: number; factor: number }[] = [];
+ const compactAttempts: { afterRequest: number; reason: string }[] = [];
+ const compactFailures: { afterRequest: number; reason: string; aborted: boolean; errorMessage?: string }[] = [];
+ const options = optionsOf(cell, () => toolsWanted());
+ const h = await harness({ ...options, plainPi,
+  onWire: context => { missing ||= !JSON.stringify(context).includes(opening); options.onWire?.(context); },
+  onRequest: (request, ctx) => { lastRequest = request; options.onRequest?.(request, ctx); },
+  onBeforeCompact: (event, ctx) => { compactAttempts.push({ afterRequest: lastRequest, reason: event.reason }); options.onBeforeCompact?.(event, ctx); },
+  compaction: { ...options.compaction, observeBudget: budget => {
+   factor = budget.factor; factors.push({ afterRequest: lastRequest, factor });
+  } },
+ });
+ h.extension().on('session_compact_failed', event => {
+  compactFailures.push({ afterRequest: lastRequest, reason: event.reason, aborted: event.aborted, errorMessage: event.errorMessage });
+ });
+ try {
+  h.hostInput();
+  const prompts: { prompt: number; tokens: number; requests: number; stops: string[]; answered: boolean; hung: boolean; threw: string; cuts: string[] }[] = [];
+  const recovery: { afterPrompt: number; requests: number; hung: boolean; threw: string }[] = [];
+  const lostTasks = new Set<number>(), watched: { prompt: number; opening: string }[] = [];
+  for (let i = 0; i < cell.prompts.length; i++) {
+   const body = h.sized(cell.prompts[i]!);
+   opening = JSON.stringify(body.slice(0, 80)).slice(1, -1); missing = false;
+   const start = h.state.requests, stop = h.state.stops.length;
+   const cuts = h.manager.getEntries().filter(e => e.type === 'compaction').length;
+   const roundEnd = h.state.effects + (cell.rounds[i] ?? 0);
+   toolsWanted = () => h.state.effects < roundEnd;
+   const outcome = await drive(h, body, PROMPT_MS);
+   const requests = h.state.requests - start, stops = h.state.stops.slice(stop);
+   const answered = outcome === 'ended' && !lastThrew && stops.includes('stop');
+   const newCuts = h.manager.getEntries().filter(e => e.type === 'compaction').slice(cuts);
+   prompts.push({ prompt: i + 1, tokens: est({ role: 'user', content: body, timestamp: 0 }), requests, stops, answered, hung: outcome === 'hung', threw: lastThrew,
+    cuts: newCuts.map(e => (e.details as { diagnosticReceipt?: { reason?: string } } | undefined)?.diagnosticReceipt?.reason ?? 'native'),
+   });
+   if (requests) {
+    watched.push({ prompt: i + 1, opening });
+    if (missing || !JSON.stringify(h.saved()).includes(opening)) lostTasks.add(i + 1);
+   }
+   if (h.manager.getEntries().filter(e => e.type === 'compaction').length > cuts) {
+    const saved = JSON.stringify(h.saved());
+    for (const task of [watched[0], ...watched.slice(-8)]) if (task && !saved.includes(task.opening)) lostTasks.add(task.prompt);
+   }
+   if (!answered) {
+    toolsWanted = () => false;
+    const short = h.sized(60); opening = JSON.stringify(short.slice(0, 80)).slice(1, -1);
+    const before = h.state.requests;
+    const again = await drive(h, short, PROMPT_MS);
+    recovery.push({ afterPrompt: i + 1, requests: h.state.requests - before, hung: again === 'hung', threw: lastThrew });
+   }
+  }
+  const providerWindow = cell.extra!.providerWindow!;
+  const work = h.providerRequests.filter(r => !r.summary);
+  const firstOverflow = work.findIndex(r => r.refused);
+  const firstHit = work.findIndex(r => r.refused || r.length && r.maxTokens > r.availableOutput);
+  const afterOverflow = work.slice(firstOverflow + 1);
+  const fits = (r: typeof work[number]) => r.prompt + (cell.wrongWindow === 'prompt-plus-reply-over' ? r.maxTokens : 0) <= providerWindow;
+  const overflowBound = firstOverflow < 0 ? null : (cell.window + 1) / work[firstOverflow]!.measuredPrompt;
+  // A stranded session never reaches another budget observation. Its overflow notice still confirms the exact bound was learned;
+  // keep that derivation explicit in the report instead of reading the notice's rounded display value as the factor.
+  const overflowLearned = overflowBound !== null && h.notices.includes(overflowNotice(cell.window, overflowBound, overflowBound <= CALIBRATION_CEILING));
+  const observedFactor = firstOverflow < 0 ? undefined : factors.find(f => f.afterRequest >= firstOverflow + 1)?.factor;
+  const learnedFactor = plainPi || firstOverflow < 0 ? null : observedFactor ?? (overflowLearned
+   ? Math.max(factor, overflowBound! <= CALIBRATION_CEILING ? overflowBound! : 1) : null);
+  const reached = h.state.results.length > 0 && prompts.reduce((sum, p) => sum + p.tokens, 0) + h.state.results.reduce((a, b) => a + b, 0) > 2 * providerWindow &&
+   (cell.wrongWindow === 'prompt-over' ? work.some(r => r.refused && r.prompt > providerWindow) :
+    cell.wrongWindow === 'prompt-plus-reply-over' ? work.some(r => r.refused && r.prompt <= providerWindow && r.prompt + r.maxTokens > providerWindow) :
+    work.some(r => r.length && !r.refused && r.prompt <= providerWindow && r.maxTokens > r.availableOutput));
+  let reopened = true;
+  try { reopened = h.reopenFile() >= nonSystemCount(h.saved()); } catch { reopened = false; }
+  return {
+   name: cell.name, plainPi, configuredWindow: cell.window, providerWindow, usageFactor: cell.usageRatio,
+   answered: prompts.filter(p => p.answered).length, refused: prompts.filter(p => !p.answered && !p.hung).length,
+   lostTasks: lostTasks.size, lostTaskPrompts: [...lostTasks], stuckSessions: recovery.some(r => r.requests === 0 || r.hung) ? 1 : 0,
+   hungPrompts: prompts.filter(p => p.hung).length,
+   lengthStops: h.state.stops.filter(s => s === 'length').length, providerOverflows: h.state.overflows,
+   summaryOverflows: h.providerRequests.filter(r => r.summary && r.refused).length,
+   summaryLengthStops: h.providerRequests.filter(r => r.summary && r.length).length,
+   calibrationAfterFirstOverflow: learnedFactor,
+   calibrationEvidence: plainPi || firstOverflow < 0 ? null : observedFactor !== undefined ? 'budget observation' : overflowLearned ? 'exact overflow bound confirmed by pi-tuck notice; no later budget observation' : 'unobserved',
+   finalCalibration: plainPi ? null : (observedFactor !== undefined || learnedFactor === null ? factor : learnedFactor), firstOverflowRequest: firstOverflow < 0 ? null : firstOverflow + 1,
+   firstWindowHitRequest: firstHit < 0 ? null : firstHit + 1,
+   adapts: firstOverflow < 0 ? null : afterOverflow.length > 0 && afterOverflow.every(fits),
+   adaptsAfterWindowHit: firstHit < 0 ? null : work.length > firstHit + 1 && work.slice(firstHit + 1).every(r => fits(r) && !r.length),
+   requestsAfterOverflow: firstOverflow < 0 ? 0 : afterOverflow.length,
+   oversizedAfterOverflow: firstOverflow < 0 ? 0 : afterOverflow.filter(r => !fits(r)).length,
+   prompts, recovery, providerRequests: h.providerRequests, factors, compactAttempts, compactFailures, toolRounds: h.state.effects,
+   summaryCalls: h.state.nativeSummaries.length, reached, reopened, faults: [...h.faults], notices: [...h.notices],
+   cuts: h.manager.getEntries().filter(e => e.type === 'compaction').length,
+   aboveRoom: h.probes.filter(p => p.at === 'prompt' && p.complete > cell.window - cell.reserve).length,
+   truncations: h.state.truncations, clampStops: h.state.clampStops, clips: h.state.clips,
+  };
+ } finally { await h.cleanup(); }
+}
+
+function wrongWindowOutcome(measured: Awaited<ReturnType<typeof measureWrongWindow>>) {
+ const { name, plainPi, answered, refused, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
+  calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached } = measured;
+ return { name, plainPi, answered, refused, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
+  summaryOverflows, summaryLengthStops, calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached };
+}
+
+const reportWrongWindow = (measured: Awaited<ReturnType<typeof measureWrongWindow>>) => report(`stress: wrong window ${JSON.stringify(wrongWindowOutcome(measured))}`);
+
+async function proveWrongWindow(cell: Cell) {
+ const guarded = await measureWrongWindow(cell, false), native = await measureWrongWindow(cell, true);
+ wrongWindowRows.push({ name: cell.name, guarded, native });
+ reportWrongWindow(guarded); reportWrongWindow(native);
+ cov.cells++; cov.room++; cov.cut += guarded.cuts > 0 ? 1 : 0; cov.cuts += guarded.cuts;
+ cov.answered += guarded.answered; cov.refused += guarded.refused; cov.aboveRoom += guarded.aboveRoom;
+ cov.overflows += guarded.providerOverflows; cov.truncations += guarded.truncations; cov.clampStops += guarded.clampStops; cov.clips += guarded.clips;
+ covCounted.add(cell.name);
+ for (const r of [guarded, native]) {
+  if (!r.reached) record(cell, 'hollow', `${r.plainPi ? 'plain Pi' : 'pi-tuck'} never hit the real ${r.providerWindow}-token window as ${cell.wrongWindow}`, { measured: r });
+  if (!r.reopened) record(cell, 'provider', `${r.plainPi ? 'plain Pi' : 'pi-tuck'} session file did not reopen with its saved messages`);
+ }
+ if (guarded.answered < native.answered) record(cell, 'native-parity', `pi-tuck answered ${guarded.answered}/${cell.prompts.length} prompts, plain Pi ${native.answered}/${cell.prompts.length}`, { guarded: guarded.answered, native: native.answered });
+ if (guarded.lostTasks > native.lostTasks) record(cell, 'task-turn', `pi-tuck lost ${guarded.lostTasks} tasks, plain Pi ${native.lostTasks}`, { guarded: guarded.lostTaskPrompts, native: native.lostTaskPrompts });
+ if (guarded.stuckSessions) record(cell, 'no-recovery', `pi-tuck stranded the session after a short prompt`, { recovery: guarded.recovery });
+ if (guarded.hungPrompts) record(cell, 'stuck', `pi-tuck hung on ${guarded.hungPrompts} prompts`);
+ // As for the other named cells, replay twice. Compare outcomes on both installations, without counting their findings again.
+ for (const measured of [guarded, native]) for (let i = 0; i < 2; i++) {
+  const replay = await measureWrongWindow(cell, measured.plainPi);
+  if (JSON.stringify(wrongWindowOutcome(replay)) !== JSON.stringify(wrongWindowOutcome(measured)))
+   record(cell, 'determinism', `${measured.plainPi ? 'plain Pi' : 'pi-tuck'} wrong-window outcomes changed on replay`, { first: wrongWindowOutcome(measured), replay: wrongWindowOutcome(replay) });
+ }
 }
 
 function saveNativeMeasurement(measured: Awaited<ReturnType<typeof measureCell>>) {
@@ -855,6 +993,25 @@ async function repeat(cell: Cell) {
  if (diff) record(cell, 'determinism', `the same settings answered differently: ${diff}`);
 }
 
+/** Grow a real session through tool rounds before large task prompts cross the physical limit. The 50k prompts after
+ * failures are feasible recovery work: their prompt and full reply cap fit 68k once old conversation is compacted. */
+function wrongWindowCells(): Cell[] {
+ return (['prompt-over', 'prompt-plus-reply-over', 'silent-shrink'] as const).map(mode => base(`wrong window: ${mode} (configured 81920, real 68000)`, {
+  wrongWindow: mode, window: 81_920, reserve: 16_384, maxTokens: 16_384, keepRecent: 20_000,
+  system: 800, host: 200, usageRatio: mode === 'prompt-over' ? 1.1 : 1,
+  prompts: [...Array(16).fill(1_500), 50_000, 54_000, 50_000, 62_000, 70_000, 50_000, 200],
+  rounds: [...Array(16).fill(1), 1, 1, 1, 1, 0, 1, 0], results: [2_500],
+  extra: { providerWindow: 68_000, persist: true, noOpening: true, stableHost: true, cutAtDefault: true,
+   rejectStatus: 400,
+   rejectWith: mode === 'prompt-plus-reply-over'
+    ? ({ prompt, maxTokens, window }) => `This model's maximum context length is ${window} tokens. However, you requested ${prompt + maxTokens} tokens (${prompt} in the messages, ${maxTokens} in the completion).`
+    : 'the request exceeds the available context size, try increasing it',
+   ...(mode === 'prompt-plus-reply-over' ? { replyWindow: 'refuse' as const } :
+    mode === 'silent-shrink' ? { replyWindow: 'clip' as const, replyWindowOutput: () => 16_384 } : {}),
+  },
+ }));
+}
+
 /** The named states, each one run whatever the grid samples. Each says what it exists to exercise and proves at the end that it got there. */
 function namedCells(): Cell[] {
  const roomOf = (c: Pick<Cell, 'window' | 'reserve' | 'maxTokens'>) => limitsOf(c).room;
@@ -1284,7 +1441,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
   ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, ...standoffSection, tasksSmallWindow, ...longSteps, ...specThenSteering,
-  ...providerCells, ...replyReserveCells, ...floorCells, ...clampCells, ...oddUsageCells,
+  ...providerCells, ...replyReserveCells, ...floorCells, ...clampCells, ...oddUsageCells, ...wrongWindowCells(),
  ];
 }
 
@@ -1309,11 +1466,16 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  if (!RUN) return;
  const started = Date.now();
  if (PLAIN_PI) {
-  const selected = namedCells().filter(cell => ONLY ? cell.name.includes(ONLY) : thinkingNames.has(cell.name) || cell.name === usefulCellName);
+  const selected = namedCells().filter(cell => ONLY ? cell.name.includes(ONLY) : thinkingNames.has(cell.name) || cell.name === usefulCellName || cell.wrongWindow);
   for (const cell of selected) {
-   saveNativeMeasurement(await measureCell(cell, true));
+   if (cell.wrongWindow) {
+    const measured = await measureWrongWindow(cell, true);
+    nativeMeasurements.push(measured); reportWrongWindow(measured);
+    if (!measured.reached) record(cell, 'hollow', `plain Pi never hit the real window as ${cell.wrongWindow}`);
+   } else saveNativeMeasurement(await measureCell(cell, true));
   }
-  if (REPORT) { mkdirSync('test/stress', { recursive: true }); writeFileSync('test/stress/failures.json', JSON.stringify({ mode: 'plain-pi', nativeMeasurements, failures: [] }, null, 1)); }
+  if (REPORT_PATH) { writeFileSync(REPORT_PATH, JSON.stringify({ mode: 'plain-pi', nativeMeasurements, failures }, null, 1)); report(`stress: wrote report to ${REPORT_PATH}`); }
+  if (STRICT) expect(failures.length).toBe(0);
   return;
  }
  for (let i = 0; i < CELLS; i++) {
@@ -1329,6 +1491,10 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
   if (ONLY && !cell.name.includes(ONLY)) continue;
   if (SETUP_ONLY && SETUP_ONLY !== '1' && !cell.name.includes(SETUP_ONLY)) continue;
   ran.push(cell.name); apis.add(cell.api ?? DEFAULT_API);
+  if (cell.wrongWindow) {
+   try { await proveWrongWindow(cell); } catch (error) { record(cell, 'harness', `the comparison could not run: ${String(error).slice(0, 300)}`); }
+   continue;
+  }
   if (thinkingNames.has(cell.name)) await proveThinkingParity(cell);
   if (cell.name === usefulCellName) saveNativeMeasurement(await measureCell(cell, true));
   try { await runCell(cell); } catch (error) { record(cell, 'harness', `the case could not run: ${String(error).slice(0, 300)}`); }
@@ -1352,7 +1518,6 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
  // Every rule holds after the last cell, so a finding is reported whatever the order the cells ran in.
  if (failures.length > 60) report(`stress: ${failures.length - 60} further failures not printed above`);
 
- if (REPORT) mkdirSync('test/stress', { recursive: true });
  const byClass = new Map<Rule, { count: number; cells: Set<string> }>();
  for (const f of failures) { const row = byClass.get(f.rule) ?? { count: 0, cells: new Set<string>() }; row.count++; row.cells.add(f.cell); byClass.set(f.rule, row); }
  const sorted = [...byClass.entries()].sort((a, b) => b[1].count - a[1].count);
@@ -1384,9 +1549,9 @@ test(`settings stress: ${CELLS} sampled cells and the named edge cases`, { timeo
   report('provider cell                          the scripted provider  pi-ai calls it an overflow');
   for (const r of providerRows) report(`${r.name.padEnd(35)}  ${r.saw.padStart(12)}  ${r.pi ? `yes, ${r.pi} repl${r.pi > 1 ? 'ies' : 'y'}` : 'no'}`);
  }
- if (REPORT) {
-  writeFileSync('test/stress/failures.json', JSON.stringify({ piMargin: PI_MARGIN, seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, nativeCoverage, exemptRefusals, thinkingParity, acceptedFindings, nativeMeasurements, usefulCutExemption: { cells: [...usefulExemptCells], cuts: usefulExemptCuts }, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, rows: cellRows, failures }, null, 1));
-  report(`stress: wrote ${failures.length} failures to test/stress/failures.json`);
+ if (REPORT_PATH) {
+  writeFileSync(REPORT_PATH, JSON.stringify({ piMargin: PI_MARGIN, seed: SEED, cells: CELLS, ran: ran.length, coverage: cov, nativeCoverage, exemptRefusals, thinkingParity, acceptedFindings, nativeMeasurements, wrongWindowRows, usefulCutExemption: { cells: [...usefulExemptCells], cuts: usefulExemptCuts }, cap: { cuts: cappedCuts, largestOvershoot: Number.isFinite(largestCutOvershoot) ? largestCutOvershoot : 0 }, rows: cellRows, failures }, null, 1));
+  report(`stress: wrote ${failures.length} failures to ${REPORT_PATH}`);
  }
  report(`stress: ran ${ran.length} cells in ${((Date.now() - started) / 1000).toFixed(1)}s on ${[...apis].join(', ')}`);
  // The assertion comes last, so the summary, the coverage line and the class table are printed even when the run is failing.
