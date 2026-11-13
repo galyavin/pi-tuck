@@ -907,7 +907,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     };
     const atBoundary = (event: Boundary, ctx: ExtensionContext, reason: "tool-loop" | "run-end", decide: boolean) => {
         const current = view(ctx);
-        if (!current.pending) return decide ? boundaryCut(event, ctx, reason) : undefined;
+        if (!current.pending) {
+            const result = decide ? boundaryCut(event, ctx, reason) : undefined;
+            // Pi announces only its own compactions (session_compact); a cut saved here gets no event, so it starts the indexing itself.
+            if (result?.entries.some(entry => entry.type === "compaction")) setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
+            return result;
+        }
         const entry = run!.cut.take()!;
         const preview = current.session, context: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
         const more = decide && !event.entries.length
