@@ -8,6 +8,7 @@ import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
 import { fileObservations, thinkingRecords } from "./content-observations";
+import { keptReadCandidates } from "./kept-reads";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -393,7 +394,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const compiledBoundary = boundary;
         // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
         const sourceKey = (record: TranscriptRecord) => current?.type === "custom_message" && record.sourceEntryId === current.id ? current.id : record.sourceIndex;
-        const thinking: TranscriptRecord[] = [];
+        const keptReads: TranscriptRecord[] = [], thinking: TranscriptRecord[] = [];
         const assemble = (compiled: string, at = compiledBoundary) => {
             const split = compiled ? splitSummary(compiled) : undefined;
             if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
@@ -435,16 +436,27 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             }
             orderByOriginalSource(records, sourceIndices, originals.selectedIds);
             const thoughtOpenings = thinking.filter(record => !moved.has(record.sourceIndex));
-            const summary = render([...records, ...ledger, ...thoughtOpenings]);
+            const summary = render([...records, ...ledger, ...keptReads, ...thoughtOpenings]);
             return { summary, after: price(summary.length, at), records: [...records, ...thoughtOpenings] };
         };
         const compiled = tuck.compileDialogue(compileInput);
         let offer = assemble(compiled.text);
         // After the complete dialogue fill, observations spend the remaining
         // room before the native tail's older end. The pinned tail is untouched.
+        let keptReadCost = 0;
+        const keptReadCap = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
+        for (const record of keptReadCandidates(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined)) {
+            const extra = lineCost([record]);
+            if (keptReadCost + extra > keptReadCap || price(offer.summary.length + keptReadCost + extra, boundary) > target) continue;
+            keptReads.push(record); keptReadCost += extra;
+            if (keptReads.length === 4) break;
+        }
+        if (keptReads.length) offer = assemble(compiled.text, boundary);
         const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
         const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
-        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
+        const filesWithoutKeptReads = shownFiles.filter(item => !keptReads.some(record =>
+            record.text!.startsWith(`read ${item.path} (as recorded at #${record.sourceIndex}; no write or edit recorded since):\n`)));
+        const observations = fileObservations(new Set(filesWithoutKeptReads.map(item => item.path)), entries, indices, failedCalls);
         for (const item of shownFiles) item.definitions = observations.get(item.path);
         const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
         let observationCost = 0;
@@ -467,7 +479,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
             offer = assemble(compiled.text, boundary);
         }
-        // Plain thinking follows output tails and definition maps.
+        // Plain thinking follows kept reads, output tails and definition maps.
         let thinkingCost = 0;
         for (const record of thinkingRecords(entries.slice(0, boundary), indices, openingLength)) {
             const extra = lineCost([record]);
@@ -513,8 +525,13 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 missing.forEach((unit, at) => counts[at + 1] = counts[at]! + unit.count);
                 return [{ role, missing, ends, counts, cost: lineCost([record]) }];
             });
-            const baseCost = lineCost(offer.records) + lineCost(ledger), baseCount = offer.records.length + ledger.length;
+            const baseCost = lineCost(offer.records) + lineCost(ledger) + keptReadCost, baseCount = offer.records.length + ledger.length + keptReads.length;
+            const keptReadIndices = new Set(keptReads.map(record => record.sourceIndex));
+            const lastKeptReadPosition = keptReads.length ? entries.findLastIndex(entry => keptReadIndices.has(indices.get(entry.id))) : -1;
             const extensionPrice = (at: number) => {
+                // Kept reads already spend this extension's price. They stay in
+                // the compacted prefix, so the native tail never repeats them.
+                if (keptReads.length && at <= lastKeptReadPosition) return Infinity;
                 let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
                 let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
                 for (const range of ranges) {

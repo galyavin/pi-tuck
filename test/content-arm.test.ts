@@ -60,7 +60,7 @@ test('Go writes and Python reads supply exact numbered definition lines with the
   const entries = f.manager.getBranch(), items = ledgerItems(entries, buildGlobalIndexById(entries), () => true, new Set());
   for (const item of items) item.definitions = known.get(item.path);
   const rows = ledgerRecords(items, items.length, new Set(items));
-  expect(rows[1]!.text).toBe('- read worker.py (tuck_recall {"index":2}) (definitions as of #3):\n21: class Worker:\n22:     async def run(self):\n24: def main():');
+  expect(rows[1]!.text).toBe('- read worker.py (tuck_recall {"index":3}) (definitions as of #3):\n21: class Worker:\n22:     async def run(self):\n24: def main():');
   expect(parseRecords(serializeRecords(rows))).toEqual(rows);
   expect(definitionLines('export const one = 1;\nexport let two = 2;\ninterface Three {}\nstruct Four {}\nfunction five() {}')).toBe(
     '1: export const one = 1;\n2: export let two = 2;\n3: interface Three {}\n4: struct Four {}\n5: function five() {}');

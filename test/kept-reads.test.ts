@@ -15,7 +15,7 @@ const answer = (content: unknown[], stopReason = 'stop') => ({ role: 'assistant'
 	api: 'openai-completions', provider: 'fixture', model: 'fixture', timestamp: 0,
 	usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as never;
 interface Call { name?: string; path: string; text?: string; content?: ToolResultMessage['content']; isError?: boolean; noResult?: boolean; args?: Record<string, unknown> }
-function fixture(calls: Call[]) {
+function fixture(calls: Call[], dialogueCharacters = 0) {
 	const manager = SessionManager.inMemory('/kept-reads');
 	manager.appendMessage({ role: 'user', content: 'Inspect the recorded files.', timestamp: 0 });
 	const results = calls.map((call, i) => {
@@ -29,7 +29,7 @@ function fixture(calls: Call[]) {
 		manager.appendMessage(answer([{ type: 'toolCall', id: `b${i}`, name: 'bash', arguments: { command: `step ${i}` } }], 'toolUse'));
 		manager.appendMessage({ role: 'toolResult', toolCallId: `b${i}`, toolName: 'bash', isError: false,
 			content: [{ type: 'text', text: 'recorded output\n'.repeat(1500) }], timestamp: 0 });
-		manager.appendMessage(answer([{ type: 'text', text: `Finished step ${i}.` }]));
+		manager.appendMessage(answer([{ type: 'text', text: `Finished step ${i}.` + 'x'.repeat(dialogueCharacters) }]));
 	}
 	manager.appendMessage({ role: 'user', content: 'Continue the task.', timestamp: 0 });
 	const ctx = { cwd: '/kept-reads', sessionManager: manager, model: { contextWindow: 131072, maxTokens: 8192 } } as unknown as ExtensionContext;
@@ -116,7 +116,10 @@ function pricedDraft(s: ReturnType<typeof fixture>, reserve = 8192) {
 		return tuck.compileDialogue(input);
 	} });
 	const records = recordsOf(draft.compaction.summary), kept = keptOf(draft.compaction.summary);
-	const fixed = records.filter(r => r.kind === 'section' || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!));
+	// The compiler receives room after the bare ledger and protected dialogue;
+	// content additions must not inflate the allowance they are checked against.
+	const fixed = records.filter(r => r.kind === 'section' && ['Actions', 'Files'].includes(r.title!) || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!))
+		.map(r => r.kind === 'section' ? { ...r, text: r.text!.replace(/ \((?:output tail|definitions as of #\d+)\):\n[\s\S]*$/u, '') } : r);
 	return { draft, kept, maxSummaryCharacters: maxBriefChars + lineCost(fixed) };
 }
 
@@ -152,6 +155,22 @@ test('escaping and the header count against the allowance, rather than only raw 
 	expect(kept.map(r => r.text!.split(' ')[1])).toEqual(['small']);
 });
 
+test('a whole read that exceeds the remaining target room is skipped even below the per-kind cap, so an older small read can fit', () => {
+	const s = fixture([{ path: 'old-small', text: 'small complete output' }, { path: 'new-large', text: 'x'.repeat(2000) }], 1000);
+	const newest = candidatesOf(s)[0]!;
+	let skippedForRoom = false;
+	for (let reserve = 110000; reserve < 129000; reserve += 20) {
+		const { draft, kept, maxSummaryCharacters } = pricedDraft(s, reserve);
+		if (lineCost([newest]) > Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000)) continue;
+		if (kept.some(r => r.text!.startsWith('read new-large ')) || !kept.some(r => r.text!.startsWith('read old-small '))) continue;
+		expect(kept).toEqual([candidatesOf(s)[1]]);
+		expect(draft.after).toBeLessThanOrEqual((draft.compaction.details as { carriedTarget: number }).carriedTarget);
+		skippedForRoom = true;
+		break;
+	}
+	expect(skippedForRoom).toBe(true);
+});
+
 test('only reads before the final cut boundary can be kept, including when spare budget extends the native tail', () => {
 	const s = fixture([{ path: 'old' }]), m = s.manager;
 	m.appendMessage(answer([{ type: 'toolCall', id: 'tail-read', name: 'read', arguments: { path: 'tail' } }], 'toolUse'));
@@ -163,41 +182,53 @@ test('only reads before the final cut boundary can be kept, including when spare
 	const kept = keptOf(compaction.summary);
 	expect(kept).toHaveLength(2);
 	for (const record of kept) expect(prefixIndices.has(record.sourceIndex)).toBe(true);
-	// The measured slack gives a conservative character allowance at the final boundary (rounding can add at most three characters).
 	const target = (compaction.details as { carriedTarget: number }).carriedTarget;
-	const availableCharacters = compaction.summary.length + 4 * (target - draft.after);
-	expect(lineCost(kept)).toBeLessThanOrEqual(Math.min(Math.floor(0.20 * availableCharacters), 24000));
+	expect(draft.after).toBeLessThanOrEqual(target);
 });
 
-test('over target drops kept reads oldest first, then shrinks Actions and Files as before', () => {
+test('kept reads give way as whole items, newest kept, before output tails and definition maps are spent', () => {
 	const s = fixture([
-		...Array.from({ length: 56 }, (_, i) => ({ name: 'write', path: `written-${i}-` + 'p'.repeat(500) })),
-		...Array.from({ length: 4 }, (_, i) => ({ path: `read-${i}`, text: 'whole output '.repeat(20) })),
-	]);
+		...Array.from({ length: 4 }, (_, i) => ({ name: 'write', path: `written-${i}.py`, args: { path: `written-${i}.py`, content: 'def written():\n    pass' } })),
+		...Array.from({ length: 4 }, (_, i) => ({ path: `read-${i}`, text: `whole output ${i}: ` + 'x'.repeat(80) })),
+	], 1000);
 	const expected = candidatesOf(s), seen = new Set<number>();
-	let sawShrunkLists = false;
-	for (let reserve = 119000; reserve < 125000; reserve += 20) {
+	let tailsGaveWay = false, definitionsGaveWay = false;
+	for (let reserve = 119000; reserve < 130500; reserve += 10) {
 		const { compaction } = draftOf(s, reserve), records = recordsOf(compaction.summary), kept = keptOf(compaction.summary);
-		const shrunk = records.some(r => r.title === 'Files' && r.text!.includes('older files:'));
-		if (shrunk) {
-			expect(kept).toEqual([]);
-			sawShrunkLists = true;
-			break;
-		}
 		seen.add(kept.length);
 		expect(kept).toEqual(expected.slice(0, kept.length));
 		expect(records.filter(r => r.title === 'Actions')).toHaveLength(9);
-		expect(records.filter(r => r.title === 'Files')).toHaveLength(61);
+		expect(records.filter(r => r.title === 'Files')).toHaveLength(9);
+		const tails = records.filter(r => r.title === 'Actions' && r.text!.includes('(output tail):')).length;
+		const definitions = records.filter(r => r.title === 'Files' && r.text!.includes('(definitions as of #')).length;
+		tailsGaveWay ||= kept.length === 4 && tails < 8;
+		definitionsGaveWay ||= kept.length === 4 && definitions === 0;
+		expect(records.some(r => r.role === 'user' && r.text === 'Inspect the recorded files.')).toBe(true);
+		const branch = s.manager.getBranch(), boundary = branch.findIndex(e => e.id === compaction.firstKeptEntryId);
+		expect(branch.slice(boundary).some(e => e.id === branch.at(-1)!.id)).toBe(true);
+		expect(branch.slice(boundary).some(e => e.type === 'message' && e.message.role === 'toolResult')).toBe(false);
 	}
 	expect([...seen].sort()).toEqual([0, 1, 2, 3, 4]);
-	expect(sawShrunkLists).toBe(true);
+	expect(tailsGaveWay).toBe(true);
+	expect(definitionsGaveWay).toBe(true);
 });
 
-test('without read candidates the summary is byte-identical to the 1.0.33 fixture', () => {
+test('a kept-read file gets no definition map, while other file maps still use spare room', () => {
+	const s = fixture([
+		{ name: 'write', path: 'written.py', args: { path: 'written.py', content: 'def written():' } },
+		{ path: 'read.py', text: 'def read():\n    pass' },
+	]);
+	const summary = draftOf(s).compaction.summary, records = recordsOf(summary);
+	expect(keptOf(summary)).toHaveLength(1);
+	expect(records.find(r => r.title === 'Files' && r.text!.startsWith('- read read.py'))!.text).not.toContain('(definitions as of #');
+	expect(records.find(r => r.title === 'Files' && r.text!.startsWith('- wrote/edited written.py'))!.text).toContain('(definitions as of #');
+});
+
+test('without read candidates the summary is byte-identical to the arm F (41bf248) fixture', () => {
 	const s = fixture([{ name: 'write', path: 'out.txt', text: 'written' }]);
 	const summary = draftOf(s).compaction.summary;
 	expect(keptOf(summary)).toEqual([]);
-	expect(createHash('sha256').update(summary).digest('hex')).toBe('43ea9ac208549571e0bdb8f90d406f9a87065eb483d6e1753c8fb8c0ce5cbfe2');
+	expect(createHash('sha256').update(summary).digest('hex')).toBe('209ac35348e109e3d57a84d1b844e78d89a1528ca4a82ea0fa83faebe9c61ce4');
 });
 
 test('native omission of a kept result removes its own record and preserves the other kept read', () => {
