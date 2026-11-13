@@ -1,6 +1,7 @@
 import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { isSourceExport, isLookupTool, isRecallTool } from "./tuck/core/recall-operation";
 import { escapeRegex } from "./tuck/core/keyword-query";
+import { readableContentParts } from "./tuck/core/readable-content";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 export interface RecallOptions {
@@ -112,18 +113,8 @@ function isToolSource(entry: SessionEntry): boolean {
 
 
 
-function textContent(content: unknown, includeToolCalls = false): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	const blocks: unknown[] = content;
-	return blocks.flatMap((block) => {
-		if (block === null || typeof block !== "object" || !("type" in block)) return [];
-		if (block.type === "text" && "text" in block && typeof block.text === "string") return [block.text];
-		if (includeToolCalls && block.type === "toolCall" && "name" in block && typeof block.name === "string"
-			&& "id" in block && typeof block.id === "string" && "arguments" in block)
-			return [JSON.stringify({ toolCall: { name: block.name, id: block.id, arguments: block.arguments } })];
-		return [];
-	}).join("\n");
+function textContent(content: unknown, assistant = false): string {
+	return readableContentParts(content, assistant).map(part => part.text).join("\n");
 }
 
 function readable(entry: SessionEntry, attempts?: ReadonlyMap<string, RecordedAttempt | null>, links?: ReadonlyMap<string, NonNullable<ReadableEntry["producerRead"]> & { sourceTime: SourceTime } >): ReadableEntry | undefined {
@@ -178,7 +169,8 @@ function producerReads(branch: readonly SessionEntry[]) {
 			const call = block.type === "toolCall" && typeof block.id === "string" && block.id ?
 				{ order, name: block.name } as Call : undefined;
 			if (call && block.type === "toolCall") { call.export = isSourceExport(block.arguments); const group = calls.get(block.id) ?? []; group.push(call); calls.set(block.id, group); local.push(call); }
-			// Exactly the parts admitted by textContent, including empty text/newlines.
+			// Exactly the public prefix admitted by textContent, including empty
+			// text/newlines. Plain thinking is appended after this prefix.
 			if (!(block.type === "text" && typeof block.text === "string" || block.type === "toolCall" &&
 				typeof block.name === "string" && typeof block.id === "string" && "arguments" in block)) continue;
 			try {
@@ -210,17 +202,13 @@ function discoveryRanges(entry: SessionEntry, text: string, links?: ReadonlyMap<
 	if (message.role === "toolResult" && isLookupTool(message.toolName) && !links?.has(entry.id)) return [];
 	if (message.role !== "assistant") return [{ start: 0, end: text.length }];
 	const ranges: { start: number; end: number }[] = [];
-	let position = 0;
-	for (const block of message.content) {
-		if (block.type !== "text" && block.type !== "toolCall") continue;
-		const part = textContent([block], true);
-		const end = position + part.length;
-		if (block.type !== "toolCall" || !isLookupTool(block.name) || isRecallTool(block.name) && isSourceExport(block.arguments)) {
+	for (const part of readableContentParts(message.content, true)) {
+		const position = part.offset, end = position + part.text.length;
+		if (part.kind !== "toolCall" || !isLookupTool(part.toolName!) || isRecallTool(part.toolName!) && isSourceExport(part.arguments)) {
 			const previous = ranges.at(-1);
 			if (previous && previous.end + 1 === position) previous.end = end;
 			else ranges.push({ start: position, end });
 		}
-		position = end + 1;
 	}
 	return ranges.filter(({ start, end }) => end > start);
 }

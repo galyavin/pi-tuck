@@ -7,7 +7,7 @@ import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
-import { keptReadCandidates } from "./kept-reads.js";
+import { fileObservations, thinkingRecords } from "./content-observations";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -363,28 +363,18 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         let { boundary, high: protectedView } = selected;
         const sourceRows = rows.filter(row => row.position < boundary);
         const lists = listsAt(boundary);
-        const maxSummaryCharactersAt = (at: number) => Math.floor((target - offset - nativeAt(at)) * 4) - wrapperCharacters;
-        const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
-        let allowance = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
-        const keptReads: TranscriptRecord[] = [];
-        for (const record of keptReadCandidates(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined)) {
-            const cost = lineCost([record]);
-            if (cost > allowance) continue;
-            keptReads.push(record); allowance -= cost;
-            if (keptReads.length === 4) break;
-        }
-        let ledger: TranscriptRecord[] = [...lists.records, ...keptReads];
+        let ledger: TranscriptRecord[] = lists.records;
+        let listedKeep = Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES);
         // List caps are existing ranking policy; only the carried target is a
         // spending limit. Candidate list sizes have fixed, cached line prices.
-        while (keptReads.length && price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
-            keptReads.pop();
-            ledger = [...lists.records, ...keptReads];
-        }
         if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
           ledger = [];
+          listedKeep = 0;
           for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
             const candidate = [...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)];
-            if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) ledger = candidate;
+            if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) {
+                ledger = candidate; listedKeep = keep;
+            }
         }
         }
         const mandatory = new Set([...protectedView.whole].filter(index => {
@@ -392,6 +382,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             return row?.message.role === "user" && isTextOnly(row.message.content);
         }));
         const fixed = [...protectedView.kept, ...ledger], fixedCost = lineCost(fixed);
+        const maxSummaryCharacters = Math.floor((target - offset - nativeAt(boundary)) * 4) - wrapperCharacters;
         const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost);
         const compileInput = { messages: sourceRows.map(row => row.message), sourceIndices: sourceRows.map(row => row.index),
             sourceEntryIds: sourceRows.map(row => row.id), sourceTimes: sourceRows.map(row => resolveSourceTime(byId.get(row.id)!)),
@@ -402,6 +393,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const compiledBoundary = boundary;
         // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
         const sourceKey = (record: TranscriptRecord) => current?.type === "custom_message" && record.sourceEntryId === current.id ? current.id : record.sourceIndex;
+        const thinking: TranscriptRecord[] = [];
         const assemble = (compiled: string, at = compiledBoundary) => {
             const split = compiled ? splitSummary(compiled) : undefined;
             if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
@@ -442,11 +434,47 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 }
             }
             orderByOriginalSource(records, sourceIndices, originals.selectedIds);
-            const summary = render([...records, ...ledger]);
-            return { summary, after: price(summary.length, at), records };
+            const thoughtOpenings = thinking.filter(record => !moved.has(record.sourceIndex));
+            const summary = render([...records, ...ledger, ...thoughtOpenings]);
+            return { summary, after: price(summary.length, at), records: [...records, ...thoughtOpenings] };
         };
         const compiled = tuck.compileDialogue(compileInput);
         let offer = assemble(compiled.text);
+        // After the complete dialogue fill, observations spend the remaining
+        // room before the native tail's older end. The pinned tail is untouched.
+        const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
+        const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
+        const observations = fileObservations(new Set(shownFiles.map(item => item.path)), entries, indices, failedCalls);
+        for (const item of shownFiles) item.definitions = observations.get(item.path);
+        const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
+        let observationCost = 0;
+        const fitsObservation = (extra: number) => price(offer.summary.length + observationCost + extra, boundary) <= target;
+        // Each kind gives way as whole items, oldest first; an oversized newest
+        // item cannot promote an older one. Pointer lines need no extra omission.
+        for (const item of shownActions) {
+            if (!item.outputTail) continue;
+            const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            outputs.add(item); observationCost += extra;
+        }
+        for (const item of shownFiles) {
+            if (!item.definitions) continue;
+            const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
+            if (!fitsObservation(extra)) break;
+            definitions.add(item); observationCost += extra;
+        }
+        if (outputs.size || definitions.size) {
+            ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
+            offer = assemble(compiled.text, boundary);
+        }
+        // Plain thinking follows output tails and definition maps.
+        let thinkingCost = 0;
+        for (const record of thinkingRecords(entries.slice(0, boundary), indices, openingLength)) {
+            const extra = lineCost([record]);
+            if (price(offer.summary.length + thinkingCost + extra, boundary) > target) break;
+            thinking.push(record); thinkingCost += extra;
+        }
+        if (thinking.length) offer = assemble(compiled.text, boundary);
         // Only capacity left after all higher ranks can extend the native tail
         // beyond its preferred rank boundary. No old allocator is consulted.
         const liveStartId = calibration.ok ? calibration.selectedIds[0] : undefined;
@@ -486,11 +514,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 return [{ role, missing, ends, counts, cost: lineCost([record]) }];
             });
             const baseCost = lineCost(offer.records) + lineCost(ledger), baseCount = offer.records.length + ledger.length;
-            const keptReadCost = lineCost(keptReads), keptReadIndices = new Set(keptReads.map(record => record.sourceIndex));
-            const lastKeptReadPosition = entries.findLastIndex(entry => keptReadIndices.has(indices.get(entry.id)));
             const extensionPrice = (at: number) => {
-                // Fixed kept reads outrank this optional tail extension: it cannot move one out of the prefix or spend its allowance.
-                if (keptReads.length && (at <= lastKeptReadPosition || keptReadCost > Math.min(Math.floor(0.20 * maxSummaryCharactersAt(at)), 24000))) return Infinity;
                 let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
                 let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
                 for (const range of ranges) {

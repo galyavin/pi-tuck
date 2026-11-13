@@ -3,6 +3,8 @@ import { isLookupTool } from "./tuck/core/recall-operation";
 import { isDiscardedResponse } from "./protocol";
 import { extractPath } from "./tuck/core/tool-args";
 import type { TranscriptRecord } from "./tuck/core/transcript";
+import { outputTail, type FileObservation } from "./content-observations";
+import { textOf } from "./tuck/core/content";
 
 /** Owner default; older distinct paths are counted, not listed. */
 export const MAX_LEDGER_LINES = 60;
@@ -20,7 +22,7 @@ export const head = (text: string, max: number): string => {
  * omission of the call removes the line). `locatorIndex` is the entry an agent wants back: for a read, the one holding its result (what
  * the file showed; a live check, 2026-11-12: an agent asked for "#13" and got the call); for a write or edit, the call (what was written).
  * `resolvable` says tuck_recall {index} reads the locator, so only then is it shown. A read whose result is missing points at its call. */
-export interface LedgerItem { path: string; operation: "wrote/edited" | "read"; sourceIndex?: number; locatorIndex?: number; resolvable: boolean }
+export interface LedgerItem { path: string; operation: "wrote/edited" | "read"; sourceIndex?: number; locatorIndex?: number; resolvable: boolean; definitions?: FileObservation }
 
 /** Paths exactly as recorded in read/write/edit tool-call arguments before the cut, newest last operation first. Nothing is inferred.
  * A call from a failed or aborted response, a write/edit whose result is an error, and a path with a line break are not listed. */
@@ -51,11 +53,12 @@ export function ledgerItems(entries: readonly SessionEntry[], indices: ReadonlyM
 
 /** The ledger: a heading, one record per listed path (at most `keep` and the line cap, newest first), then a count of the older ones.
  * Each line carries its own source index, so a later native omission of that entry removes that line only. */
-export function ledgerRecords(items: readonly LedgerItem[], keep = items.length): TranscriptRecord[] {
+export function ledgerRecords(items: readonly LedgerItem[], keep = items.length, observations: ReadonlySet<LedgerItem> = new Set()): TranscriptRecord[] {
 	const listed = items.slice(0, Math.max(0, Math.min(keep, MAX_LEDGER_LINES)));
 	const line = (text: string, sourceIndex?: number): TranscriptRecord => ({ kind: "section", title: LEDGER_TITLE, text, ...(sourceIndex !== undefined ? { sourceIndex } : {}) });
 	return [line(LEDGER_HEADING),
-		...listed.map(item => line(`- ${item.operation} ${item.path}` + (item.resolvable ? ` (tuck_recall {"index":${item.locatorIndex}})` : ""), item.sourceIndex)),
+		...listed.map(item => line(`- ${item.operation} ${item.path}` + (item.resolvable ? ` (tuck_recall {"index":${item.locatorIndex}})` : "") +
+			(observations.has(item) && item.definitions ? ` (definitions as of #${item.definitions.sourceIndex}):\n${item.definitions.text}` : ""), item.sourceIndex)),
 		...(items.length ? [] : [line("(none)")]),
 		...(listed.length < items.length ? [line(`+${items.length - listed.length} older files: use tuck_recall`)] : [])];
 }
@@ -64,11 +67,11 @@ export function ledgerRecords(items: readonly LedgerItem[], keep = items.length)
 export const MAX_ACTION_LINES = 30;
 export const MAX_ACTION_CHARACTERS = 200;
 const ACTIONS_TITLE = "Actions";
-export const ACTIONS_HEADING = "Tool calls other than read, write, edit and history lookups before this summary, newest first, without their output:";
+export const ACTIONS_HEADING = "Tool calls other than read, write, edit and history lookups before this summary, newest first; command output tails when room permits:";
 
 /** One tool call other than a read, write, edit or history lookup: the file ledger and the dialogue cover those. `sourceIndex` is
  * the entry holding its result, shown as a locator only where tuck_recall {index} reads it. */
-export interface ActionItem { text: string; failed: boolean; sourceIndex?: number; resolvable: boolean }
+export interface ActionItem { text: string; failed: boolean; sourceIndex?: number; resolvable: boolean; outputTail?: string }
 
 /** The calls exactly as recorded, newest first, with the command (or else the arguments) flattened to one line. A call from a failed or
  * aborted response is not listed; a call whose result is an error is marked. */
@@ -76,7 +79,7 @@ export function actionItems(entries: readonly SessionEntry[], indices: ReadonlyM
 	failedCalls: ReadonlySet<string>): ActionItem[] {
 	const results = new Map<string, SessionEntry>();
 	for (const entry of entries) if (entry.type === "message" && entry.message.role === "toolResult") results.set(entry.message.toolCallId, entry);
-	const calls: { text: string; failed: boolean; result?: SessionEntry }[] = [];
+	const calls: { text: string; failed: boolean; result?: SessionEntry; command: boolean }[] = [];
 	for (const entry of entries) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		if (isDiscardedResponse(entry.message)) continue;
@@ -86,24 +89,28 @@ export function actionItems(entries: readonly SessionEntry[], indices: ReadonlyM
 			const what = typeof args?.command === "string" ? args.command : JSON.stringify(args ?? {});
 			const line = `${block.name}: ${what}`.replace(/\s+/gu, " ").trim();
 			calls.push({ text: line.length > MAX_ACTION_CHARACTERS ? head(line, MAX_ACTION_CHARACTERS - 1) + "…" : line,
-				failed: failedCalls.has(block.id), result: results.get(block.id) });
+				failed: failedCalls.has(block.id), result: results.get(block.id), command: typeof args?.command === "string" });
 		}
 	}
-	return calls.reverse().map(({ text, failed, result }, rank) => {
+	return calls.reverse().map(({ text, failed, result, command }, rank) => {
 		const sourceIndex = result && indices.get(result.id);
+		const tail = rank < MAX_ACTION_LINES && command && result?.type === "message" && result.message.role === "toolResult"
+			? outputTail(textOf(result.message.content)) : undefined;
 		return { text, failed, ...(sourceIndex !== undefined ? { sourceIndex } : {}),
+			...(tail ? { outputTail: tail } : {}),
 			resolvable: rank < MAX_ACTION_LINES && sourceIndex !== undefined && resolvable(result!) };
 	});
 }
 
 /** The action trail: a heading, one record per listed call (at most `keep` and the line cap), then a count of the older ones; nothing
  * when there were no such calls. Each line carries its own source index, as the file ledger's do. */
-export function actionRecords(items: readonly ActionItem[], keep = items.length): TranscriptRecord[] {
+export function actionRecords(items: readonly ActionItem[], keep = items.length, observations: ReadonlySet<ActionItem> = new Set()): TranscriptRecord[] {
 	if (!items.length) return [];
 	const listed = items.slice(0, Math.max(0, Math.min(keep, MAX_ACTION_LINES)));
 	const line = (text: string, sourceIndex?: number): TranscriptRecord => ({ kind: "section", title: ACTIONS_TITLE, text, ...(sourceIndex !== undefined ? { sourceIndex } : {}) });
 	return [line(ACTIONS_HEADING),
 		...listed.map(item => line(`- ${item.text}` + (item.failed ? " (failed)" : "") +
-			(item.resolvable ? ` (output: tuck_recall {"index":${item.sourceIndex}})` : ""), item.sourceIndex)),
+			(item.resolvable ? ` (output: tuck_recall {"index":${item.sourceIndex}})` : "") +
+			(observations.has(item) && item.outputTail ? ` (output tail):\n${item.outputTail}` : ""), item.sourceIndex)),
 		...(listed.length < items.length ? [line(`+${items.length - listed.length} older calls: use tuck_recall`)] : [])];
 }
