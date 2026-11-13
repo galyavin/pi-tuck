@@ -965,6 +965,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 stoppedOutputTokens: event.message.role === "assistant" ? event.message.usage?.output ?? 0 : 0, cut: true,
                 estimatedTokens: corrected(tokens, view), piEstimateTokens: check.estimate, piCap: check.cap, room, hardLine, buildId: BUILD_ID } }];
         markBoundary(drafts);
+        // As at a boundary: Pi announces only its own compactions, so the cut saved for the retry starts the indexing itself.
+        setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
         return { entries: drafts, continue: true };
     };
     pi.on("turn_end", (event, ctx) => {
