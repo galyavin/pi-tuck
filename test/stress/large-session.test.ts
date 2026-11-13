@@ -58,7 +58,7 @@ function checkTwinProjection(m:SessionManager){
  try{
   const messages=m.buildSessionProjection().messages,start=performance.now(),cold=projectedMessages(messages,ctx),coldMs=performance.now()-start;
   const result=cold.find(message=>message.role==='toolResult'&&message.toolCallId===repeated);
-  expect(result).toMatchObject({content:[{type:'text',text},{type:'text',text:expect.stringContaining('[pi-tuck: all 6 lines')}]});
+  expect(result).toMatchObject({content:[{type:'text',text},{type:'text',text:expect.stringContaining('[pi-tuck: this output repeats output #')}]});
   expect(reads.mock.calls.length).toBeGreaterThan(1000);reads.mockClear();
   const warm:number[]=[];
   for(let i=0;i<20;i++){const start=performance.now(),projected=projectedMessages(messages,ctx);warm.push(performance.now()-start);expect(projected).toEqual(cold);}

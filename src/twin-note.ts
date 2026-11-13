@@ -32,7 +32,7 @@ function noteFor(cache: Cache, branch: readonly SessionEntry[], lines: Set<strin
  if (best < 5 || best < 0.6 * lines.size || visible >= best) return null;
  const id = branch[twin]!.id, index = cache.indices.byId.get(id);
  if (index === undefined) return null;
- if (best === lines.size) return `[pi-tuck: all ${lines.size} lines of this output also appear in output #${index} from before the cut; tuck_recall {"index":${index}} shows it exactly.]`;
+ if (best === lines.size) return `[pi-tuck: this output repeats output #${index} from before the cut (every line of 20+ characters matches); tuck_recall {"index":${index}} shows it exactly.]`;
  const earlier = cache.lines.get(id)!, missing: number[] = [];
  let total = 0;
  for (let at = 0; at < raw.length; at++) {
@@ -40,7 +40,7 @@ function noteFor(cache: Cache, branch: readonly SessionEntry[], lines: Set<strin
   if (lines.has(line) && !earlier.has(line)) { if (missing.length < 5) missing.push(at + 1); total++; }
  }
  const list = missing.join(', ') + (total > 5 ? ` and ${total - 5} more` : '');
- return `[pi-tuck: ${best} of these ${lines.size} lines also appear in output #${index} from before the cut; tuck_recall {"index":${index}} shows it exactly. Lines not in #${index}: ${list}.]`;
+ return `[pi-tuck: this output largely repeats output #${index} from before the cut (${best} of its ${lines.size} distinct lines of 20+ characters match); tuck_recall {"index":${index}} shows it exactly. Lines here not in #${index}: ${list}.]`;
 }
 
 /** Like eligibility-cache, trust Pi's immutable append-only entries, and reset on a session/branch switch. A result's verdict is made

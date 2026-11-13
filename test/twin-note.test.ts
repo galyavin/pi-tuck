@@ -43,7 +43,7 @@ function note(manager: SessionManager, result: ReturnType<typeof output>, messag
  return last?.type === 'text' && last.text.startsWith('[pi-tuck:') ? last.text : undefined;
 }
 const indexOf = (manager: SessionManager, id: string) => buildGlobalIndexById(manager.getEntries()).get(id)!;
-const allNote = (n: number, k: number) => `[pi-tuck: all ${n} lines of this output also appear in output #${k} from before the cut; tuck_recall {"index":${k}} shows it exactly.]`;
+const allNote = (n: number, k: number) => `[pi-tuck: this output repeats output #${k} from before the cut (every line of 20+ characters matches); tuck_recall {"index":${k}} shows it exactly.]`;
 
 test('an identical re-read names the session-global source, and that index recalls the original exactly', () => {
  const { manager, first } = session();
@@ -66,14 +66,14 @@ test('changed lines use raw 1-based positions, including repeated missing lines 
  cut(manager);
  const raw = ['heading', '', ...lines(6), line(100), line(100), 'short', line(101)];
  const repeated = output(manager, raw.join('\n')), k = indexOf(manager, source.id);
- expect(note(manager, repeated)).toBe(`[pi-tuck: 6 of these 8 lines also appear in output #${k} from before the cut; tuck_recall {"index":${k}} shows it exactly. Lines not in #${k}: 9, 10, 12.]`);
+ expect(note(manager, repeated)).toBe(`[pi-tuck: this output largely repeats output #${k} from before the cut (6 of its 8 distinct lines of 20+ characters match); tuck_recall {"index":${k}} shows it exactly. Lines here not in #${k}: 9, 10, 12.]`);
 });
 
 test('exactly 60 percent overlap qualifies and a long changed-line list ends with and m more', () => {
  const { manager } = session(), source = output(manager, lines(12).join('\n'));
  cut(manager);
  const repeated = output(manager, [...lines(12), ...lines(8, 100)].join('\n')), k = indexOf(manager, source.id);
- expect(note(manager, repeated)).toBe(`[pi-tuck: 12 of these 20 lines also appear in output #${k} from before the cut; tuck_recall {"index":${k}} shows it exactly. Lines not in #${k}: 13, 14, 15, 16, 17 and 3 more.]`);
+ expect(note(manager, repeated)).toBe(`[pi-tuck: this output largely repeats output #${k} from before the cut (12 of its 20 distinct lines of 20+ characters match); tuck_recall {"index":${k}} shows it exactly. Lines here not in #${k}: 13, 14, 15, 16, 17 and 3 more.]`);
 });
 
 test.each([
