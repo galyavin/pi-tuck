@@ -16,15 +16,19 @@ export const head = (text: string, max: number): string => {
 	return text.slice(0, /[\uD800-\uDBFF]/u.test(text[max - 1]!) ? max - 1 : max);
 };
 
-/** One distinct path and its last recorded operation. `sourceIndex` is the entry holding that call;
- * `resolvable` says tuck_recall {index} reads it, so only then is the index shown as a locator. */
-export interface LedgerItem { path: string; operation: "wrote/edited" | "read"; sourceIndex?: number; resolvable: boolean }
+/** One distinct path and its last recorded operation. `sourceIndex` is the entry holding that call (the line's own index, so a native
+ * omission of the call removes the line). `locatorIndex` is the entry an agent wants back: for a read, the one holding its result (what
+ * the file showed; a live check, 2026-11-12: an agent asked for "#13" and got the call); for a write or edit, the call (what was written).
+ * `resolvable` says tuck_recall {index} reads the locator, so only then is it shown. A read whose result is missing points at its call. */
+export interface LedgerItem { path: string; operation: "wrote/edited" | "read"; sourceIndex?: number; locatorIndex?: number; resolvable: boolean }
 
 /** Paths exactly as recorded in read/write/edit tool-call arguments before the cut, newest last operation first. Nothing is inferred.
  * A call from a failed or aborted response, a write/edit whose result is an error, and a path with a line break are not listed. */
 export function ledgerItems(entries: readonly SessionEntry[], indices: ReadonlyMap<string, number>, resolvable: (entry: SessionEntry) => boolean,
 	failedCalls: ReadonlySet<string>): LedgerItem[] {
-	const last = new Map<string, { path: string; operation: LedgerItem["operation"]; entry: SessionEntry }>();
+	const results = new Map<string, SessionEntry>();
+	for (const entry of entries) if (entry.type === "message" && entry.message.role === "toolResult") results.set(entry.message.toolCallId, entry);
+	const last = new Map<string, { path: string; operation: LedgerItem["operation"]; entry: SessionEntry; target: SessionEntry }>();
 	for (const entry of entries) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		if (isDiscardedResponse(entry.message)) continue;
@@ -34,14 +38,14 @@ export function ledgerItems(entries: readonly SessionEntry[], indices: ReadonlyM
 			const path = operation && extractPath(block.arguments as Record<string, unknown>);
 			if (!operation || !path || /[\r\n]/u.test(path) || operation === "wrote/edited" && failedCalls.has(block.id)) continue;
 			last.delete(path);
-			last.set(path, { path, operation, entry });
+			last.set(path, { path, operation, entry, target: operation === "read" ? results.get(block.id) ?? entry : entry });
 		}
 	}
 	// Only listed lines show a locator, so resolvability (which renders the entry) is checked for those alone.
-	return [...last.values()].reverse().map(({ path, operation, entry }, rank) => {
-		const sourceIndex = indices.get(entry.id);
-		return { path, operation, ...(sourceIndex !== undefined ? { sourceIndex } : {}),
-			resolvable: rank < MAX_LEDGER_LINES && sourceIndex !== undefined && resolvable(entry) };
+	return [...last.values()].reverse().map(({ path, operation, entry, target }, rank) => {
+		const sourceIndex = indices.get(entry.id), locatorIndex = indices.get(target.id);
+		return { path, operation, ...(sourceIndex !== undefined ? { sourceIndex } : {}), ...(locatorIndex !== undefined ? { locatorIndex } : {}),
+			resolvable: rank < MAX_LEDGER_LINES && sourceIndex !== undefined && locatorIndex !== undefined && resolvable(target) };
 	});
 }
 
@@ -51,7 +55,7 @@ export function ledgerRecords(items: readonly LedgerItem[], keep = items.length)
 	const listed = items.slice(0, Math.max(0, Math.min(keep, MAX_LEDGER_LINES)));
 	const line = (text: string, sourceIndex?: number): TranscriptRecord => ({ kind: "section", title: LEDGER_TITLE, text, ...(sourceIndex !== undefined ? { sourceIndex } : {}) });
 	return [line(LEDGER_HEADING),
-		...listed.map(item => line(`- ${item.operation} ${item.path}` + (item.resolvable ? ` (tuck_recall {"index":${item.sourceIndex}})` : ""), item.sourceIndex)),
+		...listed.map(item => line(`- ${item.operation} ${item.path}` + (item.resolvable ? ` (tuck_recall {"index":${item.locatorIndex}})` : ""), item.sourceIndex)),
 		...(items.length ? [] : [line("(none)")]),
 		...(listed.length < items.length ? [line(`+${items.length - listed.length} older files: use tuck_recall`)] : [])];
 }
