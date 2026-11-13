@@ -3,6 +3,20 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.33] - Unreleased
+
+### Changed
+
+- **The summary's closing line and the history tools' descriptions say when to look something up.** Before redoing a step or deciding
+  from memory, the agent is pointed to tuck_search (by meaning, where offered) and tuck_recall (by a summary's #N or by keyword).
+  tuck_search asks for the exact command, path or identifier first. tuck_recall's `around` takes a summary's #N, and an all-digit entry ID
+  that finds nothing says how to read it as an index.
+
+### Fixed
+
+- **A file line's tuck_recall locator for a read pointed at the call, not the result.** An agent that used it to see what it had read got
+  the call's arguments. It now points at the entry holding the read's output; a write still points at its call.
+
 ## [1.0.32] - 2026-11-13
 
 ### Changed
