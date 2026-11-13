@@ -20,84 +20,79 @@
 		[
 			"dialogue",
 			18,
-			"a23e20a92dcc5e3430ef57f462a74e40ac127c32eff95509f48e302353fc2c14"
+			"c816b1e12c9cb86532e34aab6b61ad899246e336f3ae20060f3cf637d81d3ca2"
 		],
 		[
 			"dialogue",
-			25,
-			"0ec5cd741d327821985d38c820ba00d823aeda52921a083bb43dcf67d9699b27"
+			27,
+			"9be6fae2b6c57c77d5996184b23bee7db1c3f6f92bf51059a78be95d215dd157"
 		],
 		[
 			"dialogue",
-			32,
-			"e0cb483e4c645775c42a7fbb173d34c645b18b7aa6a28e48486d441c4a9c6f2c"
+			35,
+			"bf69f688334dafd3bd51d4ee139f633f44ef29744d476969e0e381179bd9387b"
 		],
 		[
 			"dialogue",
-			39,
-			"8e0c93eb94ef365f2405b3aa274bbaba87081c5bf67312759255e4bcbf15f450"
+			42,
+			"85cab6c9420e3f6fa30a9de52d19c93f978710163f5e47506e3304fcbc4fb064"
 		],
 		[
 			"dialogue",
-			46,
-			"c291aa898dfc0ab9973fd33210c446f6de93eae170cfd6668adf4c5bd2323201"
+			49,
+			"0f2a5a5d4efa1b78c14991aa839fabcbbd3deef8dbf455b1a4db9fef9608947b"
 		],
 		[
 			"dialogue",
-			53,
-			"78567e1ac996a73483cfa9761f5ff7c06b7ea8ee391dd8bf672319172ea76939"
+			55,
+			"6ed1885de0731215241d8fe53becd791604ebecfd6aaa91ddf435aac8b6c86af"
 		],
 		[
 			"dialogue",
-			60,
-			"681f44bf5cf007bc20e9e8b2cde12eea069237cb4f2ebdb4d98f0a2776fa2cf3"
-		],
-		[
-			"dialogue",
-			66,
-			"d3a30d87fb35508157ecc7961a5b9b43a8483520f791ab6104e4ea5c363bed69"
+			62,
+			"62fc9fe4a8953d3d0c943fd4a32aac566fa3210e045b0145cf59575cb4edd33e"
 		],
 		[
 			"shrunk",
-			74,
-			"2689773c45d0fb6952e06ec8e39a2cd8fbeaec6e33c4747d230dd5fd70838435"
+			73,
+			"135ee3e77ff2055047eeff4cc90973bb4f533964f2f37141e2756427c32e0b5f"
 		],
 		[
 			"shrunk",
-			81,
-			"ad36ce03748fd4287bf9d3fcafbc82e33826beaec041aed1d8e399246edbd61d"
+			80,
+			"f3e8ad0a47c3e470e39b573b715cc19e3affa6d9483e0e18a657e18b95d7453f"
 		]
 	],
 	"residual-32k": [
 		[
 			"dialogue",
 			20,
-			"48658fff26d7a0feb9116a7f2adfa6b6dc33302a5ce4d09f66e83552d1b022e4"
+			"093ee7fe76f7583e79e64ac7f3d1a2df1571b9e1a6fb14259dbff6f9572ce69c"
 		],
 		[
 			"dialogue",
-			28,
-			"e7d3262447b4d17a3b91bf2fef8f8ba87659390c23ef485eb0806b1e304f4e7d"
+			30,
+			"60c434d8594d0b7b5aec4e082130c55bc1a8fda63dd9d335d4b586fa7002233b"
 		],
 		[
 			"dialogue",
-			36,
-			"d461b67882cd133f56ce73e329d04d05755fc52315e796391d854b3f80c8ebbb"
-		],
-		[
-			"dialogue",
-			43,
-			"96b3e379dcc17038822744e9e1e7030bdf3bd1d91a2b244360208ef5667302d6"
+			40,
+			"8890e951ff4165a7688c10d982573dd5baf97ff7df4377e427481af9e294c62e"
 		],
 		[
 			"dialogue",
 			50,
-			"48f401cc79882e0515911c3aaac231912373e4172fc6960c6cbbd28171afcc1f"
+			"82ab6a4a2bb740133b4c94a69f93489b061c8a77307cfbbbcf5e72772e5fd332"
 		],
 		[
 			"dialogue",
-			57,
-			"dcec2a8eaa14fb4d222781c8b88e1b33f149dad314a42ddeb2e11770d2483fe5"
+			59,
+			"fa504926bdfbc301c5fa8b2916a4f4b7995e2026cea93ae3057097925e0e1e2c"
+		],
+		[
+			"dialogue",
+			68,
+			"2b9ec7ff5fa92ff9b698c47e0b7681158e662ec1c1f5c478ca3438e6b5d96abd"
 		]
 	],
 	"prose-128k": [
@@ -116,37 +111,32 @@
 		[
 			"dialogue",
 			78,
-			"65e239289323b0ecc3198674826cf9e0db39c5eb9dedc28239ecc9b6e0804374"
+			"472508d2b60e1fa87ab84c9c85952a02e2cb04b7f5e217bc0b242c259dba087d"
 		],
 		[
 			"dialogue",
-			129,
-			"c960f5a295a051920034ce48f937e8dcd6bec64857b1c40899fb7b5c4256b975"
+			142,
+			"55ad6a5e9d4f9e788823200794ff313454dc3da538b7920a8d89f655bcec3c6c"
 		],
 		[
 			"dialogue",
-			180,
-			"ef42258448472cf3bab7c041dc240904d0dbfeca1b32b8e72210a167b6da2f29"
+			203,
+			"70ca73810e5308fc96c950185f2ef7fd998209c99af0f4fd37d1e50b2fe496e0"
 		],
 		[
 			"dialogue",
-			231,
-			"d522ea6041a22ef51035bb9ad684409301f0a9346b82b190132c2601dd9d22ef"
+			261,
+			"ce03b320b18363ac909b58c31a229d75190855278fc808f426d08778879944c4"
 		],
 		[
 			"dialogue",
-			282,
-			"e14e03a9d3340d8b9ebfd90aaffe9713321b7d1cdcd03b6acaca3b35d96a45ab"
-		],
-		[
-			"dialogue",
-			333,
-			"3223800f24441676b5c3dcf2f61b2dcb8fe4193af2d82c03853871ff08bd2fdf"
+			316,
+			"709f58f3541532c9873767fc1eb7795ae1176957000267144c985189f2562bf5"
 		],
 		[
 			"shrunk",
-			383,
-			"ea8fbf17a1d5fea4c1423e64dbdb937d1009871d8a253905ad8d5da4962f5bc7"
+			369,
+			"dac056cc23e0c1f40b2bb14d3bffe956349e455f2b527aeb20588b012459599d"
 		]
 	]
 }

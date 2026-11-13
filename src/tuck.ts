@@ -7,6 +7,7 @@ import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
+import { keptReadCandidates } from "./kept-reads.js";
 import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -362,9 +363,23 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         let { boundary, high: protectedView } = selected;
         const sourceRows = rows.filter(row => row.position < boundary);
         const lists = listsAt(boundary);
-        let ledger: TranscriptRecord[] = lists.records;
+        const maxSummaryCharactersAt = (at: number) => Math.floor((target - offset - nativeAt(at)) * 4) - wrapperCharacters;
+        const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
+        let allowance = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
+        const keptReads: TranscriptRecord[] = [];
+        for (const record of keptReadCandidates(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined)) {
+            const cost = lineCost([record]);
+            if (cost > allowance) continue;
+            keptReads.push(record); allowance -= cost;
+            if (keptReads.length === 4) break;
+        }
+        let ledger: TranscriptRecord[] = [...lists.records, ...keptReads];
         // List caps are existing ranking policy; only the carried target is a
         // spending limit. Candidate list sizes have fixed, cached line prices.
+        while (keptReads.length && price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
+            keptReads.pop();
+            ledger = [...lists.records, ...keptReads];
+        }
         if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
           ledger = [];
           for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
@@ -377,7 +392,6 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             return row?.message.role === "user" && isTextOnly(row.message.content);
         }));
         const fixed = [...protectedView.kept, ...ledger], fixedCost = lineCost(fixed);
-        const maxSummaryCharacters = Math.floor((target - offset - nativeAt(boundary)) * 4) - wrapperCharacters;
         const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost);
         const compileInput = { messages: sourceRows.map(row => row.message), sourceIndices: sourceRows.map(row => row.index),
             sourceEntryIds: sourceRows.map(row => row.id), sourceTimes: sourceRows.map(row => resolveSourceTime(byId.get(row.id)!)),
@@ -472,7 +486,11 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 return [{ role, missing, ends, counts, cost: lineCost([record]) }];
             });
             const baseCost = lineCost(offer.records) + lineCost(ledger), baseCount = offer.records.length + ledger.length;
+            const keptReadCost = lineCost(keptReads), keptReadIndices = new Set(keptReads.map(record => record.sourceIndex));
+            const lastKeptReadPosition = entries.findLastIndex(entry => keptReadIndices.has(indices.get(entry.id)));
             const extensionPrice = (at: number) => {
+                // Fixed kept reads outrank this optional tail extension: it cannot move one out of the prefix or spend its allowance.
+                if (keptReads.length && (at <= lastKeptReadPosition || keptReadCost > Math.min(Math.floor(0.20 * maxSummaryCharactersAt(at)), 24000))) return Infinity;
                 let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
                 let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
                 for (const range of ranges) {

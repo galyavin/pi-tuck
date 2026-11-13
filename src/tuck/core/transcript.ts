@@ -83,7 +83,7 @@ const LEGACY_RECEIPT_RANGE_NOTICE = RECEIPT_RANGE_NOTICE.replace("tuck_recall", 
  *                                                                                                         or, with no role, of the tool history
  *             | role " omitted " count " #" index "-#" index ":" ...                             counted inclusive index range
  *             | role " omitted " count [ " " locator-time { " " locator-time } ] ":" ...               omission of unselected text blocks
- *             | [ locator " " ] title ":" ...                                                          section (file ledger, action trail)
+ *             | [ locator " " ] title ":" ...                                                          section (Files, Actions, Kept-read)
  *   locator   = "#" index                      the source's session-wide index, as tuck_recall {"index"} takes it
  *   locator-time = locator [ "@" time-value ]  every locator of a record has a time, or none does
  *   role      = "user" | "assistant" | "custom" | "toolResult" (omissions only)

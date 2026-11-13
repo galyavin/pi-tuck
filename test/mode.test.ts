@@ -7,6 +7,7 @@ import { BAND, HOST, ROOM, harness, receiptOf, scenario } from './budget-fixture
 import { conversationTokens, measurableConversationTokens, planningReserve, projectedConversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft, type DraftMode, type Tuck } from '../src/tuck';
 import { CLOSING_INSTRUCTION } from '../src/tuck/core/format';
+import { parseRecords, splitSummary } from '../src/tuck/core/transcript';
 
 // Each cut records which summary view produced it: the whole pre-cut dialogue, or the same dialogue shrunk when it exceeds the
 // allowance. Both views carry the file ledger and end with the closing instruction.
@@ -20,7 +21,7 @@ function session(rounds = 12) {
 	const dir = mkdtempSync(join(tmpdir(), 'pi-mode-'));
 	const manager = SessionManager.inMemory(dir);
 	const answer = (content: never[] | { type: 'text'; text: string }[] | { type: 'toolCall'; id: string; name: string; arguments: object }[], stopReason: 'stop' | 'toolUse' = 'stop') => ({ role: 'assistant' as const, content, stopReason, api: 'openai-responses', provider: 'openai', model: 'm', timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
-	// Alternate bulky receipts (over the 8,000-character bound: never in a summary) and small ones (quoted whole when the view allows).
+	// Alternate bulky reads and small ones: kept reads quote whole outputs within their shared allowance.
 	const size = (i: number) => i % 2 ? 400 : 3000;
 	for (let i = 0; i < rounds; i++) {
 		manager.appendMessage({ role: 'user', content: `Earlier request ${i}`, timestamp: 0 });
@@ -66,7 +67,10 @@ test('one compiler call fills the cut; result-form metadata only changes diagnos
 			expect(calls).toBe(1);
 			expect(draft.mode).toBe(mode);
 			const summary = draft.compaction.summary;
-			expect(summary).toContain(OMITTED_ACTIONS); expect(summary).not.toContain(BODY);
+			expect(summary).toContain(OMITTED_ACTIONS);
+			const records = parseRecords(splitSummary(summary)!.body);
+			expect(records.some(record => record.title === 'Kept-read' && record.text!.includes(BODY))).toBe(true);
+			expect(records.filter(record => record.title !== 'Kept-read').map(record => record.text ?? record.reason).join('\n')).not.toContain(BODY);
 			expect(summary).toContain(LEDGER); expect(summary.endsWith(CLOSING_INSTRUCTION)).toBe(true);
 			offers.push({ summary, after: draft.after, boundary: draft.compaction.firstKeptEntryId });
 		}

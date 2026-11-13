@@ -43,6 +43,8 @@ test('every record shape has one documented line', () => {
 		[{ kind: 'section', title: 'Files', text: 'Files touched by read, write and edit before this summary:' }, 'Files: Files touched by read, write and edit before this summary:'],
 		[{ kind: 'section', title: 'Files', text: '- read src/a.ts (tuck_recall {"index":4})', sourceIndex: 4 }, '#4 Files: - read src/a.ts (tuck_recall {"index":4})'],
 		[{ kind: 'section', title: 'Actions', text: '- bash: dir C:\\tmp (failed)', sourceIndex: 0 }, '#0 Actions: - bash: dir C:\\\\tmp (failed)'],
+		[{ kind: 'section', title: 'Kept-read', text: 'read a.ts (as recorded at #2; no write or edit recorded since):\ncontents', sourceIndex: 2 },
+			'#2 Kept-read: read a.ts (as recorded at #2; no write or edit recorded since):\\ncontents'],
 	];
 	for (const [record, line] of lines) {
 		expect(serializeRecord(record)).toBe(line);
@@ -85,7 +87,7 @@ const draw = (seed: number) => {
 			}
 			case 4: { const own = index(); return { kind: 'omission', role: 'user', sourceIndex: own, reason: body, ...timed([own]) }; }
 			case 5: return { kind: 'omission', reason: body };
-			case 6: return { kind: 'section', title: pick(['Files', 'Actions']), text: body, ...(located ? { sourceIndex } : {}) };
+			case 6: return { kind: 'section', title: pick(['Files', 'Actions', 'Kept-read']), text: body, ...(located ? { sourceIndex } : {}) };
 			case 7: return { kind: 'omission', role: r, ...where, reason: body, ...stamp };
 			default: return { kind: 'excerpt', role: r, text: body, ...id };
 		}
