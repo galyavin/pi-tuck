@@ -242,3 +242,19 @@ test('E: the trail caps its lines and counts the rest, flattens a command to one
 test('E: with no such calls there is no trail at all', () => {
 	expect(actionRecords([])).toEqual([]);
 });
+
+test('a read\'s locator reads back what the file showed, and a write\'s the call that wrote it', () => {
+	// A live check (2026-11-12): an agent unsure what it had read asked for its Files line's "#13" and got the call, not the output.
+	const s = session('Start.', [{ name: 'read', args: { path: 'a.md' } }, { name: 'write', args: { path: 'b.md', content: 'x' } }]);
+	try {
+		const draft = draftOf(s);
+		if (!draft.compaction) throw new Error(draft.unavailable);
+		const index = (path: string) => Number(draft.compaction!.summary.match(new RegExp(`- (?:read|wrote/edited) ${path} \\(tuck_recall \\{"index":(\\d+)\\}\\)`))![1]);
+		const entries = s.manager.getEntries(), branch = s.manager.getBranch();
+		const read = tuckRecall(tuck, entries, branch, { index: index('a.md') }) as { entries: { role: string; text: string }[] };
+		expect(read.entries[0]!.role).toBe('toolResult');
+		const write = tuckRecall(tuck, entries, branch, { index: index('b.md') }) as { entries: { role: string; text: string }[] };
+		expect(write.entries[0]!.role).toBe('assistant');
+		expect(write.entries[0]!.text).toContain('b.md');
+	} finally { s.dispose(); }
+});
