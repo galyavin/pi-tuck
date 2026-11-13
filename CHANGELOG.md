@@ -3,6 +3,15 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.32] - Unreleased
+
+### Changed
+
+- **Search by meaning is ready sooner in sessions that have not searched yet.** At every cut, pi-tuck now indexes in the background what the
+  cut moved out of view, so a first tuck_search finds it without embedding it then. One background indexer runs per machine at a time,
+  holding a lock in the index folder, so several Pi sessions do not each load the encoder; a search never waits for that lock. The worker
+  is given back once the window is indexed, and the cut itself never waits for indexing.
+
 ## [1.0.31] - 2026-11-12
 
 ### Fixed
