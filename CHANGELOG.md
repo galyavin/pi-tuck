@@ -3,6 +3,30 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-13
+
+### Added
+
+- **A cut's summary now carries the files the session last read and has not changed since.** After a cut, agents often doubted what an
+  earlier read had shown and read the same file again, even though no edit had touched it. The summary now includes, after the Files
+  list, the newest whole read of each file that has no later write or edit, headed `read PATH (as recorded at #N; no write or edit
+  recorded since):`. It keeps at most 4 files, whole outputs only, within 20% of the summary's room and never more than 24,000
+  characters. When the summary is over its target these records are dropped first, oldest first. With no such reads the summary is
+  unchanged. Tool outputs are never touched.
+
+### Release gates
+
+- **Shipped before its Tier 1, on a 5-task gate.** The Tier 1 runs after release against 1.0.33; if it fails, npm and installs go back
+  to 1.0.33.
+- **5-task check against 1.0.31:** no breakage in 5 of 5; re-checks after a doubt 22 against 45; doubt moments 9 against 24; cuts 22
+  against 26; turns 305 against 384; all 5 solved on both. One heavy task went worse: 90 turns against 59, 9 cuts against 4, 3 doubts
+  against 1.
+- **Replay against 1.0.33:** 13,946 requests. In every recording that differs, the first difference is the first summary carrying one of
+  these records; 11 of 29 never differ. 0 lost or dead tasks, clips 17 → 16, cuts 1,946 → 1,971 (larger summaries bring later cuts
+  sooner).
+- **Strict stress, 313 cells:** 0 findings on Pi 1.2.0 and the newest Pi, including the large-session test. Tests and CI. The packed
+  tarball loaded in the real installed Pi 1.5.2.
+
 ## [1.0.33] - 2026-11-13
 
 ### Fixed
