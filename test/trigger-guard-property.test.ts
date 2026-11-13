@@ -72,7 +72,7 @@ test(`feasible cuts: whenever the trigger says a request fits, or cuts it, the g
 	expect(cuts).toBeGreaterThan(20);
 	expect(fits).toBeGreaterThan(60);
 	expect(waited).toBeGreaterThan(20);
-});
+}, 120_000); // 120 randomized workloads (60 original, 60 due) exceed the 5 s default on CI runners
 
 test(`irreducible requests: an in-band request that cannot be cut is no fault; only a request really over the room is rejected${label}`, async () => {
 	let inBand = 0, rejected = 0, declined = 0;
