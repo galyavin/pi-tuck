@@ -1201,12 +1201,18 @@ function namedCells(): Cell[] {
  realPostCut.prompts = [5_000];
  realPostCut.rounds = [100];
  realPostCut.results = [600, 600];
+ // Restated 2026-11-12 (CEO) for cut-only-when-due (REVIEW.md Part 2). The old check asked for a median post-cut request of 40k-55k and
+ // most cuts opportunistic: that described the early band cut Part 2 replaces, and Part 2 failed it while carrying more context (mean
+ // request 49,154 against 1.0.29's 46,125, 3 cuts against 5, its cuts landing in 1.0.29's range). The cell exists to check context carried,
+ // so it now passes when the mean request context is not below 1.0.29's on this cell and no post-cut request is below 1.0.29's lowest,
+ // both pinned from 1.0.29's own run so the bar cannot drift with a hollow base.
+ const REAL_POST_CUT_1029 = { meanRequest: 46_125, lowestPostCut: 31_569 };
  realPostCut.reached = {
-  state: 'a seeded summary and tool tail, with a median measured post-cut request between 40k and 55k and most cuts below the room',
+  state: `a seeded summary and tool tail, a mean request of at least ${REAL_POST_CUT_1029.meanRequest} tokens and no post-cut request below ${REAL_POST_CUT_1029.lowestPostCut} (1.0.29's on this cell)`,
   check: e => {
-   const measured = [...e.postCuts].sort((a, b) => a - b);
-   const median = measured[Math.floor(measured.length / 2)];
-   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && median !== undefined && median >= 40_000 && median <= 55_000 && e.opportunistic > e.cuts / 2;
+   const mean = e.guard.length ? e.guard.reduce((sum, tokens) => sum + tokens, 0) / e.guard.length : 0;
+   return e.savedRoles.includes('compactionSummary') && e.savedRoles.includes('toolResult') && e.postCuts.length > 0 &&
+    mean >= REAL_POST_CUT_1029.meanRequest && Math.min(...e.postCuts) >= REAL_POST_CUT_1029.lowestPostCut;
   },
  };
  const replaySetups = [55_000, 62_000, 68_000].map(setup => setupCell(131_072, setup, 'replay setup'));
