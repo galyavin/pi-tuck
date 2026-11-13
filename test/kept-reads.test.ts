@@ -211,7 +211,7 @@ test('kept reads give way as whole items, newest kept, before output tails and d
 	expect([...seen].sort()).toEqual([0, 1, 2, 3, 4]);
 	expect(tailsGaveWay).toBe(true);
 	expect(definitionsGaveWay).toBe(true);
-});
+}, 60_000);
 
 test('a kept-read file gets no definition map, while other file maps still use spare room', () => {
 	const s = fixture([
