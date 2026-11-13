@@ -986,16 +986,71 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             }
         }
     });
-    // A request of a run whose prompt's cut is not saved yet: the saved conversation in it, which other handlers may surround, is replaced by
-    // the conversation with the cut applied. Pi sends the saved system message apart from the request's messages, so neither side carries it
-    // here. A request that does not carry the saved conversation as it stands cannot take the cut.
-    const cutRequest = <M,>(messages: M[], ctx: ExtensionContext): M[] => {
-        const conversation = (all: Messages) => all.filter(message => message.role !== "system") as unknown[];
-        const saved = conversation(ctx.sessionManager.buildSessionProjection().messages);
-        for (let at = 0; at + saved.length <= messages.length; at++)
-            if (saved.every((message, i) => isDeepStrictEqual(messages[at + i], message)))
-                return [...messages.slice(0, at), ...conversation(view(ctx).session.buildSessionProjection().messages) as M[], ...messages.slice(at + saved.length)];
+    const projectContext = (messages: Messages, ctx: ExtensionContext, enabled = historyToolsEnabled(ctx)) =>
+        applyClips(enabled ? projectedMessages(messages, ctx, options.recallPolicy) : messages, clips());
+    // Replace only the saved conversation, preserving other handlers' surrounding messages. At the final guard the saved side is already
+    // projected. Replay system state as Pi does after a changed `context` result, so interleaved prompt/tool updates survive the cut too.
+    const cutRequest = (messages: Messages, ctx: ExtensionContext, saved = ctx.sessionManager.buildSessionProjection().messages,
+        kept = view(ctx).session.buildSessionProjection().messages): Messages => {
+        const conversation = (all: Messages) => all.filter(message => message.role !== "system");
+        const source = conversation(saved), request = conversation(messages);
+        for (let at = 0; at + source.length <= request.length; at++)
+            if (source.every((message, i) => isDeepStrictEqual(request[at + i], message))) {
+                const reduced = [...request.slice(0, at), ...conversation(kept), ...request.slice(at + source.length)];
+                const head = getCurrentSystemMessage(messages.filter(message => message.role === "system"));
+                return head ? [head, ...reduced] : reduced;
+            }
         throw new Error("The prompt's cut cannot be applied: the request does not carry the saved conversation");
+    };
+    // A late cut prices everything outside the saved conversation from this request itself. Its pending view is carried now and saved by
+    // atBoundary, just like a prompt cut; the existing final checks still decide admission on the rebuilt request.
+    const guardCut = (messages: Messages, tokens: number, system: number, ctx: ExtensionContext): Messages => {
+        const saved = ctx.sessionManager.buildSessionProjection().messages, source = projectContext(saved, ctx);
+        const before = conversationTokens(source), mandatory = tokens - before;
+        const { response, room, hardLine } = limits(ctx), band = decisionBand(ctx, room, system);
+        const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
+        const previousClips = new Map(clips());
+        const measure = measureFor(ctx);
+        const decide = (targetRoom: number, targetBand: number): Decision<CutPlan> => !fits(mandatory, targetRoom, ctx) ? { kind: "defer" } : chooseCut({
+            before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), opportunistic: false,
+            unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
+            plan: (target): Plan<CutPlan> => {
+                const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
+                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary,
+                    protectedPromptEntryId: protectedPrompt(ctx) }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
+                if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
+                const kept = plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages;
+                assertNativeToolRounds(kept);
+                return { draft: true, after: measure(kept), mode: draft.mode, compaction: draft.compaction, reserve, messages: kept };
+            },
+        });
+        const project = (candidate: Decision<CutPlan>) => candidate.kind === "cut"
+            ? historyToolDeclarations(cutRequest(messages, ctx, source, projectContext(candidate.plan.messages, ctx, true)),
+                toolShapes(historyToolNames(pi, pi.getActiveTools(), true)), true) : messages;
+        const total = (candidate: Decision<CutPlan>) => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory;
+        let decision = decide(room, band);
+        if (hardLine > room && (decision.kind === "defer" || decision.kind === "fault")) {
+            decision = decide(hardLine, hardLine);
+            decision = clampAboveRoom(decision, ctx, room, hardLine, total, project,
+                target => decide(target, target <= room ? band : target), () => deepestDecision(ctx, false, true));
+        }
+        const accepts = (candidate: Decision<CutPlan>) => {
+            if (candidate.kind !== "cut" || candidate.plan.after >= before) return false;
+            const request = project(candidate);
+            const reduced = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), request, ctx.getSystemPrompt()) + conversationTokens(request);
+            return fits(reduced, hardLine, ctx) && (Boolean(options.requestReserve) || corrected(reduced, ctx) <= room || requestClamp(request, ctx).leavesFloor);
+        };
+        if (!accepts(decision)) decision = deepestDecision(ctx, false, true);
+        if (decision.kind !== "cut" || !accepts(decision)) {
+            clips().clear(); for (const [id, clip] of previousClips) clips().set(id, clip);
+            return messages;
+        }
+        const compaction = captureDraft({ ...decision.plan.compaction, tokensBefore: before }, ctx, decision.plan.reserve, "tool-loop", before, true, false, previousSummary,
+            { response, host: conversationTokens(hostMessages(ctx)), mandatory, target: decision.target, margin: room - band });
+        run!.cut.plan({ type: "compaction", ...compaction, tokensBefore: before }, ctx.sessionManager.getBranch().length);
+        syncHistoryTools(ctx);
+        return historyToolDeclarations(cutRequest(messages, ctx, source, projectContext(view(ctx).session.buildSessionProjection().messages, ctx)),
+            toolShapes(pi.getActiveTools()), true);
     };
     pi.on("context", (event, ctx) => {
         try {
@@ -1004,7 +1059,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // Before a cut, Pi owns the whole request, including its object identities and system-message serialization.
             if (!historyToolsEnabled(ctx)) return clips().size ? { messages: applyClips(event.messages, clips()) } : undefined;
             access();
-            return { messages: applyClips(projectedMessages(view(ctx).pending ? cutRequest(event.messages, ctx) : event.messages, ctx, options.recallPolicy), clips()) };
+            return { messages: projectContext(view(ctx).pending ? cutRequest(event.messages, ctx) : event.messages, ctx) };
         } catch (error) { try { fail(error, ctx); } finally { return historyToolsEnabled(ctx) ? { messages: [] } : undefined; } }
     });
 	pi.on("session_compact_failed", (event, ctx) => {
@@ -1050,12 +1105,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 			// The complete request, counted after Pi's conversion (summary/custom/bash envelopes), with the effective system once.
 			// Pi applies a forced prompt after this hook; the public prompt already observes it.
             syncHistoryTools(ctx);
-            const messages = historyToolsEnabled(ctx) ? historyToolDeclarations(event.messages, toolShapes(pi.getActiveTools()), true) : event.messages;
-            const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
-            const tokens = system + conversationTokens(messages);
+            let messages = historyToolsEnabled(ctx) ? historyToolDeclarations(event.messages, toolShapes(pi.getActiveTools()), true) : event.messages;
+            let system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
+            let tokens = system + conversationTokens(messages);
+            const { room, hardLine } = limits(ctx);
+            if (!fits(tokens, hardLine, ctx) && run?.phase === "admitted" && !view(ctx).pending && settingsFor().getCompactionSettings(ctx.model).enabled) {
+                messages = guardCut(messages, tokens, system, ctx);
+                system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
+                tokens = system + conversationTokens(messages);
+                assertNativeToolRounds(messages);
+            }
             observeBudget(tokens, ctx);
             estimatedTokens = corrected(tokens, ctx);
-            const { room, hardLine } = limits(ctx);
             if (run?.prompt && !carriesPrompt(messages, run.prompt.text(ctx.sessionManager.getBranch()), run.prompt.role))
                 throw new Refusal("Prompt check failed: the request is missing the whole text of the prompt that started this run. Shorten the prompt or choose a model with a larger context window, then retry");
 			if (!fits(tokens, hardLine, ctx))
