@@ -3,6 +3,15 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.31] - Unreleased
+
+### Fixed
+
+- **Input that arrived after a tool round had been checked could make pi-tuck refuse a request it could still cut.** pi-tuck decides
+  whether to cut when a tool round ends. Input added after that point, such as another extension's context or a newly enabled tool, was
+  not seen there. When it pushed the next request past the hard line, the final check refused the request and the run stopped. It now cuts
+  at that check instead, carries the cut in that request, and saves it at the next boundary. It refuses only when no cut can fit.
+
 ## [1.0.29] - 2026-11-11
 
 ### Fixed
