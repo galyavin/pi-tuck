@@ -3,7 +3,7 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.31] - Unreleased
+## [1.0.31] - 2026-11-12
 
 ### Fixed
 
@@ -11,6 +11,15 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   whether to cut when a tool round ends. Input added after that point, such as another extension's context or a newly enabled tool, was
   not seen there. When it pushed the next request past the hard line, the final check refused the request and the run stopped. It now cuts
   at that check instead, carries the cut in that request, and saves it at the next boundary. It refuses only when no cut can fit.
+
+### Release gates
+
+- **Shipped without a live gate under the defect rule, because its replay matches 1.0.29:** 13,946 requests, 0 different, 0 lost or
+  dead tasks, clips 17 → 17.
+- **A new test reproduces the refusal on 1.0.29** and passes with the fix. On 1.0.29 it needed late input larger than the gap between the
+  early cut and the room.
+- **Strict stress, 313 cells:** 0 findings, on Pi 1.2.0 and the newest Pi. Tests and CI. The packed tarball loaded in the real
+  installed Pi 1.5.2.
 
 ## [1.0.29] - 2026-11-11
 
