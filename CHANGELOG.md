@@ -3,7 +3,7 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.32] - Unreleased
+## [1.0.32] - 2026-11-13
 
 ### Changed
 
@@ -11,6 +11,19 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   cut moved out of view, so a first tuck_search finds it without embedding it then. One background indexer runs per machine at a time,
   holding a lock in the index folder, so several Pi sessions do not each load the encoder; a search never waits for that lock. The worker
   is given back once the window is indexed, and the cut itself never waits for indexing.
+
+### Fixed
+
+- **Background indexing never started at the cuts pi-tuck makes itself.** Pi announces only its own compactions, so cuts pi-tuck saved
+  after a tool round, at the end of a run, or before retrying a reply that hit the output limit started no indexing. Each of these cuts now
+  starts it.
+
+### Release gates
+
+- **Replay matches 1.0.31:** 13,946 requests, 0 different, 0 lost or dead tasks, clips 17 → 17. Indexing changes nothing the model sees.
+- **Live check, 5 tasks:** no breakage; the indexer ran at all 13 cuts, using 1-2 seconds of worker CPU per cut.
+- **Strict stress, 313 cells:** 0 findings on Pi 1.2.0 and the newest Pi, including the 85 MB large-session test. Tests and CI. The
+  packed tarball loaded in the real installed Pi 1.5.2.
 
 ## [1.0.31] - 2026-11-12
 
