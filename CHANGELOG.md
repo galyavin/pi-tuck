@@ -3,6 +3,22 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.33] - 2026-11-13
+
+### Fixed
+
+- **A file read's recall number pointed at the read call, not at what the read returned.** The summary lists each file the session read
+  with a tuck_recall number. That number brought back the call's arguments instead of the file's contents, so recalling a read cost a
+  turn and showed nothing useful. It now brings back the read's output.
+
+### Release gates
+
+- **Shipped without a live gate under the defect rule.** Replay against 1.0.31, with the read numbers set aside: 13,946 requests, 13,855
+  identical, 51 differing only in what the summary had room for, 40 noise, 0 unexplained, 0 lost or dead tasks, clips 17 → 17. The
+  fix also ran, inside a larger candidate, through 4 live tasks with no breakage.
+- **Strict stress, 313 cells:** 0 findings on Pi 1.2.0 and the newest Pi. Tests and CI. The packed tarball loaded in the real installed
+  Pi 1.5.2.
+
 ## [1.0.32] - 2026-11-13
 
 ### Changed
