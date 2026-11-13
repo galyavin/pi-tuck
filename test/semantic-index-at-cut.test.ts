@@ -56,7 +56,7 @@ test('a session that never searched indexes at a cut, gives its worker back when
  const f=fixture();f.append('first decision');f.append('second decision');cutAll(f);
  f.c.indexAtCut(f.provider);
  const status=await settled(f.c,f.internal);
- for(let i=0;i<500&&(f.internal.active||f.internal.idling);i++){await f.internal.idling;await new Promise(done=>setTimeout(done,10));} // the give-back runs after the indexing task settles
+ for(let i=0;i<500&&(f.internal.active||f.internal.idling||existsSync(join(f.root,'index',INDEXER_LOCK)));i++){await f.internal.idling;await new Promise(done=>setTimeout(done,10));} // the give-back runs after the indexing task settles, and the lock is removed after the worker stops
  expect(f.embeddings).toBeGreaterThan(0);expect(status.indexingComplete).toBe(true);
  expect(status.window?.conversation.indexedCharacters).toBe(status.window?.conversation.outOfViewCharacters);
  expect(f.internal.active).toBe(false); // worker given back
