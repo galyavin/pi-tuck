@@ -1,7 +1,7 @@
 import { expect, test, vi } from 'vitest';
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { installCompaction } from '../src/compaction';
-import { PendingCut, StartingPrompt, createRun } from '../src/run';
+import { PendingCut, StartingPrompt, Run } from '../src/run';
 import { projectedMessages } from '../src/omissions';
 import { carriesPrompt } from '../src/request-capacity';
 import { scriptedModelRuntime } from './model-fixture';
@@ -137,7 +137,7 @@ test('compact-all resolves at the plan boundary, before later steering and after
   manager.appendMessage({ role: 'user', content: 'old', timestamp: 0 });
   const length = manager.getBranch().length;
   pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: '', tokensBefore: 10, details: { compactor: 'pi-tuck' } }, length);
-  expect(pending.view(ctx)).toMatchObject({ keptFromId: '', viewStart: length, pending: true, hasTuckCut: true });
+  expect(pending.view(ctx)).toMatchObject({ keptFromId: '', pending: true, hasTuckCut: true });
   manager.appendCustomEntry('pi-tuck-capacity', {});
   const promptId = manager.appendMessage({ role: 'user', content: 'prompt', timestamp: 1 });
   manager.appendMessage({ role: 'user', content: 'steering', timestamp: 2 });
@@ -154,7 +154,7 @@ test('starting prompt binds once to its entry, including repeated text in steeri
   expect(prompt.id(manager.getBranch())).toBe(id);
   manager.appendMessage({ role: 'user', content: 'steer start', timestamp: 2 });
   expect(prompt.id(manager.getBranch())).toBe(id); expect(prompt.text(manager.getBranch())).toBe('start');
-  expect(createRun('decided')).toMatchObject({ phase: 'decided', pendingBoundaryReceipts: [] });
+  expect(new Run('decided')).toMatchObject({ phase: 'decided', pendingBoundaryReceipts: [] });
 });
 
 test('a custom starting prompt binds by role and entry id before later identical custom text', () => {
@@ -187,7 +187,7 @@ test('retry boundary drafts use the same view as their committed session', () =>
   manager.appendCustomMessageEntry('retry', 'continue', false);
   manager.appendCustomEntry('pi-tuck-capacity', { kind: 'retry' });
   expect(plain(preview.session.buildSessionProjection().messages)).toEqual(plain(manager.buildSessionProjection().messages));
-  expect(cut.view(ctx).viewStart).toBe(preview.viewStart);
+  expect(cut.view(ctx)).toMatchObject({ keptFromId: preview.keptFromId, hasTuckCut: preview.hasTuckCut, pending: preview.pending });
 });
 
 
@@ -255,12 +255,14 @@ test('the live view follows saved cuts and tree moves after a pending cut is con
   const manager = SessionManager.inMemory('/virtual/pi-tuck-test/live-view'), cut = new PendingCut();
   const ctx = { cwd: '/virtual/pi-tuck-test/live-view', sessionManager: manager };
   const first = manager.appendMessage({ role: 'user', content: 'first', timestamp: 0 });
-  expect(cut.view(ctx)).toMatchObject({ session: manager, hasTuckCut: false, viewStart: 0 });
+  expect(cut.view(ctx)).toMatchObject({ session: manager, keptFromId: undefined, hasTuckCut: false, pending: false });
   const kept = manager.appendMessage({ role: 'user', content: 'kept', timestamp: 1 });
   cut.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: kept, tokensBefore: 1, details: { compactor: 'pi-tuck' } }, 2);
   const pending = cut.view(ctx), entry = cut.take()!;
   manager.appendCompaction(entry.summary, entry.firstKeptEntryId, entry.tokensBefore, entry.details, true);
-  expect(cut.view(ctx)).toMatchObject({ keptFromId: kept, viewStart: pending.viewStart, hasTuckCut: true, pending: false });
+  const saved = cut.view(ctx);
+  expect(saved).toMatchObject({ session: manager, keptFromId: kept, hasTuckCut: true, pending: false });
+  expect(plain(saved.session.buildSessionProjection().messages)).toEqual(plain(pending.session.buildSessionProjection().messages));
   manager.branch(first);
-  expect(cut.view(ctx)).toMatchObject({ keptFromId: undefined, viewStart: 0, hasTuckCut: false });
+  expect(cut.view(ctx)).toMatchObject({ session: manager, keptFromId: undefined, hasTuckCut: false, pending: false });
 });

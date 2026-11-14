@@ -45,7 +45,7 @@ export function historyToolDeclarations(messages: Messages, tools: readonly Tool
     // Leave an already-correct transcript byte-identical, including the original placement of our declarations.
     const declared = getCurrentTools(convertToLlm(messages));
     const wanted = enabled ? tools.filter(tool => own(tool.name)) : [];
-    if (enabled && wanted.every(tool => declared.some(current => own(current.name) && current.name === tool.name)) &&
+    if (enabled && wanted.every(tool => declared.some(current => current.name === tool.name)) &&
         declared.filter(tool => own(tool.name)).length === wanted.length) return messages;
     if (!enabled || !wanted.length) return changed ? filtered : messages;
     const at = filtered.findLastIndex(message => message.role === "system");

@@ -133,7 +133,7 @@ export interface Options {
  /** With `summary`: the summary is in another format (a Pi default summary), which this compactor cannot filter. */
  foreign?: boolean;
  /** Called at every tool boundary before the compactor decides (the event and context are the compactor's own). */
- onBoundary?: (event: Parameters<Parameters<ExtensionAPI['on']>[1]> extends never ? never : any, ctx: ExtensionContext) => void;
+ onBoundary?: (event: any, ctx: ExtensionContext) => void;
  /** Called with every cut Pi asks for, before the compactor answers (the event and context are the compactor's own). */
  onBeforeCompact?: (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => void;
  /** Called at every idle prompt before the compactor decides its cut (the context is the compactor's own). */

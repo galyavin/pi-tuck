@@ -123,7 +123,7 @@ export function carriesPrompt(messages: Messages, prompt: string, role: 'user' |
         }
         if (message.role !== 'compactionSummary') return false;
         const split = splitSummary(message.summary);
-        return split !== null && split !== undefined && parseRecords(split.body, split.version).some(record =>
+        return split !== undefined && parseRecords(split.body, split.version).some(record =>
             record.kind === 'excerpt' && record.role === role && record.text.includes(prompt));
     });
 }

@@ -1,5 +1,5 @@
 import { textOf } from "./tuck/core/content.js";
-import { PendingCut, StartingPrompt, createRun, type CutEntry, type Run } from "./run.js";
+import { PendingCut, StartingPrompt, Run, type CutEntry } from "./run.js";
 import { requestReplyFloor, replyFit, carriesPrompt, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath, seedContextWindow, WINDOW_RECEIPT, type WindowReceipt } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
 import { DIAGNOSTIC_BUILD, IncidentRecorder, attachReceipt, permittedEntries, receiptId, findReceiptEntry, type Receipt, type RecorderOptions } from "./diagnostics.js";
@@ -231,7 +231,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
     // A commit-failed phase survives attempts/tree moves until session_start: native memory may be ahead of disk.
-    const failure = () => run?.phase === "failed" || run?.phase === "commit-failed" ? run.error : undefined;
+    const failure = () => run?.error;
     const protectedPrompt = (ctx: ExtensionContext) => run?.prompt?.id(ctx.sessionManager.getBranch());
     const clips = () => run?.clips ?? emptyClips;
     const emptyClips = new Map<string, Clip>();
@@ -240,7 +240,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         calibration.pending = undefined;
     };
     const beginRun = (phase: "decided" | "starting" | "admitted") => {
-        if (run?.phase === "commit-failed") run.clear(); else run = createRun(phase);
+        if (run?.phase === "commit-failed") run.clear(); else run = new Run(phase);
     };
     const stateFor = (ctx: ExtensionContext) => compactionState(ctx.model, settingsFor().getCompactionSettings(ctx.model).enabled);
     // A prerequisite can change with the model/settings; discard the old plan before returning control to native.
@@ -342,7 +342,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
     let lengthStop = false;
-    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= createRun("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = false; calibration.pending = undefined; });
+    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = false; calibration.pending = undefined; });
     pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason === "length"; });
     pi.on("agent_settled", (_event, ctx) => {
         try {
@@ -468,7 +468,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const receipted = run?.refusalReceipted;
         calibration.pending = undefined;
         // Keep the same terminal run until Pi settles; later start hooks cannot admit it.
-        run ??= createRun("starting"); run.clear();
+        run ??= new Run("starting"); run.clear();
         run.transition(fault instanceof CommitFault ? "commit-failed" : "failed", ctx, fault);
         run.refusalReceipted = true;
         try {
@@ -575,7 +575,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     // Every cut asked while no run is admitted (an operator's cut) is planned for a run that has not begun: the session has moved on
                     // from any run that ended. A retry is inside its run.
                     const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || run?.phase !== "admitted", run?.phase === "admitted" ? protectedPrompt(ctx) : undefined);
-                    return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction, reserve,
+                    return draft.compaction ? { draft: true, after: draft.after, compaction: draft.compaction, reserve,
                         messages: plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 },
@@ -647,7 +647,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (!draft.compaction) return { kind: "fault", capacity: Boolean(draft.capacityRejected), message: draft.unavailable };
         const messages = plannedView(ctx, { type: "compaction", ...draft.compaction }).session.buildSessionProjection().messages;
         assertNativeToolRounds(messages);
-        return { kind: "cut", target: "room", plan: { draft: true, after: measureFor(ctx)(messages), mode: draft.mode,
+        return { kind: "cut", target: "room", plan: { draft: true, after: measureFor(ctx)(messages),
             compaction: draft.compaction, reserve: 0, messages } };
     };
     // The cut before a run, decided on `input` while the session is idle; before_agent_start decides only for a run no input started (one a
@@ -691,7 +691,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 candidate.plan({ type: "compaction", ...draft.compaction, tokensBefore: before }, branchLength);
                 const messages = candidate.view(ctx).session.buildSessionProjection().messages;
                 assertNativeToolRounds(messages);
-                return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve, messages };
+                return { draft: true, after: measure(messages), compaction: draft.compaction, reserve, messages };
             },
         });
         let decision: Decision<CutPlan> = gate.kind === "plan" ? decide(room, band, gate.opportunistic) : { kind: "defer" };
@@ -719,7 +719,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // input, so no run started for it): plan afresh.
         const prompted = run && ["decided", "claimed", "expired"].includes(run.phase) && event.messageType !== "custom";
         if (!prompted && !failure()) beginRun("starting");
-        run ??= createRun("starting");
+        run ??= new Run("starting");
         if (!failure() && run.phase !== "starting") run.transition("starting", ctx);
         const prompt = event.messageType === "custom" ? textOf(event.message.content) : event.prompt;
         run.prompt = prompt ? new StartingPrompt(prompt, ctx.sessionManager.getBranch().length, event.messageType) : undefined;
@@ -787,7 +787,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const lastCut = ctx.sessionManager.getBranch().findLast(entry => entry.type === "compaction");
         if (reason === "run-end" && lastAssistant && (!lastCut || lastAssistant.timestamp > Date.parse(lastCut.timestamp)) &&
             !saved.some(message => message.role === "assistant" &&
-            !["error", "aborted"].includes(message.stopReason) && message.usage && calculateContextTokens(message.usage) > 0)) {
+            !isDiscardedResponse(message) && message.usage && calculateContextTokens(message.usage) > 0)) {
             const forecast = historyToolDeclarations(saved, toolShapes(historyToolNames(pi, pi.getActiveTools(), true)), true);
             if (forecast !== saved) {
                 const head = getCurrentSystemMessage(convertToLlm(forecast));
@@ -831,7 +831,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 const messages = plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages;
                 assertNativeToolRounds(messages);
                 previews.push(messages);
-                return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve, messages };
+                return { draft: true, after: measure(messages), compaction: draft.compaction, reserve, messages };
             },
             });
         };
@@ -902,10 +902,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     };
     const atBoundary = (event: Boundary, ctx: ExtensionContext, reason: "tool-loop" | "run-end", decide: boolean) => {
         const current = view(ctx);
-        if (!current.pending) {
-            const result = decide ? boundaryCut(event, ctx, reason) : undefined;
-            return result;
-        }
+        if (!current.pending) return decide ? boundaryCut(event, ctx, reason) : undefined;
         const entry = run!.cut.take()!;
         const preview = current.session, context: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
         const more = decide && !event.entries.length
@@ -1020,7 +1017,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 const kept = plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages;
                 assertNativeToolRounds(kept);
-                return { draft: true, after: measure(kept), mode: draft.mode, compaction: draft.compaction, reserve, messages: kept };
+                return { draft: true, after: measure(kept), compaction: draft.compaction, reserve, messages: kept };
             },
         });
         const project = (candidate: Decision<CutPlan>) => candidate.kind === "cut"

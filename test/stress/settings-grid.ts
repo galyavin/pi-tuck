@@ -22,7 +22,7 @@
  * STRESS_PLAIN_PI=1 measures the thinking, setup 40000/window 65536 and wrong-window cells with pi-tuck not installed; STRESS_ONLY selects one.
  * Native summary calls are reported separately from workload requests.
  *
- * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures under os.tmpdir(),
+ * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures to STRESS_FAILURES_PATH or under os.tmpdir(),
  * STRESS_TRACE="a piece of a cell name" prints what happened to each of that cell's prompts, and STRESS_STRICT=1 turns the table into a failing
  * run. Without STRESS_STRICT the run reports: a finding is a finding whether or not it is fixed yet, and the grid keeps running after the first.
  * STRESS_SETUP="a piece of a cell name" runs only the cells that carry a setup size — the sampled ones and the named grid — which is the part that
@@ -49,7 +49,7 @@ const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const CELLS = Math.max(1, Number(process.env.STRESS_CELLS) || 200);
 const SEED = (Number(process.env.STRESS_SEED) || 0x5eed) >>> 0;
 const REPORT = process.env.STRESS_REPORT;
-const REPORT_PATH = REPORT ? join(mkdtempSync(join(tmpdir(), 'pi-tuck-stress-')), 'failures.json') : undefined;
+const REPORT_PATH = REPORT ? process.env.STRESS_FAILURES_PATH || join(mkdtempSync(join(tmpdir(), 'pi-tuck-stress-')), 'failures.json') : undefined;
 /** Make the table a gate. Off by default, so a known finding does not turn every run red before it is fixed. */
 const STRICT = /^(1|true|yes)$/i.test(process.env.STRESS_STRICT ?? '');
 /** Ten sampled cells, evenly spaced, are run twice and compared as the named ones are; a seeded grid must give the same answer on the same seed. */
@@ -323,7 +323,6 @@ export interface GridHooks {
  paused?: (prompt: number) => boolean;
 }
 export const gridFailures = () => failures;
-export const gridRows = () => cellRows;
 
 /** The exact same workload and transport settings for guarded runs and plain-Pi measurements. */
 export function optionsOf(cell: Cell, toolCalls: NonNullable<Options['toolCalls']>): Options {

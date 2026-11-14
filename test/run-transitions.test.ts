@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest';
-import { createRun, type RunPhase } from '../src/run';
+import { Run, type RunPhase } from '../src/run';
 
 const allowed: Record<RunPhase, RunPhase[]> = {
   decided: ['claimed', 'expired', 'starting', 'failed', 'commit-failed'],
@@ -13,7 +13,7 @@ const allowed: Record<RunPhase, RunPhase[]> = {
 for (const from of Object.keys(allowed) as RunPhase[]) for (const to of Object.keys(allowed) as RunPhase[])
 test(`run transition ${from} -> ${to}`, () => {
   const error = new Error('failed attempt');
-  const run = createRun('decided');
+  const run = new Run('decided');
   if (from === 'admitted') { run.transition('starting'); run.transition(from); }
   else if (from !== 'decided') run.transition(from, undefined, error);
   if (allowed[from].includes(to)) {
@@ -27,13 +27,13 @@ test(`run transition ${from} -> ${to}`, () => {
 });
 
 test('failed phases require error data', () => {
-  const run = createRun('starting');
+  const run = new Run('starting');
   expect(() => run.transition('failed')).toThrow('invalid run transition');
   expect(run.phase).toBe('starting');
 });
 
 test('expired input-plan provenance survives admission until the attempt data is cleared', () => {
-  const run = createRun('decided');
+  const run = new Run('decided');
   run.transition('expired'); run.transition('starting'); run.transition('admitted');
   expect(run.phase).toBe('admitted');
   expect(run.expired).toBe(true);
@@ -45,7 +45,7 @@ test('production ignores invalid transitions and warns once without a UI', () =>
   const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
   vi.stubEnv('NODE_ENV', 'production');
   try {
-    const run = createRun('starting'); run.transition('failed', undefined, new Error('failed attempt'));
+    const run = new Run('starting'); run.transition('failed', undefined, new Error('failed attempt'));
     expect(run.transition('admitted', { hasUI: true })).toBe(false);
     expect(write).not.toHaveBeenCalled();
     expect(run.transition('starting', { hasUI: false })).toBe(false);
