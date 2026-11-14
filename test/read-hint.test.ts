@@ -54,7 +54,7 @@ test('a clip names the way to read what it omits, and tuck_recall returns that p
 		}
 	}
 	// Followed: offsets where the block begins the source's text and sanitizing left it alone (a plain user text, the first text of an
-	// assistant message even after hidden reasoning, a note); none after a tool call or where CRLF became LF.
+	// assistant message even when plain thinking is appended for recall, a note); none after a tool call or where CRLF became LF.
 	expect([...kinds].sort()).toEqual(['entry id and offset', 'index', 'index and offset']);
 	const offsetOf = (id: string) => blocks.filter(b => b.kind === 'notice' ? b.sourceEntryId === id : b.sourceIndex === indices.get(id)).flatMap(b => blockRecords(b, undefined, [16, 0])).filter(r => r.kind === 'omission').map(r => /offset/.test(r.reason!));
 	expect(offsetOf(ids[0]!)).toEqual([true]);

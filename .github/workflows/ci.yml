@@ -15,7 +15,10 @@ jobs:
         os: [macos-15, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
+      # Full history: test/part6-tail-parity.test.ts exports the pinned Part 6 reference commit with git archive.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22

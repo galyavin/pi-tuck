@@ -129,6 +129,6 @@ test('Windows actions retain the exact recorded command and their result locator
   const result = f.call('bash', { command }, 'copied');
   const indices = buildGlobalIndexById(f.manager.getEntries());
   expect(actionItems(f.manager.getBranch(), indices, () => true, new Set())).toEqual([
-    { text: `bash: ${command}`, failed: false, sourceIndex: indices.get(result!), resolvable: true },
+    { text: `bash: ${command}`, failed: false, sourceIndex: indices.get(result!), resolvable: true, outputTail: 'copied' },
   ]);
 });
