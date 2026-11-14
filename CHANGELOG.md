@@ -3,6 +3,32 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-11-14
+
+### Fixed
+
+- **A resumed session forgot what pi-tuck had learned about the provider's token counts.** pi-tuck saved its calibration only inside a
+  cut, so after quitting and resuming Pi before the next cut it counted at 1x again and could send a request the provider truncated or
+  refused, where native Pi succeeded. pi-tuck now saves a small private entry in the session when what a resume would learn changes (not
+  every turn) and reads it back on resume. The entry never reaches the model.
+- **pi-tuck now stands down to native when it cannot do its job safely.** With an unknown context window (0, missing or not a number), a
+  Pi virtual model, or Pi's auto-compaction turned off, pi-tuck refused prompts that native Pi would have sent. It now does exactly what
+  native Pi does in these cases, and `/tuck` says `standing down:` with the reason.
+- **Refusal, overflow and manual-cut notices were silent without a UI.** In `pi -p` and JSON runs they went nowhere, so a run could end
+  with no word. They now go to stderr, as the output-limit notice already did.
+- **The semantic search status could claim "ready" when it was turned off or had failed.** Turning it on no longer overrides an off
+  setting for the project, platform or settings; a failed start says so; stopping it no longer leaves it marked ready. Status changes now
+  follow a fixed table of allowed moves.
+- **A retry after a reply hit the output limit skipped a check** that a pending cut had really been saved in the session. It now runs
+  that check like every other path.
+
+### Release gates
+
+- **Shipped without a live gate: replay matches 1.1.0.** 29 recordings, 13,946 requests: requests identical apart from noise also seen
+  between two runs of 1.1.0 (three recordings, re-run fresh: 0 differences), the same 1,971 cuts, 0 lost or dead tasks, clips 16 to 16.
+- **Strict stress:** 318 cells, 0 findings, plus a new resumed-session suite (325 shapes, 830 reached resume cells, all passing; both
+  factor-1.25 truncation cells fixed). Lifecycle with 40 seeds. Tests and CI. The packed tarball loaded in the real installed Pi.
+
 ## [1.1.0] - 2026-11-13
 
 ### Added
