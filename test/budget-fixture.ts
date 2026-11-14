@@ -51,6 +51,11 @@ export interface Options {
  piRequestPath?: boolean;
  /** Keep the scripted provider and host/probes, but do not install pi-tuck. Native Pi owns all cuts. */
  plainPi?: boolean;
+ /** Native Pi still owns summary calls when an installed compactor stands down. */
+ nativeCompaction?: boolean;
+ /** Exercise virtual models and truly absent catalogue windows without changing the runtime catalogue. */
+ modelApi?: string;
+ missingWindow?: boolean;
  /** Start a fresh AgentSession from a saved branch, including learned-budget receipts. */
  branch?: SessionEntry[];
  /** Capture normalized request hashes only for comparisons that need them. */
@@ -228,15 +233,31 @@ export async function harness(options: Options) {
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
  const cleanup = async () => { Date.now = realNow; if (physicalClock) vi.useRealTimers(); if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
-  const runtime = await scriptedModelRuntime(options.limits, options.model, options.trackRuntimeSpies), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
+  const runtime = await scriptedModelRuntime(options.limits, options.model, options.trackRuntimeSpies);
+  let model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
+  let responseModel = model;
+  if (options.modelApi === 'pi-virtual') {
+   // Register a real router: merely changing api would fail before any scripted provider request.
+   const physical = { ...model, contextWindow: options.providerWindow ?? model.contextWindow };
+   responseModel = physical;
+   const getPhysical = runtime.getPhysicalModel.bind(runtime);
+   runtime.getPhysicalModel = (provider, id) => provider === physical.provider && id === physical.id ? physical : getPhysical(provider, id);
+   const id = 'standdown-scripted-router';
+   runtime.registerVirtualModel({ provider: model.provider, id, name: 'Scripted router',
+    contextWindow: model.contextWindow, maxTokens: model.maxTokens, thinkingLevels: ['off', 'low'],
+    route: request => ({ model: physical, thinkingLevel: request.thinkingLevel }),
+   });
+   model = runtime.getModel(model.provider, id)!;
+  } else if (options.modelApi !== undefined) model.api = options.modelApi;
+  if (options.missingWindow) Reflect.deleteProperty(model, 'contextWindow');
   if (!options.limits && !options.model) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
   // A reopened session has to be a persisted one, so its entries reach a file and come back from it. `persist` stops short of the reopen: the file
   // exists, the run never leaves it.
   let manager = options.reopen || options.persist ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir), faults: string[] = [], notices: string[] = [];
   if (options.branch) manager = SessionManager.inMemory(dir, undefined, [manager.getHeader()!, ...options.branch]);
   // A complete assistant message of this content. `replyOf` builds one without recording it, for measuring a reply that has not been sent yet.
-  const replyOf = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: model.api, provider: model.provider, model: model.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
+  const replyOf = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: responseModel.api, provider: responseModel.provider, model: responseModel.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
   const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return replyOf(content, stopReason); };
   // Repeated text lets the compactor summarize almost everything away; unique text (oneTurn) makes the cut keep as much as the plan allows.
   let uniq = 0;
@@ -268,6 +289,9 @@ export async function harness(options: Options) {
   // cutCounts records, per request, the compactions saved by then, so a caller can see which request a cut answered and whether the next one cut too;
   // assistantSizes is each reply's own content by request number, since a fresh assistant message is a size no cut and no clip can reach.
   let nativeSummarizing = false, nativeBefore = 0, nativeReason = '';
+  const nativeCompaction = options.plainPi || options.nativeCompaction;
+  // Includes native summary requests, in their actual position among workload requests.
+  const providerFingerprints: { summary: boolean; wire: string }[] = [];
   const providerRequests: { summary: boolean; measuredPrompt: number; prompt: number; maxTokens: number; availableOutput: number; output: number; refused: boolean; length: boolean }[] = [];
   const state = { nativeSummaries: [] as Awaited<ReturnType<typeof providerRequest>>[], nativeCuts: [] as { afterRequest: number; reason: string; before: number; after: number; freed: number }[], requestFingerprints: [] as string[], clampEvents: [] as { request: number; wanted: number; cap: number }[], requestOptions: [] as Awaited<ReturnType<typeof providerRequest>>[], clampStops: 0, requestStates: [] as string[], requests: 0, effects: 0, delivered: false, hostCalls: 0, aborts: 0, stops: [] as string[], results: [] as number[], resultAt: [] as number[], replies: [] as number[], counts: [] as { count: number; known: boolean }[], reports: 0, nonFinite: 0, overflows: 0, truncations: 0, compacts: 0, vetoes: 0, clips: 0, cutCounts: [] as number[], assistantSizes: [] as number[], answers: [] as AssistantMessage[] };
   let bigResult = 1, bigText = 'x', host = options.host;
@@ -311,11 +335,11 @@ export async function harness(options: Options) {
    const nativeComplete = (ctx: ExtensionContext) => referenceSystemPart(saved(), ctx.getSystemPrompt(), activeToolsJson()) + nonSystem([hostInput()]) + nonSystem(saved());
    pi.on('session_before_compact', (event, ctx) => {
     state.compacts++;
-    if (options.plainPi) { nativeSummarizing = true; nativeBefore = nativeComplete(ctx); nativeReason = event.reason; }
+    if (nativeCompaction) { nativeSummarizing = true; nativeBefore = nativeComplete(ctx); nativeReason = event.reason; }
     options.onBeforeCompact?.(event, ctx);
    });
    pi.on('session_compact', (_event, ctx) => {
-    if (!options.plainPi) return;
+    if (!nativeCompaction) return;
     const after = nativeComplete(ctx);
     state.nativeCuts.push({ afterRequest: state.requests, reason: nativeReason, before: nativeBefore, after, freed: nativeBefore - after });
     nativeSummarizing = false;
@@ -478,10 +502,14 @@ export async function harness(options: Options) {
   session.agent.streamFunction = async (_m, _ctx, streamOptions) => {
    // No provider request went out when the already-aborted signal short-circuited it. Keep request-indexed answers aligned.
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
-   if (options.plainPi && nativeSummarizing) {
+   // Use the same normalization for every request, including Pi's native summary calls.
+   const fingerprint = options.fingerprintWire ? createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' || key === 'durationMs' ? undefined : value).replaceAll(dir, '<session>')).digest('hex') : undefined;
+   if (fingerprint) providerFingerprints.push({ summary: Boolean(nativeCompaction && nativeSummarizing), wire: fingerprint });
+   if (nativeCompaction && nativeSummarizing) {
     // Pi chooses the boundary, kept tail and summary prompt. The same scripted model's normal
     // final answer ("Finished") answers its summary call; summary calls are not tool-work requests.
-    const request = await providerRequest(_m, _ctx, streamOptions);
+    // Missing/NaN catalogue windows have no usable cap. Use Pi's unbounded (window 0) payload path for the scripted summary server.
+    const request = await providerRequest(Number.isFinite(_m.contextWindow) ? _m : { ..._m, contextWindow: 0 }, _ctx, streamOptions);
     state.nativeSummaries.push(request);
     const message = replyOf([{ type: 'text', text: 'Finished' }]);
     message.timestamp = physicalClock ? responseTime() : Date.now();
@@ -515,7 +543,7 @@ export async function harness(options: Options) {
    if (request) state.requestOptions.push(request);
    state.requestStates.push(createHash('sha256').update(JSON.stringify({ ..._ctx, messages: _ctx.messages.filter(m => m.role !== 'assistant' || !['error', 'aborted'].includes(m.stopReason)) }, (key, value) => key === 'timestamp' ? undefined : value)).digest('hex'));
    // A tool result's durationMs is the tool's wall time on this run, which pi-ai never sends to the provider: left out, as timestamps are.
-  if (options.fingerprintWire) state.requestFingerprints.push(createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' || key === 'durationMs' ? undefined : value).replaceAll(dir, '<session>')).digest('hex'));
+   if (fingerprint) state.requestFingerprints.push(fingerprint);
    state.requests++;
    if (state.requests === 2) state.delivered = JSON.stringify(_ctx.messages).includes(note);
    options.onRequest?.(state.requests, { setHost: tokens => { host = tokens; }, pi: extension! });
@@ -636,7 +664,7 @@ export async function harness(options: Options) {
   const runEnd = () => allCompactions().filter(isRunEnd);
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
-   dir, get manager() { return manager; }, get session() { return session!; }, settings, state, providerRequests, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
+   dir, get manager() { return manager; }, get session() { return session!; }, settings, state, providerRequests, providerFingerprints, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
    observeExtension: (observe: (pi: ExtensionAPI) => void) => { extensionObservers.push(observe); observe(extension!); },
    compactionHandle: () => { if (!compactionHandle) throw Error('No compactor installed'); return compactionHandle; },
    /** End every old hook/runtime, open the same file, and import pi-tuck cold. */
