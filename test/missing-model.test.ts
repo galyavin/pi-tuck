@@ -71,3 +71,14 @@ test('the incoming precheck: with a model, a prompt over the room is still the c
 		expect((h.errors[0] as Error).message).toBe('Incoming Pi prompt and response reserve cannot fit the estimated request budget');
 	});
 });
+
+test('a virtual model with a positive window still uses its declared budget', async () => {
+	await run(async h => {
+		const ctx = h.context({ ...smallModel, api: 'pi-virtual' });
+		await h.call('context_with_system', { messages: [{ role: 'user', content: 'hi', timestamp: 0 }] }, ctx);
+		expect(h.errors).toEqual([]);
+		await h.call('context_with_system', { messages: [{ role: 'user', content: 'x'.repeat(10000), timestamp: 0 }] }, ctx);
+		expect(h.errors).toHaveLength(1);
+		expect((h.errors[0] as Error).constructor.name).toBe('CapacityError');
+	});
+});

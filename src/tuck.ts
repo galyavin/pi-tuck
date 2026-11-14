@@ -367,7 +367,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
         let allowance = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
         const keptReads: TranscriptRecord[] = [];
-        for (const record of keptReadCandidates(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined)) {
+        for (const record of keptReadCandidates([header, ...entries.slice(0, boundary)], indices, entry => readable(entry) !== undefined)) {
             const cost = lineCost([record]);
             if (cost > allowance) continue;
             keptReads.push(record); allowance -= cost;

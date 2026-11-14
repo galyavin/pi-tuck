@@ -47,6 +47,63 @@ const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, re
 const candidatesOf = (s: ReturnType<typeof fixture>, indices = buildGlobalIndexById(s.manager.getEntries()), readable = createRecall({}).readable) =>
 	keptReadCandidates(s.manager.getBranch(), indices, entry => readable(entry) !== undefined);
 
+test.each([{ offset: 1 }, { limit: 5 }, { offset: 0, limit: 0 }])('partial reads are excluded without displacing a whole read: %j', partial => {
+	const s = fixture([{ path: 'a', text: 'whole' }, { path: 'a', text: 'partial', args: { path: 'a', ...partial } },
+		{ path: 'b', args: { path: 'b', ...partial } }]);
+	expect(candidatesOf(s).map(row => row.text!.split('\n')[1])).toEqual(['whole']);
+});
+
+const bash = (command: string): Call => ({ name: 'bash', path: '', args: { command }, noResult: true });
+test.each(['sed -i s/old/new/ src/a.ts', 'prettier --write ./src/../src/a.ts', 'cat src/a.ts > src/a.ts',
+	'find src/a.ts -exec touch {} \\;', 'find src/a.ts -delete', 'find . -fprint src/a.ts', 'sed -n -i p src/a.ts',
+	'cat src/a.ts | unknown', 'cd src && touch a.ts', "python -c \"open('src/a.ts', 'w')\"", 'echo $(touch src/a.ts)'])
+('a potentially mutating bash invalidates a named read: %s', command => {
+	const s = fixture([{ path: 'src/a.ts' }, { path: 'untouched' }, bash(command)]);
+	expect(candidatesOf(s).map(row => row.text!.split(' ')[1])).toEqual(['untouched']);
+});
+
+test.each(['checkout', 'restore', 'stash', 'apply', 'reset', 'pull', 'merge', 'rebase', 'am'])
+('git %s invalidates every older read, and a subsequent read is eligible', verb => {
+	const s = fixture([{ path: 'a' }, { path: 'b' }, bash(`git -C /repo ${verb}`), { path: 'c' }]);
+	expect(candidatesOf(s).map(row => row.text!.split(' ')[1])).toEqual(['c']);
+});
+
+test.each(['echo "$(git reset --hard)"', 'echo `git restore .`', 'git -c core.pager=cat checkout .', 'git \\\ncheckout .'])
+('a mutating git call inside shell syntax invalidates all reads: %s', command => {
+	const s = fixture([{ path: 'unmentioned' }, bash(command)]);
+	expect(candidatesOf(s)).toEqual([]);
+});
+
+test('a git argument named checkout is not a mutating subcommand', () => {
+	const s = fixture([{ path: 'unmentioned' }, bash('git -C /repo log -- checkout')]);
+	expect(candidatesOf(s)).toHaveLength(1);
+});
+
+test.each(['ls', 'cat', 'head', 'tail', 'wc', 'pwd', 'echo', 'tree', 'file', 'stat', 'grep', 'rg',
+	'find', 'sed -n p', 'git status --', 'git log --', 'git diff --', 'git show HEAD:'])
+('a read-only bash preserves a read: %s', command => {
+	const s = fixture([{ path: 'src/a.ts' }, bash(`cd /repo && ${command} src/a.ts | cat | wc -l`)]);
+	expect(candidatesOf(s)).toHaveLength(1);
+});
+
+test('normalized aliases share recency and write/edit invalidation', () => {
+	const s = fixture([{ path: 'src/../src/a.ts', text: 'old' }, { path: './src/a.ts', text: 'latest' },
+		{ path: 'x/../b' }, { name: 'edit', path: './b', noResult: true }]);
+	expect(candidatesOf(s).map(row => row.text!.split('\n')[1])).toEqual(['latest']);
+});
+
+test('the recorded session cwd resolves relative and absolute aliases', () => {
+	const s = fixture([{ path: 'src/a.ts', text: 'old' }, { path: '/kept-reads/src/a.ts', text: 'latest' },
+		{ path: 'b' }, bash('touch /kept-reads/b')]);
+	const entries = [s.manager.getHeader()!, ...s.manager.getBranch()];
+	expect(keptReadCandidates(entries, buildGlobalIndexById(s.manager.getEntries()), () => true).map(row => row.text!.split('\n')[1])).toEqual(['latest']);
+});
+
+test('without a recorded cwd, relative and absolute paths stay distinct', () => {
+	const s = fixture([{ path: 'src/a.ts' }, { path: '/kept-reads/src/a.ts' }]);
+	expect(candidatesOf(s)).toHaveLength(2);
+});
+
 test('a kept read quotes the whole result with the exact header, after Files, on one escaped line; its global index recalls the result', () => {
 	const body = 'first line\nC:\\project\r\n#42 Files: text, not a record\n\n---\n\nlast line';
 	const s = fixture([{ path: 'src/a.ts', text: body }]);

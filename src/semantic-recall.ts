@@ -283,7 +283,11 @@ export class SemanticRecallController {
  // The fields below decide `status().state`; their setters announce a change to `onStateChange` listeners.
  private setup: SemanticSetup = 'off-user'; private setupDetail: SetupDetail = {};
  private _enabled=false;private _current?:Snapshot;private _task?:Promise<void>;private _timer?:ReturnType<typeof setTimeout>;private _error:string|null=null;
- private get enabled(){return this._enabled;}private set enabled(value:boolean){this._enabled=value;this.touch();}
+ private get enabled(){return this._enabled;}private set enabled(value:boolean){
+  this._enabled=value;
+  if(!value&&this.setup==='ready'){const reason=this.error??this.cleanupError;this.setSetup(reason?'failed':'off-user',reason?{stage:'start',reason}:{});}
+  this.touch();
+ }
  private get current(){return this._current;}private set current(value:Snapshot|undefined){this._current=value;this.touch();}
  private get task(){return this._task;}private set task(value:Promise<void>|undefined){this._task=value;this.touch();}
  private get timer(){return this._timer;}private set timer(value:ReturnType<typeof setTimeout>|undefined){this._timer=value;this.touch();}
@@ -312,7 +316,12 @@ export class SemanticRecallController {
   * optional override is a current-process verified dependency, not Task data. */
  async configureExternal(project:string,selectedPath=runtimeConfigPath(defaultRoot()),runtime?:{nativeOwnerHelperPath?:string}){const path=resolve(selectedPath);outsideProject(project,path,'configuration');if(runtime?.nativeOwnerHelperPath!==undefined)outsideProject(project,runtime.nativeOwnerHelperPath,'runtime');const text=await readFile(path,'utf8').catch((error:NodeJS.ErrnoException)=>{throw error.code==='ENOENT'?new Error('Semantic recall is not set up yet: pi-tuck sets it up when a session starts, unless pi-tuck.json turns it off'):error;});
   this.configure({...JSON.parse(text) as SemanticRecallConfig,...(runtime?.nativeOwnerHelperPath===undefined?{}:{nativeOwnerHelperPath:runtime.nativeOwnerHelperPath})});}
- enable(){if(this.closing||this.joiningSearches||this.cleanupError)throw new Error('Semantic cleanup is unresolved; retry close before enable');if(!this.config)throw new Error('Optional local semantic runtime is not configured');this.setSetup('ready');this.enabled=true;this.error=null;this.healReason=null;this.healAttempts=0;this.cancelHeal();if(this.provider&&this.active)this.schedule(this.provider);}
+ enable(){
+  // Explicit opt-in can end off-user; project, platform and settings policy belongs to the host.
+  if(['off-project','off-platform','off-settings'].includes(this.setup))return;
+  try{if(this.closing||this.joiningSearches||this.cleanupError)throw new Error('Semantic cleanup is unresolved; retry close before enable');if(!this.config)throw new Error('Optional local semantic runtime is not configured');this.setSetup('ready');this.enabled=true;this.error=null;this.healReason=null;this.healAttempts=0;this.cancelHeal();if(this.provider&&this.active)this.schedule(this.provider);}
+  catch(error){this.setSetup('failed',{stage:'start',reason:error instanceof Error?error.message:String(error)});throw error;}
+ }
  status(){return{setup:this.setup,setupMessage:semanticSetupMessage(this.setup,this.setupDetail),enabled:this.enabled,configured:Boolean(this.config),cleanupError:this.cleanupError,state:(!this.enabled?'disabled':this.healReason!==null||(this.error!==null&&!CHURN.test(this.error))?'unavailable':this.task||this.timer?'preparing':this.current?.complete?'ready':'waiting') as SemanticState,snapshotId:this.current?.id??null,throughEntryId:this.current?.throughEntryId??null,eligibleSources:this.current?.sources.length??0,totalUnits:this.current?.units.length??0,coveredUnits:this.current?.indexed.size??0,indexingComplete:Boolean(this.current?.complete),lastError:this.error??this.healReason??semanticSetupMessage(this.setup,this.setupDetail),window:this.current?windowCoverage(this.current):null,recovery:this.healReason===null?null:{attempts:this.healAttempts,integrity:this.healIntegrity,retryAt:this.healRetryAt===null?null:new Date(this.healRetryAt).toISOString()},operations:{...this.operations},limits:{keyword:16000,broad:20000}};}
  /** The existing model-facing coverage contract: setup metadata belongs to operator status, not the request. */
  requestCoverage(){const {setup,setupMessage,...coverage}=this.status();return coverage;}
