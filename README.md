@@ -1,6 +1,6 @@
 # pi-tuck
 
-**Compaction for [Pi](https://pi.dev) with no model call, and a history the agent can search by keyword, and on Apple silicon by meaning, all on your machine.** In our 128k live run, a cut took a median 0.08 s (pi-tuck 1.0.1). It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word, and on Apple silicon it can find it by meaning.
+**Compaction for [Pi](https://pi.dev) with no model call, and exact recall of earlier history, all on your machine.** In our 128k live run, a cut took a median 0.08 s (pi-tuck 1.0.1). It costs no tokens. The same session always gives the same summary. And nothing is lost: the agent can read back anything earlier, word for word.
 
 ```sh
 pi install npm:pi-tuck
@@ -19,7 +19,6 @@ Pi's built-in compaction asks a model to write a summary. pi-tuck builds the sum
 | Tasks resolved at 128k (300 SWE-bench Verified tasks per arm, pi-tuck 1.0.1) | 251 of 300 | 258 of 300. The registered claim is only "no loss larger than 0.4 points"; chain s09 matters, see below |
 | Same session, same summary | Not guaranteed, since a model writes it | Yes |
 | Can the agent get dropped detail back | No recall tool in Pi 1.4.0. The full history stays in the session file, but the agent has no tool made to search it | Yes. `tuck_recall` reads any original exactly |
-| Search history by meaning | No | Yes, with `tuck_search`, on macOS with Apple silicon. It runs locally on your Mac's GPU, and no text leaves your machine. Elsewhere there is no `tuck_search`, and `tuck_recall` searches by keyword |
 | Can the summary invent history | It can, since a model writes it | No, it holds only recorded text |
 | What the summary leaves out | Whatever the model dropped | Tool output only; the agent reads it back exactly |
 | Tasks resolved at a 32k window (150 SWE-bench Verified tasks, one model, pi-tuck 1.0.5) | 94 of 150 | 120 of 150 (+17.3 points, 95% lower bound +10.7). Limits below the table |
@@ -38,21 +37,21 @@ A summary cannot hold everything. So pi-tuck lets the agent look things up inste
 
 > "What was the reason we dropped the retry on the token refresh?"
 
-The original message says "removing the backoff loop from the auth renewal". The words differ, so a keyword search finds nothing. The agent calls `tuck_search`, which also searches by meaning:
+The agent searches its history by keyword with `tuck_recall`:
 
 ```json
-{ "query": "why did we drop the retry on token refresh" }
+{ "query": "retry token refresh" }
 ```
 
-It gets back the original passage, with a pointer such as `#212`. It reads the whole message, exactly as it was written:
+It gets back ranked passages with a pointer such as `#212`. It reads the whole message, exactly as it was written:
 
 ```json
 { "index": 212 }
 ```
 
-That is `tuck_recall`. The agent answers from the original text, not from a model's memory of it.
+The agent answers from the original text, not from a model's memory of it.
 
-*This example is an illustration. It is not a recorded session.* The call shapes are real. **Semantic search has no measured quality numbers yet.** A test of it is pre-registered in [`benchmark/PREREG-RECALL.md`](benchmark/PREREG-RECALL.md); it has no result yet. The benchmarks below measure cut time, cost and answer retention after cuts, not how well `tuck_search` finds a passage. `tuck_search` exists only on macOS with Apple silicon. Elsewhere the agent has `tuck_recall` and its keyword search, and the example above would not find its match.
+*This example is an illustration. It is not a recorded session.* The call shapes are real. Keyword recall finds a passage only by words it contains, so the question has to use words the original message used.
 
 ## Install
 
@@ -62,8 +61,7 @@ pi install npm:pi-tuck
 
 Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, both automatic and `/compact`. You change no setting.
 
-- Needs Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS or Linux. On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once. Full features on macOS with Apple silicon; elsewhere, compaction and word recall.
-- On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once), and says once when it is set up. Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
+- Needs Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS, Linux or Windows. On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once.
 - Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.1.2`.
 - To pin a version, add it: `pi install npm:pi-tuck@1.1.2`.
 
@@ -73,13 +71,7 @@ Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, bo
 pi remove npm:pi-tuck
 ```
 
-Use the same source you installed with. This takes pi-tuck out of Pi's settings. It does not delete what the search setup downloaded: about 460 MB in the `pi-tuck` folder of Pi's agent folder (`~/.pi/agent/pi-tuck`, or the folder `PI_CODING_AGENT_DIR` names). To free the space, delete that folder:
-
-```sh
-rm -rf ~/.pi/agent/pi-tuck
-```
-
-On Linux and Intel Macs, nothing is downloaded, so there is nothing to delete.
+Use the same source you installed with. This takes pi-tuck out of Pi's settings. pi-tuck downloads nothing, so there is nothing else to delete, apart from incident records if you turned `/tuck-incident` on: they are in `~/.local/state/pi-tuck-incidents`.
 
 ## How it works
 
@@ -94,17 +86,15 @@ Tool output stays in the session file, not in the summary. Each summary ends wit
 
 The summary is plain text, one line per record, such as `#12 user @2026-10-30T14:00:00Z: text`. The number is the index that `tuck_recall` takes. Summaries from earlier versions are still read.
 
-The agent gets two tools to get anything back:
+The agent gets one tool to get anything back:
 
 - **`tuck_recall`** finds earlier text by keyword. It reads any original message or tool result exactly, by the index shown in a summary. It can also write an original out to a file.
-- **`tuck_search`** (macOS with Apple silicon only) finds earlier history related to a question, even when the wording differs. It combines keyword hits with local semantic search and returns the original text with pointers for `tuck_recall`.
 
-pi-tuck's tools appear only after its first cut. Before that there is nothing out of view to recall, and a request is byte-identical to one without pi-tuck (254 of 254 requests on replay). After the first cut, on Apple silicon, both tools cost about 1,050 tokens of tool description per request. Elsewhere only `tuck_recall` is offered.
+pi-tuck's tool appears only after its first cut. Before that there is nothing out of view to recall, and a request is byte-identical to one without pi-tuck (254 of 254 requests on replay).
 
 | Command | Does |
 |---|---|
-| `/tuck` | Says in words what pi-tuck is doing in this session: the version this session loaded (an open session keeps it until Pi restarts), how many cuts and retries pi-tuck made and the last cut's size before and after, whether the cut point adapts or is fixed by `cutAt`, how search works here, and, since 1.1.1, `standing down:` with the reason when pi-tuck is not acting. It is for you; the model sees nothing new. |
-| `/tuck-semantic on\|off\|status` | Turns semantic search on or off for this session, or shows its state. |
+| `/tuck` | Says in words what pi-tuck is doing in this session: the version this session loaded (an open session keeps it until Pi restarts), how many cuts and retries pi-tuck made and the last cut's size before and after, whether the cut point adapts or is fixed by `cutAt`, and, since 1.1.1, `standing down:` with the reason when pi-tuck is not acting. It is for you; the model sees nothing new. |
 | `/tuck-incident on\|next\|off\|status` | Records this session's compaction decisions to a file you can attach to a bug report. |
 
 Since 1.1.1, pi-tuck stands down to native Pi when it cannot do its job safely: with an unknown context window (0, missing or not a number), with a Pi virtual model, or with Pi's auto-compaction turned off. It then does exactly what native Pi does, and `/tuck` says `standing down:` with the reason. Refusal, overflow and manual-cut notices also reach stderr when there is no UI (`pi -p`, JSON runs), as the output-limit notice already did.
@@ -132,22 +122,19 @@ Known limits today:
 - Small window, after a stopped run (1.0.8 and 1.0.9 only; fixed in 1.0.10): Pi's default `compaction.keepRecentTokens` (20,000) can exceed pi-tuck's input room, which was the window less the larger of `compaction.reserveTokens` and the model's maximum output (16,384 at a 32k window with the default reserve). After a run that is stopped (Esc, or a time limit) with the context above the room, every later prompt could be refused with "The request needs a cut and Pi has none to make (Nothing to compact (session too small))", and the session stayed stuck. In one check at these defaults (pi-tuck 1.0.8, 32k window, one session of 30 tasks, one local model), 28 tasks were lost, tasks 3 to 30 ([`benchmark/RESULTS-DEFAULTS.md`](benchmark/RESULTS-DEFAULTS.md)). If you are on 1.0.8 or 1.0.9, upgrade to 1.0.10. In 1.0.10 the cut a prompt needs is pi-tuck's own, so `keepRecentTokens` no longer leaves it with nothing to cut. A rerun of the same check on the 1.0.10 candidate had no refusal and no stuck session. It had two caveats: two of its tasks had a first request the local server never answered, and 8 of its 30 tasks began without their prompt, which the refusal counter cannot see (fixed in 1.0.12; see Benchmarks and [`benchmark/RESULTS-DEFAULTS-1010.md`](benchmark/RESULTS-DEFAULTS-1010.md)). Windows of 128k and up were not affected at the defaults.
 - A prompt could be lost, with no notice (1.0.10 and 1.0.11; fixed in 1.0.12). When a new prompt arrived over the cut point and pi-tuck's cut kept nothing of the conversation before it, which happens when everything since the last cut is one long turn, the prompt was dropped from the request and from the saved session. The model never saw it and usually went on with the previous task, so work you asked for could be lost, and could look answered. The next prompt ran normally. If you used 1.0.10 or 1.0.11 and a reply ignored what you had just asked, this is the likely cause. Upgrade to 1.0.12 ([`CHANGELOG.md`](CHANGELOG.md) 1.0.12).
 - A host that patches a large section into the system prompt could get a refusal that a cut would have fit (1.0.0 to 1.0.16; fixed in 1.0.17). pi-tuck plans a prompt's cut when the prompt arrives, before other extensions change the system prompt. A host engine that adds a section of thousands of tokens for one turn could push that turn's first request over the room, and the final guard refused it. Now the guard plans the cut against the system prompt as finally sent, and refuses only if that cut does not fit either ([`CHANGELOG.md`](CHANGELOG.md) 1.0.17).
-- Semantic recall never started in `pi -p` (1.0.0 to 1.0.20; fixed in 1.0.21). pi-tuck skipped semantic recall whenever Pi ran with no UI, to keep a one-shot run from starting the first-time download, and that also skipped a runtime that was already installed. Jobs run with `pi -p` searched by keyword only, while `tuck_search` said semantic recall was being set up. RPC mode was not affected ([`CHANGELOG.md`](CHANGELOG.md) 1.0.21).
 - pi-tuck refused requests that fit the window, and could strand a session (1.0.0 to 1.0.21; fixed in 1.0.22). It refused at the room, the window less the full reply reserve, where native Pi still sends. With Pi's defaults and a large setup, a session could be refused at every prompt. The final refusal now sits at the window less a reply floor ([`CHANGELOG.md`](CHANGELOG.md) 1.0.22).
 - pi-tuck 1.0.25 failed to load in an installed Pi ("Cannot find module '@earendil-works/pi-ai/utils/estimate'"); fixed in 1.0.26, and 1.0.25 is deprecated. Since 1.0.23, the check of Pi's own reply cap also never ran in an installed Pi, for the same reason: Pi's extension loader resolves only a few pi-ai entry points for an installed package. It loaded only in tests and the eval harness, and the installed package fell back to the same 4,096-token margin without it. Fixed in 1.0.26, which was loaded in a real installed Pi before publishing ([`CHANGELOG.md`](CHANGELOG.md) 1.0.26).
 - A request above the room could be admitted and then refused, leaving the session stuck where native Pi would have sent (1.0.22 to 1.0.24; fixed in 1.0.25). pi-tuck checked its line in its own corrected token count, while Pi's reply cap uses Pi's own estimate, which is higher when the provider counts fewer tokens than pi-tuck's raw measure ([`CHANGELOG.md`](CHANGELOG.md) 1.0.25).
 - Near the 1.0.22 refusal line, replies were cut to a few hundred tokens (1.0.22; fixed in 1.0.23). 1.0.22 left only its reply floor and did not count Pi's 4,096-token margin on the reply cap ([`CHANGELOG.md`](CHANGELOG.md) 1.0.23).
 - Cost of the 1.0.22 change: between the room and the window, the reply reserve no longer cushions a wrong count. At a cold start an undercount can reach the provider. A provider that errors is caught and learned from; a server that truncates silently truncates, as it does for native Pi. With a setup above the room, cuts are forced and frequent, each freeing little, which beats a stranded session ([`CHANGELOG.md`](CHANGELOG.md) 1.0.22).
 - Fixed in 1.1.1: a resumed session forgot what pi-tuck had learned about the provider's token counts. pi-tuck saved its calibration only inside a cut, so after quitting and resuming Pi before the next cut it counted at 1x again and could send a request the provider truncated or refused, where native Pi succeeded. pi-tuck now saves a small private entry in the session when what a resume would learn changes, not every turn, and reads it back on resume. The entry never reaches the model ([`CHANGELOG.md`](CHANGELOG.md) 1.1.1).
-- Fixed in 1.1.1: pi-tuck refused prompts that native Pi would have sent when the context window was unknown, the model was a Pi virtual model, or Pi's auto-compaction was turned off. It now stands down to native in those cases. Also fixed in 1.1.1: refusal, overflow and manual-cut notices were silent without a UI, so a run in `pi -p` or JSON mode could end with no word; the semantic search status could claim "ready" when it was turned off or had failed; and a retry after a reply hit the output limit skipped a check that a pending cut had really been saved in the session ([`CHANGELOG.md`](CHANGELOG.md) 1.1.1).
+- Fixed in 1.1.1: pi-tuck refused prompts that native Pi would have sent when the context window was unknown, the model was a Pi virtual model, or Pi's auto-compaction was turned off. It now stands down to native in those cases. Also fixed in 1.1.1: refusal, overflow and manual-cut notices were silent without a UI, so a run in `pi -p` or JSON mode could end with no word; and a retry after a reply hit the output limit skipped a check that a pending cut had really been saved in the session ([`CHANGELOG.md`](CHANGELOG.md) 1.1.1).
 - Fixed in 1.0.33: a file read's recall number pointed at the read call, not at what the read returned. The summary lists each file the session read with a `tuck_recall` number, and that number brought back the call's arguments instead of the file's contents, so recalling a read cost a turn and showed nothing useful. It now brings back the read's output ([`CHANGELOG.md`](CHANGELOG.md) 1.0.33).
-- Fixed in 1.0.32: background indexing never started at the cuts pi-tuck makes itself. Pi announces only its own compactions, so cuts pi-tuck saved after a tool round, at the end of a run, or before retrying a reply that hit the output limit started no indexing ([`CHANGELOG.md`](CHANGELOG.md) 1.0.32).
 - Fixed in 1.0.31: input that arrived after a tool round had been checked, such as another extension's context or a newly enabled tool, could push the next request past the hard line, and the final check refused a request that pi-tuck could still cut. It now cuts at that check, carries the cut in that request, saves it at the next boundary, and refuses only when no cut can fit ([`CHANGELOG.md`](CHANGELOG.md) 1.0.31).
 - Fixed in 1.0.29, when Pi's configured window was larger than the server's: a session could get stuck after one overflow, because pi-tuck mistook a cut Pi had saved for one Pi had failed to save. And a server that silently shrinks the reply to fit its real window went unnoticed, so pi-tuck answered fewer prompts than plain Pi. A reply that stops for length below the reply cap Pi sent is now read as the server's real window: pi-tuck learns it, keeps it for the model in the session, plans with the smaller window, and retries that turn once ([`CHANGELOG.md`](CHANGELOG.md) 1.0.29).
-- 1.0.28 moved each piece of state that had several owners to one owner: the pending cut, the run, reply fit and semantic setup. Requests were unchanged. It also fixed a plan made for a prompt that another extension handled, which could still answer Pi's own compaction check before a later run and make a cut deeper than needed ([`CHANGELOG.md`](CHANGELOG.md) 1.0.28).
+- 1.0.28 moved each piece of state that had several owners to one owner: the pending cut, the run and reply fit. Requests were unchanged. It also fixed a plan made for a prompt that another extension handled, which could still answer Pi's own compaction check before a later run and make a cut deeper than needed ([`CHANGELOG.md`](CHANGELOG.md) 1.0.28).
 - A run that a custom message started could lose that message after a cut in the middle of the run (fixed in 1.0.27). pi-tuck protected only a prompt the user typed, so a tool-loop cut in a run an extension started with a custom message kept the message neither whole nor quoted, and later requests lacked the instruction that started the run. Now such a message gets the same protection as a typed prompt: it is kept, or quoted whole in the summary, and the guard checks it. A custom message with no text has nothing to quote and stays unprotected ([`CHANGELOG.md`](CHANGELOG.md) 1.0.27).
 - A prompt's cut could reach a run it was not planned for (fixed in 1.0.24). pi-tuck plans a prompt's cut when the prompt arrives. When another extension handled that prompt, no run started, and the plan waited for the next run. A run started by a custom message carried a cut sized for the prompt that never ran, deeper than needed. After a move in the session tree (`/tree`), the plan was applied on the new branch, where its kept entry was not present, so the request lost the custom message that started the run, even on a branch that needed no cut ([`CHANGELOG.md`](CHANGELOG.md) 1.0.24).
-- Four `tuck_search` faults, fixed in 1.0.23: it said semantic recall was still indexing when the history was fully indexed; in the turn after a prompt's cut it ranked nothing ("nothing is out of view"); a keyword-search timeout on a very long history failed the whole search, where now the semantic results still answer; and the timeout message named a pattern instead of the history's size ([`CHANGELOG.md`](CHANGELOG.md) 1.0.23).
 - pi-tuck cut earlier than native Pi when a model's reply cap is above Pi's reserve (1.0.0 to 1.0.19; fixed in 1.0.20). It reserved the larger of Pi's `compaction.reserveTokens` and the model's `maxTokens`: with `maxTokens` 32,768 and a reserve of 16,384 on an 81,920 window, its room fell to 49,152 tokens, where native Pi compacts at 65,536 ([`CHANGELOG.md`](CHANGELOG.md) 1.0.20).
 - A summary could drop the task a session was working on (1.0.0 to 1.0.17; fixed in 1.0.18). Until 1.0.15 a summary quoted only the session's first user turn, up to 12,000 characters, and the newest one, so in a long session the current task, an older turn followed by short steps, was clipped or dropped while a finished first task stayed whole, and agents acted on a days-old task. 1.0.16 added more quotes. From 1.0.13 to 1.0.17, separate rules decided what a summary quoted and what the kept tail held, and the prompt that set the current task, or the first prompt, could lose its opening after a cut: the stress test found it 40 times in 32 cells on 1.0.16 and 1.0.17. Since 1.0.18 one ranked list fills a cut's room, and the stress test finds no lost opening in 287 cells. Short sessions, and the SWE-bench chains behind our benchmarks, keep each task's prompt in the kept tail and never hit it. Upgrade to 1.0.18 ([`CHANGELOG.md`](CHANGELOG.md) 1.0.18).
 - pi-tuck 1.0.16 cost more in live chains than its notes first said. Against 1.0.13 at an 81,920 window, it took 1.48 times the turns on the tasks both resolved (95% interval 1.34 to 1.64), 74% more cuts and 1.66 times the tokens, with 56 of 60 tasks resolved against 55. Replay of single-task sessions cannot show this cost. 1.0.18 replaced its quote rules; in the 1.0.18 gate it took 22.27 turns per task against 29.35 for 1.0.16 and 20.22 for the 1.0.13 arm (different pairs of runs; reported, not claimed) ([`benchmark/RESULTS-V1016.md`](benchmark/RESULTS-V1016.md), [`CHANGELOG.md`](CHANGELOG.md) 1.0.18).
@@ -155,7 +142,6 @@ Known limits today:
 - The cut point adapts by itself since 1.0.13; before it, pi-tuck cut too often at small windows or with a large setup (1.0.11 and 1.0.12). The trade, from the changelog: on windows that cut too often, each request now carries more context. Cuts, re-processing and request time fall, and billed tokens rise on paid models. On replay of real sessions at an 81,920 window, cuts went from 22.3 to 9.3 per 100 requests, request time was about 16 to 20% lower, and billed tokens were 16 to 19% higher; at a 65,536 window billed tokens rose by as much as 35%. A very large setup at a small window, such as 40k at 65,536, still leaves too little free room for a good rhythm: cuts stay frequent and free little ([`CHANGELOG.md`](CHANGELOG.md) 1.0.13).
 - Still applying (1.0.11 to 1.0.16): a fresh assistant message larger than the free room is refused, and a short next prompt recovers (in an unattended `pi -p` run, a refusal ends the run). A reply that reports more than the window reads to Pi as a silent overflow; when nothing can be cut, pi-tuck refuses the next prompt, and the prompt after that runs. If a provider keeps rejecting requests in a wording Pi does not class as a context overflow, or with a bare HTTP 413, pi-tuck does not recover on its own: the session stays intact, and every prompt can fail until the request shrinks. Try `/compact` ([`CHANGELOG.md`](CHANGELOG.md) 1.0.13).
 - Other extensions (1.0.10): a prompt's cut no longer goes through Pi's `session_before_compact`, so another extension's veto there no longer stops it. It never stopped a cut between tool rounds. Pi's own threshold and overflow cuts, and `/compact`, still ask other extensions as before.
-- Semantic search (`tuck_search`) needs a Mac with Metal (Apple silicon). Elsewhere, compaction and `tuck_recall`'s word search work, there is no `tuck_search`, and nothing is downloaded.
 
 ## Benchmarks
 
@@ -171,10 +157,10 @@ Each row says what was measured, under which conditions, and where the data is.
 | pi-tuck 1.0.16 against the recorded 1.0.13 arm, 81,920 window | Registered bar (Tier 1) met: resolved 56 of 60 against 55 (+1.7 points, one-sided 95% lower bound +0.0, against a bar of above −10); 0 lost tasks. Readouts: turns per task 29.35 against 20.22 (1.48 times on the 55 tasks both resolved, 95% interval 1.34 to 1.64), cuts 61 against 35, total tokens 62.1 M against 37.4 M | Pre-registered gate. pi-tuck 1.0.16 (`dee0eab`) ran alone on chains t06 and t07 (60 tasks) against the recorded 1.0.13 arm from the adaptive gate; the two arms did not run side by side, the base a day earlier, so seconds are not compared. One model, one window, one run per arm. The resolved result is a bound, not a gain. The cost readouts are reported, not claimed. 1.0.18 replaced this build's quote rules | [`benchmark/RESULTS-V1016.md`](benchmark/RESULTS-V1016.md) |
 | The adaptive cut point (1.0.13) against 1.0.12, 81,920 window | Registered bar (Tier 2) met: resolved 131 of 150 in both arms (+0.0 points, one-sided 95% lower bound −1.3, against a bar of above −5); 0 lost tasks in the candidate arm. The 0 counts dead tasks, tasks whose prompt was dropped at a cut, and tasks an audit found started without their prompt; all 11 tasks with a cut at a prompt, in both arms, were also read by hand, and in each the model's first messages work on that task | Pre-registered gate. pi-tuck 1.0.13 (`6f13685`) is the exact code the gate measured (`882f6f6`); only the version and the notes changed. It was measured against pi-tuck 1.0.12, `mac-studio/main` at xhigh, window 81,920, reserve 16,384, `keepRecentTokens` 20,000, 5 chains (t06 to t10) of 30 tasks, 150 paired tasks, one run per arm, one model throughout. The resolved result is a bound, not a gain. Turns, tokens and seconds are in the file and are not claimed here. Nothing about other windows, models or builds | [`benchmark/RESULTS-ADAPTIVE.md`](benchmark/RESULTS-ADAPTIVE.md) |
 | The 1.0.10 candidate against 1.0.9, 32k window | 0 dead tasks in both arms; no mid-run refusal. Resolved 50 of 60 (1.0.9) and 49 of 60 (1.0.10 candidate): −1.7 points, 95% lower bound −8.3. **The gate failed as registered, by one task**; 1.0.10 shipped as an exception because of the small-window defect. 6 of the 1.0.10 candidate's 60 tasks began without their prompt (4 of them resolved), against 0 in the 1.0.9 arm; fixed in 1.0.12. Turns per task 25.08 and 29.12; cuts 731 and 884; total tokens 13.07 M and 15.12 M | Pre-registered gate. pi-tuck `a67ec30` against 1.0.9 (`cd4626b`). DeepSeek V4.1 Flash pinned to one upstream, window 32,768, reserve 16,384, `keepRecentTokens` 3,333, chains t01 and t02, 60 paired tasks. One model, one window, one run per arm; 60 tasks cannot separate a one-task difference from run-to-run variation | [`benchmark/RESULTS-V110.md`](benchmark/RESULTS-V110.md) |
-| The 1.0.8 candidate against 1.0.7, 32k window | 0 dead tasks in both arms. Resolved 46 of 60 in both (+0.0 points, 95% lower bound −6.7). No mid-run refusal in either arm. Turns per task 25.37 (1.0.7) and 26.10 (1.0.8) | Pre-registered gate, passed as registered. pi-tuck `a2e7d1a` (the tool-result clip and the cut at the end of a run, on 1.0.6) against 1.0.7. Released 1.0.8 is that build merged with 1.0.7's Metal-only recall; its replay requests are reported byte-identical to the gated build on 29 recordings (stated in the source file, not re-run for this README). DeepSeek V4.1 Flash pinned to one upstream, window 32,768, reserve 16,384, chains t01 and t02, 60 paired tasks, both arms run together. One model, one window, one run per arm; 60 tasks cannot show a difference smaller than the bound. The run shows that the change introduced no refusal; no refusal occurred in the 1.0.7 arm for the clip to prevent | [`benchmark/RESULTS-V108.md`](benchmark/RESULTS-V108.md) |
+| The 1.0.8 candidate against 1.0.7, 32k window | 0 dead tasks in both arms. Resolved 46 of 60 in both (+0.0 points, 95% lower bound −6.7). No mid-run refusal in either arm. Turns per task 25.37 (1.0.7) and 26.10 (1.0.8) | Pre-registered gate, passed as registered. pi-tuck `a2e7d1a` (the tool-result clip and the cut at the end of a run, on 1.0.6) against 1.0.7. Released 1.0.8 is that build merged with 1.0.7's change; its replay requests are reported byte-identical to the gated build on 29 recordings (stated in the source file, not re-run for this README). DeepSeek V4.1 Flash pinned to one upstream, window 32,768, reserve 16,384, chains t01 and t02, 60 paired tasks, both arms run together. One model, one window, one run per arm; 60 tasks cannot show a difference smaller than the bound. The run shows that the change introduced no refusal; no refusal occurred in the 1.0.7 arm for the clip to prevent | [`benchmark/RESULTS-V108.md`](benchmark/RESULTS-V108.md) |
 | Cut time, live, 128k | pi-tuck median 0.081 s (46 cuts; 90th percentile 0.279 s). Pi's compaction median 235.3 s (48 cuts; 90th percentile 403.8 s). Context carried after a cut, median: 26,790 tokens (pi-tuck), 27,750 (Pi's compaction) | pi-tuck 1.0.1, Pi 1.4.0, SWE-bench Verified, 10 chains of 30 tasks, window 128,000, reply reserve 32,768, `mac-studio/main:xhigh` writing Pi's summaries. The built-in time depends on that model and on server load. pi-tuck's time is an upper bound, read from the session file: the time between the entry written just before the cut and the compaction entry, so it includes anything between the last message and the cut (pi-tuck's tool-loop cuts emit no compaction events). The 44 failed compaction attempts in chain s09-A have no compaction entry and are not in the counts | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 3 |
 | Cut time, paired replay, 128k | pi-tuck median 0.061 s (95 cuts). Pi's compaction prompts on mac-studio/main:xhigh 154.6 s (86 cuts). Pi's compaction prompts on GPT-6.1 Terra 53.2 s (87 cuts, 19 recordings). Context carried after a cut, median: 27,656, 25,790 and 22,784 tokens; median summary 85,561, 23,598 and 11,200 characters | The same recorded sessions cut at the same raw positions. pi-tuck 1.0.1. Terra's cuts ran through Codex, not on the local server | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 3 |
-| Retention, 128k, test 1a: pi-tuck with its recall tools against Pi's compaction prompts on mac-studio/main:xhigh | Registered claim: not more than 3 points below, on these probes (cuts 1 to 4 only) (supported). Accuracy on the probes each was asked: 89.7% (783 probes) and 61.8% (1,677). Difference over the 783 shared probes, which come from the 43 of pi-tuck's 95 answer sets that did not abort: +25.7 points, one-sided 95% lower bound +22.0 (+22.3 clustered by chain). By probe type, pi-tuck / comparator: error class 80.2 / 24.7, files changed 84.5 / 78.9, result-line rule 100.0 / 100.0, required tag 100.0 / 99.3, test-runner summary 90.1 / 31.6 | pi-tuck 1.0.1, 20 recordings, mechanical probes only, evidence at least 35,000 raw tokens before the cut. pi-tuck answered with its recall tools and the comparators with none, from the summary and the kept recent messages. Every one of the 43 asks behind the 783 probes made recall calls (1.25 per probe on average), so no pi-tuck answer lacked the tools; the run cannot show how much of the result comes from the summary and how much from recall. No pi-tuck arm without recall tools exists. The comparators' agents had unrestricted bash, and the logs cannot rule out that one read a recording; nothing shows it. pi-tuck's accuracy does not rise with more calls per probe (87.9%, 90.8%, 90.0% by thirds; post hoc, descriptive). The 783 shared probes are fewer than the 2,969 needed to certify a difference near the margin | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 1a |
+| Retention, 128k, test 1a: pi-tuck with its recall tools against Pi's compaction prompts on mac-studio/main:xhigh | Registered claim: not more than 3 points below, on these probes (cuts 1 to 4 only) (supported). Accuracy on the probes each was asked: 89.7% (783 probes) and 61.8% (1,677). Difference over the 783 shared probes, which come from the 43 of pi-tuck's 95 answer sets that did not abort: +25.7 points, one-sided 95% lower bound +22.0 (+22.3 clustered by chain). By probe type, pi-tuck / comparator: error class 80.2 / 24.7, files changed 84.5 / 78.9, result-line rule 100.0 / 100.0, required tag 100.0 / 99.3, test-runner summary 90.1 / 31.6 | pi-tuck 1.0.1, 20 recordings, mechanical probes only, evidence at least 35,000 raw tokens before the cut. pi-tuck answered with its recall tools (1.0.1 had a second recall tool, since removed) and the comparators with none, from the summary and the kept recent messages. Every one of the 43 asks behind the 783 probes made recall calls (1.25 per probe on average), so no pi-tuck answer lacked the tools; the run cannot show how much of the result comes from the summary and how much from recall. No pi-tuck arm without recall tools exists. The comparators' agents had unrestricted bash, and the logs cannot rule out that one read a recording; nothing shows it. pi-tuck's accuracy does not rise with more calls per probe (87.9%, 90.8%, 90.0% by thirds; post hoc, descriptive). The 783 shared probes are fewer than the 2,969 needed to certify a difference near the margin | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 1a |
 | Retention, 128k, test 1b-Terra: pi-tuck with its recall tools against Pi's compaction prompts on GPT-6.1 Terra | Registered claim: not more than 3 points below, on these probes (cuts 1 to 4 only) (supported). Accuracy on the probes each was asked: 89.7% (783) and 57.8% (1,685). Difference over the 728 shared probes, from the same 43 of pi-tuck's 95 answer sets: +33.7 points, one-sided 95% lower bound +30.4 (+30.1 clustered by chain). By probe type, pi-tuck / Terra: error class 80.2 / 14.7, files changed 84.5 / 72.3, result-line rule 100.0 / 100.0, required tag 100.0 / 93.3, test-runner summary 90.1 / 38.1 | As test 1a, on 19 of the 20 recordings: s09-A is missing because its Terra cut job hit a Codex usage limit, and the set was closed at 19 before any Terra result was read. The claim is non-inferiority. The same limits as test 1a apply | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 1b-Terra |
 | Tasks resolved, 128k, test 2 | Pi's compaction 251 of 300, pi-tuck 258 of 300. Registered claim: no loss larger than 0.4 points. All 10 chains: +2.3 points, lower bound +0.3. Without chain s09: +1.5 points, lower bound −0.4 | pi-tuck 1.0.1, 10 chains of 30 tasks, paired by task, bootstrap over chains. In s09-A Pi's compaction failed 44 times ("generation hit the token cap") from task 23 on, and no other chain has a failed compaction; that is why the bound changes without s09 | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 2 |
 | Tokens per session, input plus output without cache reads, 128k | 241,000 fewer for pi-tuck per session on average, one-sided 95% upper bound −21,000, with all 10 chains. Without chain s09 the mean is −174,000 and the upper bound +43,000 | pi-tuck 1.0.1, paired by chain, bootstrap over sessions. The line holds only with all chains | [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) test 3 |
@@ -192,14 +178,13 @@ Notes:
 
 ## Settings
 
-pi-tuck needs none. Two are optional. Put them in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`, or the folder `PI_CODING_AGENT_DIR` names):
+pi-tuck needs none. One is optional. Put them in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`, or the folder `PI_CODING_AGENT_DIR` names):
 
 ```json
-{ "cutAt": 0.8, "semanticRecall": true }
+{ "cutAt": 0.8 }
 ```
 
 - **`cutAt`** (above 0, at most 1; not set by default) is the part of the input room a request may fill before pi-tuck cuts. With no `cutAt`, the cut point adapts to the session since 1.0.13: it follows what the setup and the last cut left, plus half a tail of room to grow, never below 60% of the room and capped just under the room. Setting `cutAt` fixes it as a fraction of the room, and an explicit value keeps the earlier formula, so remove one you set by hand to stop frequent cuts. `{ "cutAt": 1 }` cuts at the full room. A lower value cuts earlier and smaller. The whole room still decides which request pi-tuck refuses.
-- **`semanticRecall`** (`false` turns semantic search off, on Apple silicon). Nothing is then downloaded, and `tuck_search` uses keywords only.
 
 A bad file is reported at session start, and pi-tuck uses the defaults.
 
@@ -219,43 +204,24 @@ If you reach the model through OpenRouter, you can also pin one upstream, so tha
 { "providers": { "openrouter": { "compat": { "openRouterRouting": { "only": ["your-upstream"], "allow_fallbacks": false } } } } }
 ```
 
-## Semantic search
-
-Semantic search is on by default on macOS with Apple silicon. It runs entirely on your Mac: an embedding model, [EmbeddingGemma-2](https://huggingface.co/google/embeddinggemma-2), served by [llama.cpp](https://github.com/ggml-org/llama.cpp) on your Mac's GPU (Metal). No text leaves your machine. Elsewhere (Linux, Intel Macs) there is no `tuck_search`, and nothing is downloaded; compaction and `tuck_recall` work. On a Mac where Metal fails to start, semantic recall goes off with the reason "Semantic recall needs Metal; word recall still works".
-
-The first time a session starts, pi-tuck downloads what it needs, once, about 390 MB, in the background. Keyword search works meanwhile:
-
-| File | From |
-|---|---|
-| EmbeddingGemma-2, 8-bit GGUF (310 MB) and its tokenizer (32 MB) | huggingface.co |
-| llama.cpp release b11476 for macOS arm64 (12 MB) | github.com/ggml-org/llama.cpp |
-| CPython 3.13 (25 MB) and 16 Python packages for the tokenizer (9 MB) | github.com/astral-sh/python-build-standalone, pypi.org |
-
-Every file is pinned to a SHA-256 in [src/assets.ts](src/assets.ts) and checked before use. Everything goes to `~/.pi/agent/pi-tuck`; to remove it, delete that folder. Setup needs about 6.5 GB of free disk space while it runs, and uses 460 MB after. If it fails, for example offline, pi-tuck says so and tries again at the next session start. The first-time setup needs one interactive start: one-shot runs (`pi -p`) do not start the download. Since 1.0.21, a `pi -p` run starts semantic search when the runtime is already installed. If it is not installed, pi-tuck says so and starts no download. With no UI, an off or failing semantic recall, or a bad settings file, is written once per message per session to stderr, never into the model's context.
-
-Since 1.0.32, at every cut pi-tuck indexes in the background what the cut moved out of view, so a first `tuck_search` finds it without embedding it then. One background indexer runs per machine at a time, holding a lock in the index folder, so several Pi sessions do not each load the encoder. A search never waits for that lock, the worker is given back once the window is indexed, and the cut itself never waits for indexing. Semantic search is off when Pi runs in a folder that contains Pi's agent folder, such as your home folder, because its own files live there. Open Pi in a project folder.
-
 ## Use from code
 
 The package also exports its parts for hosts that embed Pi through its SDK:
 
 ```ts
-import { installCompaction, createSemanticRecall, ensureSemanticRuntime } from "pi-tuck";
+import { installCompaction } from "pi-tuck";
 
-const config = JSON.parse(readFileSync(await ensureSemanticRuntime("/abs/path/outside/projects"), "utf8"));
-const semanticRecall = createSemanticRecall(config);
-const handle = await installCompaction(pi, { semanticRecall });
-await handle.setSemanticEnabled(true, ctx); // e.g. in a session_start handler
+const handle = await installCompaction(pi);
 ```
 
-`installCompaction` options (reply reserve, host-injected messages, recall policy, `cutAt` and others) are documented in [src/compaction.ts](src/compaction.ts). `handle.close()` stops the semantic worker; call it before disposing a session.
+`installCompaction` options (reply reserve, host-injected messages, recall policy, `cutAt` and others) are documented in [src/compaction.ts](src/compaction.ts). `handle.close()` stops the incident recorder; call it before disposing a session.
 
 ## Development
 
 ```sh
 npm install
 npm run check   # types
-npm test        # unit tests (Vitest) and the Python runtime tests
+npm test        # unit tests (Vitest)
 npm run build   # dist/ for the library export
 ```
 
@@ -263,7 +229,7 @@ Changes are listed in [CHANGELOG.md](CHANGELOG.md). Releases are published from 
 
 ## Credits
 
-pi-tuck grew out of [pi-vcc](https://github.com/sting8k/pi-vcc) by sting8k and includes code from [pi-blackhole](https://github.com/k0valik/pi-blackhole) by k0valik and from [Pi](https://github.com/earendil-works/pi) by Mario Zechner, all MIT; their notices are in [LICENSE](LICENSE). The downloaded model is Apache-2.0, llama.cpp is MIT, and CPython is under the PSF license.
+pi-tuck grew out of [pi-vcc](https://github.com/sting8k/pi-vcc) by sting8k and includes code from [pi-blackhole](https://github.com/k0valik/pi-blackhole) by k0valik and from [Pi](https://github.com/earendil-works/pi) by Mario Zechner, all MIT; their notices are in [LICENSE](LICENSE).
 
 ## License
 
