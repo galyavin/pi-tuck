@@ -39,7 +39,7 @@ test('the guard admits a request exactly while it is below the room', async () =
  // Triggers are off, so only the guard decides. A margin that leaked into the guard (or into the calibration) would reject requests
  // below the room.
  for (const d of [-30, -10, -3, -2, -1, 0, 1, 2, 3, 10]) {
-  const r = await scenario({ at: 'prompt', complete: ROOM + d, host: HOST, compactionEnabled: false });
+  const r = await scenario({ at: 'prompt', complete: ROOM + d, host: HOST, guardOnly: true });
   expect(r.measured!.complete, r.probe).toBe(ROOM + d);
   expect(r.guard[0], r.probe).toBe(ROOM + d);
   if (d < 0) { expect(r.faults, r.probe).toEqual([]); expect(r.requests, r.probe).toBe(1); }
@@ -72,7 +72,7 @@ test('the calibration factor scales the trigger at the band to the token, and th
 test('the calibration factor scales the guard at the room to the token', async () => {
  const seen: { raw: number; calibrated: number; admitted: boolean }[] = [];
  for (let d = -6; d <= 6; d++) {
-  const r = await scenario({ at: 'tool', complete: Math.floor(ROOM / RATIO) + d, host: HOST, usageRatio: RATIO, compactionEnabled: false });
+  const r = await scenario({ at: 'tool', complete: Math.floor(ROOM / RATIO) + d, host: HOST, usageRatio: RATIO, guardOnly: true });
   const factor = factorOf(r.guard[0]!);
   const raw = r.measured!.complete;
   // The first request is far below the room; the second is the one at the edge.
@@ -100,7 +100,7 @@ test('a summary with a record omitted by a native context edit is counted as the
 	// tokens less than the saved one). The reference is the real request: find the size at which the request the guard sees is exactly
 	// where the case wants it, with triggers off, then run the same session with triggers on.
 	const base = { at: 'tool' as const, host: HOST, summary: true, omitted: 40000 };
-	const off = (complete: number) => scenario({ ...base, complete, compactionEnabled: false });
+	const off = (complete: number) => scenario({ ...base, complete, guardOnly: true });
 	const first = await off(BAND);
 	const shift = BAND - first.guard[1]!;
 	expect(shift).toBeGreaterThan(5000); // the saved summary really is larger than what is sent

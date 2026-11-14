@@ -298,8 +298,8 @@ test('a model switch does not leak one identity\'s window into another\'s', asyn
  await expectFactor(1.1, branch(), 'the other identity starts at its own window', switched);
  await expectFactor(1.1, branch(), 'and ages on its own window, not this model\'s 1.4', then(switched, lowerAfter(K - 2)));
  await expectFactor(1.05, branch(), 'its two 1.1 entries leave after K new ones', then(switched, lowerAfter(K)));
- // Switching back re-seeds from the branch again: the newest receipt is the other's, so this model starts at 1, not at its earlier 1.4.
- await expectFactor(1, branch(), 'switched away and back', async d => { await switched(d); await d.offer(50000); d.ctx.model = MODEL; await d.offer(50000); });
+ // Switching back now restores this model's persisted observation before any cut.
+ await expectFactor(1.4, branch(), 'switched away and back', async d => { await switched(d); await d.offer(50000); d.ctx.model = MODEL; await d.offer(50000); });
 });
 
 // The point of carrying the window. An attempt is a new compactor (a host may build one per attempt) that seeds from the branch's newest receipt, and a
@@ -338,7 +338,7 @@ test('the seed writes nothing: the session file is byte-identical across session
   // The session as a Resume opens it.
   const resumed = SessionManager.open(file, dir);
   const d = await drive(resumed);
-  try { await d.start(); await d.offer(50000); await d.reply(reporting(60000)); await d.offer(50000); } finally { await d.close(); }
+  try { await d.start(); await d.offer(50000); await d.offer(50000); } finally { await d.close(); }
   expect(d.errors).toEqual([]);
   expect(readFileSync(file).equals(bytes)).toBe(true);
   expect(readdirSync(dir).sort()).toEqual(names);

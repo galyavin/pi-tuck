@@ -80,7 +80,11 @@ test('real Pi guard receipts preserve tool pairing, parentage, prompt cut bounda
   for (const receipt of receipts) {
    const branch = h.manager.getBranch();
    const next = branch.slice(branch.indexOf(receipt) + 1).find(e => e.type === 'message' && e.message.role === 'assistant');
-   expect(next?.parentId).toBe(receipt.id);
+   // Calibration now appends at message_end, between admission and the saved reply. Every link remains native parentage.
+   expect(next).toBeDefined();
+   const chain = branch.slice(branch.indexOf(receipt), branch.indexOf(next!) + 1);
+   for (let i = 1; i < chain.length; i++) expect(chain[i]!.parentId).toBe(chain[i - 1]!.id);
+   for (const e of chain.slice(1, -1)) expect(e).toMatchObject({ type: 'custom', customType: 'pi-tuck-calibration' });
   }
   assertNativeToolRounds(h.saved());
   for (const cut of h.compactions()) {
@@ -112,12 +116,12 @@ test('real Pi guard receipts preserve tool pairing, parentage, prompt cut bounda
  } finally { await h.cleanup(); }
 });
 
-test('capacity receipts cannot enter summaries, omission counts, recall, keyword search or semantic sources', () => {
+test.each(['pi-tuck-capacity', 'pi-tuck-calibration'])('%s receipts cannot enter summaries, omission counts, recall, keyword search or semantic sources', type => {
  const manager = SessionManager.inMemory('/x');
  manager.appendMessage({ role: 'user', content: 'Source task', timestamp: 0 });
  manager.appendMessage(response(10));
  const clean = manager.getEntries().slice();
- const receipt = manager.appendCustomEntry('pi-tuck-capacity', { kind: 'refusal', reason: 'SECRET_RECEIPT_REASON' });
+ const receipt = manager.appendCustomEntry(type, { kind: 'refusal', reason: 'SECRET_RECEIPT_REASON' });
  const { isHistorySource, readable } = createRecall();
  expect(isHistorySource(manager.getEntry(receipt)!)).toBe(false);
  expect(readable(manager.getEntry(receipt)!)).toBeUndefined();

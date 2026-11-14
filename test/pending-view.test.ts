@@ -53,6 +53,44 @@ async function fixture(compactAll = false) {
 }
 const plain = (messages: any[]) => convertToLlm(messages).map(({ timestamp: _timestamp, ...message }) => message);
 
+test('switching to an unknown window discards a pending cut and preserves the native request', async () => {
+  const h = await fixture();
+  try {
+    h.ctx.model = { ...h.ctx.model!, contextWindow: 0 };
+    const messages = h.manager.buildSessionProjection().messages;
+    expect(await h.emit('context', { messages })).toBeUndefined();
+    expect(await h.emit('context_with_system', { messages })).toBeUndefined();
+    expect(await h.emit('agent_before_settle', { outcome: 'completed', entries: [],
+      context: { contextMessages: messages, pendingMessages: [], canContinue: false } })).toBeUndefined();
+    expect(h.manager.getBranch().some(entry => entry.type === 'compaction')).toBe(false);
+    expect(h.faults).toEqual([]);
+  } finally { await h.handle.close(); }
+});
+
+test.each([false, true])('an uncut length retry checks whether its pending cut was committed (saved=%s)', async saved => {
+  const h = await fixture();
+  try {
+    await h.emit('before_agent_start', { messageType: 'user', prompt: h.prompt, systemPrompt: h.ctx.getSystemPrompt(), systemPromptOptions: { selectedTools: [] } });
+    await h.emit('agent_start');
+    h.manager.appendMessage({ role: 'user', content: h.prompt, timestamp: 123 });
+    const message = { role: 'assistant' as const, content: [{ type: 'thinking' as const, thinking: 'unfinished' }],
+      api: h.ctx.model!.api, provider: h.ctx.model!.provider, model: h.ctx.model!.id, stopReason: 'length' as const, timestamp: 124,
+      usage: { input: 0, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    const messageEntryId = h.manager.appendMessage(message);
+    const context = { contextMessages: h.manager.buildSessionProjection().messages, pendingMessages: [], canContinue: true };
+    const retry = await h.emit('turn_end', { message, messageEntryId, entries: [], toolResults: [], outcome: 'completed', context });
+    expect(retry.continue).toBe(true);
+    expect(retry.entries.find((entry: any) => entry.customType === 'pi-tuck-capacity')?.data.cut).toBe(false);
+    const cut = retry.entries.find((entry: any) => entry.type === 'compaction');
+    expect(cut).toBeDefined();
+    if (saved) h.manager.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);
+    // A failed native boundary may have saved the cut before failing on a later draft.
+    await h.emit('agent_before_settle', { outcome: 'error', entries: [], context });
+    if (saved) expect(h.faults).toEqual([]);
+    else expect(h.faults.map(String).join(' ')).toContain('Native tool-loop boundary cut was not saved in the session file');
+  } finally { await h.handle.close(); }
+});
+
 test('pending request, semantic snapshot, executable tools, status and boundary save share one resolved view', async () => {
   const h = await fixture();
   try {

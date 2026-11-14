@@ -9,7 +9,7 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsMana
 import { installCompaction } from '../src/compaction';
 
 for (const kind of ['fit', 'conversation', 'tools', 'effective-override'] as const)
-test(`complete native request budget admits or rejects before effects: ${kind}`, async () => {
+test(`disabled compaction leaves native requests and effects alone: ${kind}`, async () => {
  const dir=mkdtempSync(join(tmpdir(),'pi-request-budget-'));let session:AgentSession|undefined;
  const network=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>{throw Error('Unexpected HTTP');});
  try {
@@ -37,8 +37,7 @@ test(`complete native request budget admits or rejects before effects: ${kind}`,
    const stream=createAssistantMessageEventStream();stream.push(aborted?{type:'error',reason:'aborted',error:message}:{type:'done',reason:message.stopReason==='toolUse'?'toolUse':'stop',message});stream.end(message);return stream;
   };
   await session.prompt('Continue');
-  if(kind==='fit'||kind==='effective-override'){expect(faults).toEqual([]);expect(requests).toBe(2);expect(effects).toBe(1);}
-  else {expect(faults.join(' ')).toContain('Complete Pi context');expect(requests).toBe(0);expect(effects).toBe(0);expect(permitted).toBe(false);}
+  expect(faults).toEqual([]);expect(requests).toBe(2);expect(effects).toBe(1);expect(permitted).toBe(true);
   expect(network).not.toHaveBeenCalled();expect(JSON.stringify(manager.getEntries().find(e=>e.id===sourceId))).toBe(original);
  } finally {if(session){await session.abort();session.dispose();}network.mockRestore();rmSync(dir,{recursive:true,force:true});}
 });
