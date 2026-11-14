@@ -513,7 +513,8 @@ export async function harness(options: Options) {
    const request = options.piRequestPath ? await providerRequest(_m, _ctx, streamOptions) : undefined;
    if (request) state.requestOptions.push(request);
    state.requestStates.push(createHash('sha256').update(JSON.stringify({ ..._ctx, messages: _ctx.messages.filter(m => m.role !== 'assistant' || !['error', 'aborted'].includes(m.stopReason)) }, (key, value) => key === 'timestamp' ? undefined : value)).digest('hex'));
-   if (options.fingerprintWire) state.requestFingerprints.push(createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' ? undefined : value).replaceAll(dir, '<session>')).digest('hex'));
+   // A tool result's durationMs is the tool's wall time on this run, which pi-ai never sends to the provider: left out, as timestamps are.
+  if (options.fingerprintWire) state.requestFingerprints.push(createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' || key === 'durationMs' ? undefined : value).replaceAll(dir, '<session>')).digest('hex'));
    state.requests++;
    if (state.requests === 2) state.delivered = JSON.stringify(_ctx.messages).includes(note);
    options.onRequest?.(state.requests, { setHost: tokens => { host = tokens; }, pi: extension! });
