@@ -1,6 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { privateIncidentDirectory } from './incident-fixture';
+import { rmSync } from 'node:fs';
 import { test, expect } from 'vitest';
 import { BAND_EXACT, EXACT_RESERVE, HOST, ROOM_EXACT, WINDOW, harness, receiptOf, scenario } from './budget-fixture';
 
@@ -158,7 +157,7 @@ test("when the mandatory input alone no longer fits, Pi's threshold call is decl
 });
 
 test("a declined threshold ask does not end an operator's running incident recording", async () => {
- const directory = mkdtempSync(join(tmpdir(), 'pi-recorder-'));
+ const directory = await privateIncidentDirectory('pi-recorder-');
  const h = await harness({ ...base, at: 'tool', complete: 225000, fresh: 215000, outputTokens: 50000, compaction: { ...EXACT_RESERVE, diagnostics: { directory } } });
  try {
   await h.session.prompt('/tuck-incident on');

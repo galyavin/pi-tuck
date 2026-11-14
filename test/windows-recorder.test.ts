@@ -1,16 +1,22 @@
+import { privateIncidentDirectory } from './incident-fixture';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { IncidentRecorder } from '../src/diagnostics';
-import { assertWindowsPrivateStorage } from '../src/windows-private-storage';
+import { assertWindowsPrivateStorage, createPrivateDirectory, protectWindowsIncidentFile } from '../src/windows-private-storage';
 
-vi.mock('../src/windows-private-storage', () => ({ assertWindowsPrivateStorage: vi.fn() }));
+vi.mock('../src/windows-private-storage', async importOriginal => {
+ const original = await importOriginal<typeof import('../src/windows-private-storage')>();
+ return { ...original, assertWindowsPrivateStorage: vi.fn(), protectWindowsIncidentFile: vi.fn(), createPrivateDirectory: vi.fn(original.createPrivateDirectory) };
+});
 const acl = vi.mocked(assertWindowsPrivateStorage);
 let directory: string;
-beforeEach(() => {
- directory = mkdtempSync(join(tmpdir(), 'pi-incident-windows-'));
+beforeEach(async () => {
+ directory = await privateIncidentDirectory('pi-incident-windows-');
  acl.mockReset().mockResolvedValue();
+ vi.mocked(protectWindowsIncidentFile).mockReset().mockResolvedValue();
+ vi.mocked(createPrivateDirectory).mockClear();
  vi.stubGlobal('process', new Proxy(process, { get: (target, key) => key === 'platform' ? 'win32' : Reflect.get(target, key) }));
 });
 afterEach(() => { vi.unstubAllGlobals(); rmSync(directory, { recursive: true, force: true }); });
@@ -22,6 +28,8 @@ test('Windows recording writes start, content and terminal across pumps and can 
  expect(recorder.status().state).toBe('recording');
  const file = recorder.status().path!;
  expect(acl.mock.calls.slice(0, 2)).toEqual([[[directory]], [[file]]]);
+ expect(createPrivateDirectory).not.toHaveBeenCalled();
+ expect(protectWindowsIncidentFile).toHaveBeenCalledExactlyOnceWith(file);
  recorder.capture('example', 'test', { value: 'retained bytes' });
  await recorder.flush();
  recorder.stop('operator-cancelled');
@@ -81,4 +89,51 @@ test('Windows retention checks every old incident ACL before deleting any file',
  expect(acl).toHaveBeenCalledWith([directory, old]);
  expect(recorder.status().state).toBe('storage-failed-gap');
  expect(readFileSync(old, 'utf8')).toBe('old incident');
+});
+
+test('Windows recording creates missing storage privately before checking it', async () => {
+ const destination = join(directory, 'missing', 'incidents');
+ vi.mocked(createPrivateDirectory).mockImplementationOnce(async path => { await mkdir(path, { recursive: true, mode: 0o700 }); });
+ const recorder = new IncidentRecorder({ directory: destination });
+ try {
+  recorder.start(join(directory, 'project'), false, () => {});
+  await recorder.flush();
+  expect(recorder.status().state).toBe('recording');
+  expect(createPrivateDirectory).toHaveBeenCalledExactlyOnceWith(destination);
+  expect(acl).toHaveBeenCalledWith([destination]);
+  expect(readFileSync(recorder.status().path!, 'utf8')).toContain('"kind":"start"');
+ } finally { recorder.stop('test-complete'); await recorder.flush(); }
+});
+
+test('Windows private-directory creation failure leaves a gap before creating an incident', async () => {
+ const destination = join(directory, 'missing');
+ vi.mocked(createPrivateDirectory).mockRejectedValueOnce(new Error('cannot set private DACL'));
+ const recorder = new IncidentRecorder({ directory: destination });
+ recorder.start(join(directory, 'project'), false, () => {});
+ await recorder.flush();
+ expect(recorder.status().state).toBe('storage-failed-gap');
+ expect(acl).not.toHaveBeenCalled();
+ expect(readdirSync(directory)).toEqual([]);
+});
+
+test('Windows incident content waits for file protection and fails closed if protection fails', async () => {
+ let rejectProtection!: (error: Error) => void;
+ let protecting!: () => void;
+ const entered = new Promise<void>(resolve => { protecting = resolve; });
+ vi.mocked(protectWindowsIncidentFile).mockImplementationOnce(() => {
+  protecting();
+  return new Promise<void>((_resolve, reject) => { rejectProtection = reject; });
+ });
+ const recorder = new IncidentRecorder({ directory });
+ recorder.start(join(directory, 'project'), false, () => {});
+ recorder.capture('proposal', 'test', { content: 'must stay private' });
+ try {
+  await entered;
+  expect(readFileSync(recorder.status().path!, 'utf8')).toBe('');
+  expect(acl.mock.calls).toEqual([[[directory]]]);
+ } finally { rejectProtection(new Error('file protection refused')); await recorder.flush(); }
+ expect(recorder.status().state).toBe('storage-failed-gap');
+ const file = recorder.status().path!;
+ expect(readFileSync(file, 'utf8')).toBe('');
+ rmSync(file);
 });

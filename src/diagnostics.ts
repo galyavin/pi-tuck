@@ -6,7 +6,7 @@ import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:pat
 import { homedir } from 'node:os';
 import { createRecall, type RecallPolicy } from './recall.js';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
-import { assertWindowsPrivateStorage } from './windows-private-storage.js';
+import { assertWindowsPrivateStorage, createPrivateDirectory, protectWindowsIncidentFile } from './windows-private-storage.js';
 export const DIAGNOSTIC_BUILD = BUILD_ID;
 export interface Receipt { id: string; build: string; reason: string; selectedView: string; boundary: string; settings: { draftReservedTokens: number; contextWindow: number; responseReserveTokens?: number; hostInputTokens?: number; mandatoryInputTokens?: number; target?: 'band' | 'room'; triggerMarginTokens?: number; cutAt?: number; calibrationFactor?: number; calibrationWindow?: number[]; calibrationIdentity?: string; learnedContextWindow?: number; activeInputCeilingTokens?: number | null }; before: { value: number; unit: 'estimated-input-tokens'; scope: 'native-preparation' | 'public-conversation' }; after: { value: number | null; unit: 'estimated-input-tokens'; scope: 'draft-preview' }; }
 export function attachReceipt<T extends { details?: unknown; firstKeptEntryId: string; tokensBefore: number }>(draft: T, reason: string, reserveTokens: number, contextWindow: number, resolved: Partial<Receipt['settings']> = {}): T & { details: Record<string, unknown> & { diagnosticReceipt: Receipt } } {
@@ -127,7 +127,8 @@ export class IncidentRecorder {
    const physicalProject = await realpath(this.projectDirectory).catch(() => this.projectDirectory);
    const rel = relative(physicalProject, physicalDirectory);
    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error('Recorder directory resolves inside project');
-   await mkdir(this.directory, { recursive: true, mode: 0o700 });
+   if (!windows) await mkdir(this.directory, { recursive: true, mode: 0o700 });
+   else if (missing.length) await createPrivateDirectory(this.directory);
    const directoryStat = await lstat(this.directory);
    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || !windows && ((directoryStat.mode & 0o077) !== 0 || directoryStat.uid !== process.getuid?.())) throw new Error('Recorder directory ownership/permissions');
    const names: { name: string; time: number }[] = [];
@@ -139,6 +140,7 @@ export class IncidentRecorder {
     // O_NOFOLLOW is unavailable on Windows. Exclusive creation rejects an existing link/file,
     // and the same handle is retained until recording stops; subsequent pumps never reopen the path.
     this.windowsFile = await open(this.path, 'wx', 0o600);
+    await protectWindowsIncidentFile(this.path);
     await assertWindowsPrivateStorage([this.path]);
    }
    while (this.queue.length) {
