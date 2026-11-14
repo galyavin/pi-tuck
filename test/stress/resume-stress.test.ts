@@ -1,4 +1,4 @@
-/** Cold file-backed resume on the settings grid. No hosted provider or semantic worker is started.
+/** Cold file-backed resume on the settings grid. No hosted provider is started.
  * STRESS=1 STRESS_STRICT=1 npx vitest run test/stress/resume-stress.test.ts --testTimeout=1800000
  * RESUME_ONLY narrows this suite by shape name; STRESS_CELLS uses the original sampled-grid size.
  * Reports include unreachable checkpoints rather than substituting a different point in the script.

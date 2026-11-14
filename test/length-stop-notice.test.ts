@@ -7,7 +7,7 @@ import {installCompaction} from '../src/compaction';
 async function fixture(){
  const handlers=new Map<string,((event:any,ctx:any)=>unknown)[]>();
  const pi={registerCommand:()=>{},registerTool:()=>{},on:(name:string,h:any)=>{handlers.set(name,[...(handlers.get(name)??[]),h]);return ()=>{};},getActiveTools:()=>[],getAllTools:()=>[]} as unknown as ExtensionAPI;
- await installCompaction(pi,{search:false});
+ await installCompaction(pi,{});
  const notices:string[]=[],ctx={ui:{notify:(m:string)=>notices.push(m)},sessionManager:{getBranch:()=>[],getEntries:()=>[]},hasUI:true} as any;
  const fire=async(name:string,event:any={})=>{for(const h of handlers.get(name)??[]){try{await h(event,ctx);}catch{/* other handlers need a fuller context */}}};
  const reply=(stopReason:string)=>fire('message_end',{message:{role:'assistant',stopReason,content:[]}});
@@ -27,7 +27,7 @@ test('a later reply in the same run that ends normally clears it; a normal run s
 test('with no UI (pi -p) the notice goes to stderr', async()=>{
  const handlers=new Map<string,((event:any,ctx:any)=>unknown)[]>();
  const pi={registerCommand:()=>{},registerTool:()=>{},on:(name:string,h:any)=>{handlers.set(name,[...(handlers.get(name)??[]),h]);return ()=>{};},getActiveTools:()=>[],getAllTools:()=>[]} as unknown as ExtensionAPI;
- await installCompaction(pi,{search:false});
+ await installCompaction(pi,{});
  const ctx={ui:{notify:()=>{throw new Error('no UI');}},sessionManager:{getBranch:()=>[],getEntries:()=>[]},hasUI:false} as any;
  const fire=async(name:string,event:any={})=>{for(const h of handlers.get(name)??[]){try{await h(event,ctx);}catch{}}};
  const write=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);

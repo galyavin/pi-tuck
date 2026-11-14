@@ -200,7 +200,7 @@ export interface Options {
  /** The usage request N reports, overriding the density and the other usage options: a count that jumps for one reply, no input at all beside a
   * large cache read, or cached tokens counted twice. */
  usageAt?: (request: number, measured: number) => Partial<Usage>;
- /** Every tool a live session carries is active: Pi's read, bash, edit and write, and pi-tuck's own two, beside the fixture's `effect`. */
+ /** Every tool a live session carries is active: Pi's read, bash, edit and write, and pi-tuck's recall tool, beside the fixture's `effect`. */
  liveTools?: boolean;
 }
 
@@ -360,7 +360,7 @@ export async function harness(options: Options) {
   }] });
   let loader = makeLoader();
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
+  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
    name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
    execute: async () => {
     state.effects++;

@@ -13,9 +13,9 @@ export function inspectIncident(records: IncidentRecord[]) {
   const draft = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: i.tokensBefore!, previousSummary: i.previousSummary, operatorManual: i.operatorManual }, ctx, i.reserve!, messages => measurableConversationTokens(messages, ctx), {}, i.retainCurrentInput);
   const proposal = records.find(r => r.kind === 'proposal' && (r.data as { details?: { diagnosticReceipt?: { id?: string } } })?.details?.diagnosticReceipt?.id === i.receiptId)?.data as { summary?: string; firstKeptEntryId?: string } | undefined;
   const matchesRecordedProposal = proposal && draft.compaction ? proposal.summary === draft.compaction.summary && proposal.firstKeptEntryId === draft.compaction.firstKeptEntryId : null;
-  return { mode: 'deterministic-selection-replay', draft, receiptId: i.receiptId ?? null, matchesRecordedProposal, notice: 'Supplied permitted originals and resolved state only; no tools, inference, semantic fidelity, persistence or transmission claim.' };
+  return { mode: 'deterministic-selection-replay', draft, receiptId: i.receiptId ?? null, matchesRecordedProposal, notice: 'Supplied permitted originals and resolved state only; no tools, inference, meaning preservation, persistence or transmission claim.' };
  });
- return { build: DIAGNOSTIC_BUILD, records: records.length, results, notice: 'Prepared context is a public hook observation, not wire or provider history. Structural redaction does not detect all semantic secrets.' };
+ return { build: DIAGNOSTIC_BUILD, records: records.length, results, notice: 'Prepared context is a public hook observation, not wire or provider history. Structural redaction does not detect all secrets conveyed by meaning.' };
 }
 export function readableIncident(records: IncidentRecord[]): string {
  return '# Compaction incident\n\n' + JSON.stringify(inspectIncident(records), null, 2) + '\n\n' + records.map(r => `## ${r.kind} (${r.scope})${r.partial ? ' — PARTIAL' : ''}\n\n${JSON.stringify(r.data, null, 2)}`).join('\n\n');

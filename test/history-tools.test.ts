@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Type } from 'typebox';
 import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage, type Context } from '@earendil-works/pi-ai';
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager, SettingsManager, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installCompaction, type CompactionOptions } from '../src/compaction';
 import * as historyTools from '../src/history-tools';
 import { serializeTranscript } from '../src/tuck/core/transcript';
@@ -12,13 +12,13 @@ import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { scriptedModelRuntime } from './model-fixture';
 import { harness, receiptOf } from './budget-fixture';
 
-const own = ['tuck_recall', 'tuck_search'];
+const own = ['tuck_recall'];
 const names = (ctx: Context) => getCurrentTools(ctx.messages).map(tool => tool.name);
 const summary = serializeTranscript([{ kind: 'omission', reason: 'Earlier conversation is out of view.' }]) + DIALOGUE_SUFFIX;
 const cut = (manager: SessionManager, native = false) => manager.appendCompaction(summary, '', 10000,
     native ? { readFiles: [], modifiedFiles: [] } : { compactor: 'pi-tuck', version: 2, adapter: 'standalone' }, !native);
 
-async function fixture(dir: string, manager: SessionManager, installed = true, search = true, options: CompactionOptions = {}, result = 'foreign result') {
+async function fixture(dir: string, manager: SessionManager, installed = true, options: CompactionOptions = {}, result = 'foreign result') {
     const runtime = await scriptedModelRuntime({ contextWindow: 32768, maxTokens: 4096 });
     const model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
     const settings = options.settings ?? SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 4096, keepRecentTokens: 0 } });
@@ -29,7 +29,7 @@ async function fixture(dir: string, manager: SessionManager, installed = true, s
             pi = api;
             api.registerTool({ name: 'foreign', label: 'Foreign', description: 'Another extension tool.', parameters: Type.Object({}),
                 execute: async () => ({ content: [{ type: 'text', text: result }], details: {} }) });
-            if (installed) handle = await installCompaction(api, { search, settings, cutAt: 1, fail: error => faults.push(String(error)), ...options });
+            if (installed) handle = await installCompaction(api, { settings, cutAt: 1, fail: error => faults.push(String(error)), ...options });
         }] });
     await loader.reload();
     const { session } = await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: manager,
@@ -119,7 +119,7 @@ test(`cut positions and complete post-cut requests equal the always-declared too
             // messages and settings are otherwise identical, so this detects a split between trigger and post-cut accounting.
             const apply = alwaysDeclared ? vi.spyOn(historyTools, 'applyHistoryTools').mockImplementation(() => {}) : undefined;
             const names = alwaysDeclared ? vi.spyOn(historyTools, 'historyToolNames').mockImplementation((pi, selected) => fullNames(pi, selected, true)) : undefined;
-            const f = await fixture(dir, SessionManager.inMemory(dir, undefined, seed && structuredClone(seed)), true, true,
+            const f = await fixture(dir, SessionManager.inMemory(dir, undefined, seed && structuredClone(seed)), true,
                 { cutAt, requestReserve: () => ({ response: 16384, responseExact: true }),
                     settings: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 0 } }) },
                 'Observed result. '.repeat(450));
@@ -156,8 +156,8 @@ test(`cut positions and complete post-cut requests equal the always-declared too
     } finally { vi.useRealTimers(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-for (const native of [false, true]) for (const search of [false, true])
-test(`resume derives tools from the branch marker (native=${native}, search=${search})`, async () => {
+for (const native of [false, true])
+test(`resume derives tools from the branch marker (native=${native})`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tuck-tools-resume-'));
     let f: Awaited<ReturnType<typeof fixture>> | undefined;
     try {
@@ -166,9 +166,9 @@ test(`resume derives tools from the branch marker (native=${native}, search=${se
         // An assistant flushes Pi's lazily-created session file.
         f = await fixture(dir, manager, false); await f.session.prompt('Finish old task'); await f.close(); f = undefined;
         cut(manager, native);
-        f = await fixture(dir, SessionManager.open(manager.getSessionFile()!, dir), true, search);
+        f = await fixture(dir, SessionManager.open(manager.getSessionFile()!, dir), true);
         await f.session.prompt('Resume');
-        expect(names(f.requests[0]!).filter(name => own.includes(name))).toEqual(native ? [] : search ? own : own.slice(0, 1));
+        expect(names(f.requests[0]!).filter(name => own.includes(name))).toEqual(native ? [] : own);
         expect(f.faults).toEqual([]);
     } finally { await f?.close(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -208,7 +208,7 @@ test('host and other extensions keep their active tools, schemas and order on bo
     const dir = mkdtempSync(join(tmpdir(), 'tuck-tools-others-')), manager = SessionManager.inMemory(dir);
     const f = await fixture(dir, manager);
     try {
-        f.pi.setActiveTools(['omega', 'tuck_recall', 'foreign', 'alpha', 'tuck_search']);
+        f.pi.setActiveTools(['omega', 'tuck_recall', 'foreign', 'alpha']);
         // Pi 1.5 preserves the prior order when a caller asks to reorder tools. Use the host's actual set as the contract.
         const host = f.pi.getActiveTools().filter(name => !own.includes(name));
         await f.session.prompt('No cut');
@@ -238,7 +238,12 @@ test('the first request carrying an unsaved prompt cut declares tools and reserv
         expect(requests[0]!.tools).toEqual(expect.arrayContaining(own));
         const receipt = receiptOf(result.entries[0]!);
         expect(receipt.reason).toBe('prompt');
-        expect(receipt.mandatoryInputTokens).toBeGreaterThan(h.mandatory + h.promptTokens() + 1000);
+        const schemas = h.extension().getAllTools().filter(tool => own.includes(tool.name))
+            .map(({ name, description, parameters }) => ({ name, description, parameters }));
+        const system = { role: 'system' as const, content: h.session.systemPrompt, timestamp: 0 };
+        const schemaTokens = estimateTokens({ ...system, toolsAdded: schemas }) - estimateTokens(system);
+        expect(schemaTokens).toBeGreaterThan(0);
+        expect(receipt.mandatoryInputTokens).toBeGreaterThanOrEqual(h.mandatory + h.promptTokens() + schemaTokens - 1);
         expect(result.guard[0]).toBeLessThan(144000);
     } finally { await h.cleanup(); }
 });
@@ -298,7 +303,7 @@ test('an in-loop prompt cut declares tools in its first request, before a bounda
 });
 
 test('a first manual cut is refused if the newly declared history schemas would put its protected input over the room', async () => {
-    const h = await harness({ at: 'tool', complete: 31300, history: 1000, fresh: 15000, host: 100, system: 1500, liveTools: true,
+    const h = await harness({ at: 'tool', complete: 31300, history: 1000, fresh: 14000, host: 100, system: 1500, liveTools: true,
         limits: { contextWindow: 32768, maxTokens: 16384 }, reserveTokens: 16384, cutAtDefault: true,
         compaction: { requestReserve: () => ({ response: 16384, responseExact: true }) }, replyTokens: request => request === 1 ? 1000 : 0 });
     try {

@@ -5,7 +5,7 @@ export interface KeywordMatcher {
   test(text: string): boolean;
   /** Stateless first match at or after fromIndex, in UTF-16 source coordinates. */
   find(text: string, fromIndex?: number): { index: number; text: string } | undefined;
-  /** Equality under the exact matcher semantics, rather than case folding. */
+  /** Equality under the exact matcher rules, rather than case folding. */
   equivalent(other: KeywordMatcher): boolean;
 }
 
@@ -51,7 +51,7 @@ const matcher = (term: string): KeywordMatcher => {
   };
 };
 
-/** Prepare the natural-keyword semantics shared by ranking and localization. */
+/** Prepare the natural-keyword rules shared by ranking and localization. */
 export const prepareKeywordQuery = (query: string): PreparedKeywordQuery => {
   const raw = query.trim().split(/\s+/).filter(Boolean);
   const meaningful = raw.filter((term) => !STOPWORDS.has(term.toLowerCase()) && term.length > 1);

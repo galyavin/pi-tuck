@@ -2,7 +2,7 @@ import { getCurrentTools } from "@earendil-works/pi-ai";
 import { convertToLlm, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Messages, ToolShape } from "./budget.js";
 
-const own = (name: string) => name === "tuck_recall" || name === "tuck_search";
+const own = (name: string) => name === "tuck_recall";
 /** Native Pi compactions do not make pi-tuck history available. No session-wide activation state. */
 export const hasTuckCut = (branch: readonly { type: string; details?: unknown }[]): boolean => branch.some(entry =>
     entry.type === "compaction" && (entry.details as { compactor?: unknown } | null)?.compactor === "pi-tuck");
@@ -11,7 +11,7 @@ export const hasTuckCut = (branch: readonly { type: string; details?: unknown }[
 export function historyToolNames(pi: ExtensionAPI, names: readonly string[], enabled: boolean): string[] {
     if (!enabled) return names.filter(name => !own(name));
     const registered = new Set(pi.getAllTools().map(tool => tool.name));
-    return [...names, ...["tuck_recall", "tuck_search"].filter(name => registered.has(name) && !names.includes(name))];
+    return [...names, ...["tuck_recall"].filter(name => registered.has(name) && !names.includes(name))];
 }
 
 export function applyHistoryTools(pi: ExtensionAPI, enabled: boolean): void {

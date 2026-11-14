@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
-const SHIPPED = ['index.ts', 'scripts/eg2-runtime.py', 'scripts/provision-eg2.py', 'scripts/semantic-worker.py'];
+const SHIPPED = ['index.ts'];
 
 export function sourceId(root) {
 	const hash = createHash('sha256');

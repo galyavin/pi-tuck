@@ -69,7 +69,8 @@ export const splitSummary = (summary: string): { body: string; closing: string; 
   if (at < 0) return undefined;
   // A summary saved before the rename keeps its records byte for byte (their lengths are checked); only its closing is pointed at the
   // tools the model has now.
-  const closing = header === LEGACY_TRANSCRIPT_HEADER ? summary.slice(at).replaceAll("vcc_recall", "tuck_recall").replaceAll("vcc_search", "tuck_search") : summary.slice(at);
+  const closing = summary.slice(at).replaceAll("vcc_recall", "tuck_recall").replaceAll("vcc_search", "tuck_recall")
+    .replaceAll("tuck_search", "tuck_recall").replaceAll("tuck_recall or tuck_recall", "tuck_recall");
   return { body: summary.slice(header.length + 1, at), closing, version: header === TRANSCRIPT_HEADER ? 2 : 1 };
 };
 const LEGACY_RECEIPT_RANGE_NOTICE = RECEIPT_RANGE_NOTICE.replace("tuck_recall", "vcc_recall");

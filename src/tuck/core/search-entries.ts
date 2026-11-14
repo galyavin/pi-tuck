@@ -53,7 +53,7 @@ const countMatches = (hay: string, terms: readonly KeywordMatcher[]): number =>
 const BM25_K = 1.2;
 const BM25_B = 0.75;
 
-/** Count non-overlapping literal occurrences with the prepared matcher's semantics. */
+/** Count non-overlapping literal occurrences with the prepared matcher's rules. */
 const termFreq = (text: string, matcher: KeywordMatcher): number => {
   let count = 0, offset = 0;
   for (;;) {
@@ -186,7 +186,7 @@ const fullText = (msg: Message): string => {
  * stopword filtering and case/duplicate normalization (see the
  * `effectiveTermCount >= 2` gate below `searchEntriesDetailed` uses before
  * calling `applyRelativeFloor`). Distinct, not raw count: "auth auth" or
- * "Auth AUTH" is semantically a single-term query and must bypass the floor
+ * "Auth AUTH" is a single-term query after normalization and must bypass the floor
  * like any other single term — repeating or casing a word doesn't turn it
  * into the multi-term OR-tail noise this floor targets. The normalization is
  * gate-only; it doesn't change `terms` or the BM25 scoring itself, which
@@ -292,7 +292,7 @@ export const searchEntriesDetailed = (
   // apply the hard cap.
   scored.sort((a, b) => b.score - a.score);
   // Gate on DISTINCT normalized terms, not raw term count: "auth auth" or
-  // "Auth AUTH" is semantically a single-term query and must bypass the
+  // "Auth AUTH" is a single-term query after normalization and must bypass the
   // floor like any other single term — repeating/casing a word doesn't turn
   // it into the multi-term OR-tail noise this floor targets. This is a
   // gate-only normalization; it does not change `terms` itself or the BM25

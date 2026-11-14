@@ -1,6 +1,6 @@
 import { SessionManager, type ExtensionContext, type SessionEntry, type SessionBoundaryDraft } from '@earendil-works/pi-coding-agent';
 import { hasTuckCut } from './history-tools.js';
-import { viewStart } from './semantic-recall.js';
+import { viewStart } from './view-start.js';
 import { textOf } from './tuck/core/content.js';
 import type { Clip } from './clip.js';
 
@@ -18,7 +18,7 @@ export class PendingCut {
     take() { const cut = this.cut; this.clear(); return cut; }
     view(ctx: Context, entries: readonly SessionBoundaryDraft[] = []): CutView {
         const live = ctx.sessionManager, leaf = live.getLeafId?.(), held = this.preview;
-        // Native entries are append-only; a leaf move invalidates both the saved and pending views, as in the eligibility cache.
+        // Native entries are append-only; a leaf move invalidates both the saved and pending views.
         if (!entries.length && leaf !== undefined && held && held.manager === live && held.cwd === ctx.cwd && held.leaf === leaf) return held.view;
         const branch = live.getBranch(), cut = this.cut;
         const remember = (view: CutView) => {

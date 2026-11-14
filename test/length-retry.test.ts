@@ -116,5 +116,5 @@ test('/tuck counts retry receipts on the current branch', () => {
  expect(statusText({ version: 'test', active: true, branch: [
   { type: 'custom', customType: 'pi-tuck-capacity', data: { kind: 'retry' } },
   { type: 'custom', customType: 'pi-tuck-capacity', data: { kind: 'above-room' } },
- ], cutAt: undefined, search: false, semantic: { state: 'disabled', lastError: null } })).toContain('Retries: 1 after thinking-only length stops in this session.');
+ ], cutAt: undefined })).toContain('Retries: 1 after thinking-only length stops in this session.');
 });

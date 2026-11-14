@@ -5,18 +5,16 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { harness } from './budget-fixture';
-import { SEMANTIC_SETUP_TRANSITIONS, type SemanticSetup } from '../src/semantic-recall';
 
 // Only Pi's public APIs and the existing scripted-provider fixture are used here.
 // Request/view expectations do not use receipts/details or pi-tuck's planner. The
 // additional impossible-state checks observe a read-only compactor snapshot.
 export type Event = {
-  kind: 'prompt' | 'handled' | 'custom' | 'tools' | 'tree' | 'new' | 'compact' | 'abort' | 'semantic' | 'resume' | 'model' | 'refusal';
+  kind: 'prompt' | 'handled' | 'custom' | 'tools' | 'tree' | 'new' | 'compact' | 'abort' | 'resume' | 'model' | 'refusal';
   tokens?: number;
   rounds?: number;
   resultTokens?: number;
   target?: number;
-  enabled?: boolean;
   switched?: boolean;
   scenario?: 'handled-custom' | 'handled-tree-custom';
 };
@@ -25,14 +23,14 @@ type View = { kept: string | null; key: string | null; summary: string; summaryC
 type Request = { context: Context; view: View; hasSavedCut: boolean; search: string[]; searchCall?: string };
 export type Coverage = {
   requests: number; promptCuts: number; boundaryCuts: number; fresh: number; searches: number;
-  modelSearches: number; searchBoundaries: number; disabledSearches: number; noCutRequests: number; savedViews: number;
+  modelSearches: number; noCutRequests: number; savedViews: number;
   quotedPrompts: number;
-  aborts: number; handled: number; sessions: number; treeMoves: number; manual: number; semantic: number; semanticNotices: number;
+  aborts: number; handled: number; sessions: number; treeMoves: number; manual: number; status: number;
   resumes: number; modelSwitches: number; stateChecks: number; failedRuns: number; pendingResets: number;
 };
 export const emptyCoverage = (): Coverage => ({ requests: 0, promptCuts: 0, boundaryCuts: 0, fresh: 0,
-  searches: 0, modelSearches: 0, searchBoundaries: 0, disabledSearches: 0, noCutRequests: 0, savedViews: 0, quotedPrompts: 0,
-  aborts: 0, handled: 0, sessions: 0, treeMoves: 0, manual: 0, semantic: 0, semanticNotices: 0,
+  searches: 0, modelSearches: 0, noCutRequests: 0, savedViews: 0, quotedPrompts: 0,
+  aborts: 0, handled: 0, sessions: 0, treeMoves: 0, manual: 0, status: 0,
   resumes: 0, modelSwitches: 0, stateChecks: 0, failedRuns: 0, pendingResets: 0 });
 export const emptyAppendOnlyCoverage = () => ({ checked: 0,
   exempt: { new: 0, tree: 0, manual: 0, abort: 0, model: 0, resume: 0, summary: 0, historyTools: 0 } });
@@ -78,11 +76,11 @@ export function appendOnlyPair(previous: Context, current: Context): { exempt?: 
   if (b.summaries.length && JSON.stringify(a.summaries) !== JSON.stringify(b.summaries)) return { exempt: 'summary' };
   const changed = a.items.findIndex((item, index) => item !== b.items[index]);
   if (changed < 0) return {};
-  const history = ['tuck_recall', 'tuck_search'];
+  const history = ['tuck_recall'];
   // The first pending cut can declare history tools one request before its
   // summary appears. Exempt exactly that addition, preserving all other items.
   if (!a.summaries.length && !b.summaries.length && changed === 1
-    && !a.tools.some(tool => history.includes(tool.name)) && b.tools.length === a.tools.length + 2
+    && !a.tools.some(tool => history.includes(tool.name)) && b.tools.length === a.tools.length + history.length
     && JSON.stringify(b.tools.slice(0, a.tools.length)) === JSON.stringify(a.tools)
     && JSON.stringify(b.tools.slice(a.tools.length).map(tool => tool.name).sort()) === JSON.stringify(history)
     && a.items.every((item, index) => index === 1 || item === b.items[index])) return { exempt: 'historyTools' };
@@ -171,7 +169,7 @@ async function open(branch?: SessionEntry[], cwd?: string, selectedModel?: Model
     const manager = SessionManager.inMemory(cwd ?? h.dir, undefined, structuredClone(branch));
     session = (await createAgentSession({ cwd: cwd ?? h.dir, modelRuntime: h.session.modelRuntime,
       model: selectedModel ?? h.session.model, thinkingLevel: 'low', sessionManager: manager, settingsManager: h.settings,
-      resourceLoader: h.session.resourceLoader, tools: ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'], customTools: [{
+      resourceLoader: h.session.resourceLoader, tools: ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall'], customTools: [{
         name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
         execute: async () => ({ content: [{ type: 'text' as const, text: 'oracle unused effect' }], details: {} }),
       }] })).session;
@@ -213,8 +211,8 @@ function seedHistory(rig: Rig, epoch: string) {
 }
 
 async function search(rig: Rig, id: string): Promise<string[]> {
-  const tool = rig.session.extensionRunner.getToolDefinition('tuck_search');
-  if (!tool) throw new Error('Pi did not register tuck_search');
+  const tool = rig.session.extensionRunner.getToolDefinition('tuck_recall');
+  if (!tool) throw new Error('Pi did not register tuck_recall');
   const result = await tool.execute(id, { query: 'recorded context' }, undefined, undefined,
     rig.session.extensionRunner.createToolContext(id, undefined));
   return result.content.filter(c => c.type === 'text').map(c => c.text);
@@ -239,7 +237,7 @@ function provider(rig: Rig, event: Event, marker: string, requests: Request[], i
     const request: Request = { context, view: viewOf(context, branch),
       hasSavedCut: branch.some(entry => entry.type === 'compaction'), search: [] };
     requests.push(request);
-    if (inspectSearch && getCurrentTools(context.messages).some(tool => tool.name === 'tuck_search')) {
+    if (inspectSearch && getCurrentTools(context.messages).some(tool => tool.name === 'tuck_recall')) {
       request.search = await search(rig, `${marker}-observe-${round}`);
     }
     const stream = createAssistantMessageEventStream();
@@ -253,14 +251,14 @@ function provider(rig: Rig, event: Event, marker: string, requests: Request[], i
       return stream;
     }
     const toolRound = round < (event.rounds ?? 0);
-    // Use a real model-issued tuck_search as soon as it is declared. The other
+    // Use a real model-issued tuck_recall as soon as it is declared. The other
     // rounds exercise the harness's effect, producing large tool results.
-    const searchAvailable = getCurrentTools(context.messages).some(t => t.name === 'tuck_search');
-    const name = !searched && searchAvailable ? 'tuck_search' : 'effect';
-    if (toolRound && name === 'tuck_search') searched = true;
-    if (toolRound && name === 'tuck_search') request.searchCall = `${marker}-call-${round}`;
+    const searchAvailable = getCurrentTools(context.messages).some(t => t.name === 'tuck_recall');
+    const name = !searched && searchAvailable ? 'tuck_recall' : 'effect';
+    if (toolRound && name === 'tuck_recall') searched = true;
+    if (toolRound && name === 'tuck_recall') request.searchCall = `${marker}-call-${round}`;
     const message = rig.h.answer(toolRound
-      ? [{ type: 'toolCall', id: `${marker}-call-${round}`, name, arguments: name === 'tuck_search' ? { query: 'recorded context' } : {} }]
+      ? [{ type: 'toolCall', id: `${marker}-call-${round}`, name, arguments: name === 'tuck_recall' ? { query: 'recorded context' } : {} }]
       : [{ type: 'text', text: body(`${marker}-answer`, 500) }], toolRound ? 'toolUse' : 'stop');
     message.timestamp = Date.now();
     Object.assign(message, { provider: rig.session.model!.provider, api: rig.session.model!.api, model: rig.session.model!.id });
@@ -296,54 +294,28 @@ function compareFresh(actual: Request, expected: Request | undefined, report: (n
 }
 
 function checkSearch(request: Request, report: (n: number, message: string) => void, coverage: Coverage) {
-  const offered = getCurrentTools(request.context.messages).some(tool => tool.name === 'tuck_search');
+  const offered = getCurrentTools(request.context.messages).some(tool => tool.name === 'tuck_recall');
   const hasCut = request.hasSavedCut || Boolean(request.view.summary);
   if (!offered) {
-    if (hasCut) report(1, 'request has a saved or pending cut but does not offer tuck_search');
+    if (hasCut) report(1, 'request has a saved or pending cut but does not offer tuck_recall');
     else coverage.noCutRequests++;
     return;
   }
-  if (!hasCut) report(1, 'request offers tuck_search without a saved or pending cut');
+  if (!hasCut) report(1, 'request offers tuck_recall without a saved or pending cut');
   coverage.searches++;
-  const output = request.search.join('\n');
-  const pages = request.search.map(text => JSON.parse(text));
-  const semantic = pages.find(page => page.coverage);
-  // Disabled semantic search makes no out-of-view claim. Its declaration still
-  // has to agree with cut existence; request/saved-cut agreement is checked below.
-  if (semantic?.status === 'disabled') coverage.disabledSearches++;
-  if (/nothing is out of view|whole history is in (?:your|the) context/i.test(output) && request.view.summary) {
-    report(1, `tuck_search says nothing is out of view while the request starts at ${request.view.key}`);
-  }
-  // Compare a boundary when search supplies one. No synthetic boundary is
-  // required of the disabled response, which only promises keyword results.
-  const kept = pages.map(page => page.firstKeptEntryId ?? page.coverage?.firstKeptEntryId ?? page.coverage?.window?.firstKeptEntryId)
-    .find(id => typeof id === 'string');
-  if (kept !== undefined) {
-    coverage.searchBoundaries++;
-    if ((kept || null) !== request.view.kept) report(1, `tuck_search kept ${kept}, request kept ${request.view.kept}`);
+  for (const text of request.search) {
+    const page = JSON.parse(text);
+    if (!Array.isArray(page.hits)) report(1, 'tuck_recall did not return keyword hits');
   }
 }
 
-async function checkSemantic(rig: Rig, noticeStart: number, report: (n: number, message: string) => void, coverage: Coverage) {
+async function checkStatus(rig: Rig, report: (n: number, message: string) => void, coverage: Coverage) {
   const before = rig.h.notices.length;
   await rig.session.prompt('/tuck');
   const status = rig.h.notices.slice(before).find(line => line.startsWith('pi-tuck '));
   const line = status?.split('\n').find(line => line.startsWith('Search:'));
-  coverage.semantic++;
-  if (!line || !/off|not (?:set up|installed)|needs macOS/i.test(line)) report(5, `/tuck has no unavailable/off semantic state: ${line ?? status ?? '(no notice)'}`);
-  const state = (text: string) => /off in this session|"enabled":false/.test(text) ? 'off'
-    : /not (?:set up|installed)|needs macOS|setup failed|ENOENT/i.test(text) ? 'not installed' : null;
-  // Notices are checked at the time they are emitted, against that event's /tuck
-  // output. Older notices belong to older states and must not be compared later.
-  for (const notice of rig.h.notices.slice(noticeStart, before)) {
-    let local: { state?: string; enabled?: boolean } | undefined;
-    try { local = JSON.parse(notice).local; } catch { /* plain operator notice */ }
-    if ((!local && !/semantic recall/i.test(notice)) || notice.startsWith('pi-tuck ') && notice.includes('\nCuts:')) continue;
-    coverage.semanticNotices++;
-    const noticed = local ? local.enabled === false || local.state === 'disabled' ? 'off' : 'enabled' : state(notice);
-    const shown = state(line ?? '');
-    if (noticed && shown && noticed !== shown) report(5, `semantic notice says ${noticed}, /tuck says ${shown}: ${notice}`);
-  }
+  coverage.status++;
+  if (line !== 'Search: by keyword.') report(5, `/tuck has no keyword search state: ${line ?? status ?? '(no notice)'}`);
 }
 
 export async function runSequence(seed: number, events: Event[]) {
@@ -360,7 +332,6 @@ export async function runSequence(seed: number, events: Event[]) {
   const originalModel = rig.session.model!;
   const switchedModel = { ...originalModel, provider: 'sequence-provider', api: 'openai-completions', id: 'sequence-model' };
   const failedRuns = new WeakSet<object>();
-  const setupMoves: { from: SemanticSetup; to: SemanticSetup }[] = [];
   const checkState = (reset = false) => {
     const ctx = rig.session.extensionRunner.createToolContext('sequence-state', undefined);
     const handle = rig.h.compactionHandle(), state = handle.inspectState(ctx);
@@ -375,19 +346,8 @@ export async function runSequence(seed: number, events: Event[]) {
     const key = ctx.model ? JSON.stringify([ctx.model.provider, ctx.model.api, ctx.model.id]) : '';
     if (state.calibrationIdentity !== key) report(8, `calibration identity ${state.calibrationIdentity} differs from current model ${key}`);
     if (reset && state.pendingCut) report(9, 'pending cut survived a session/tree change');
-    // Validate every observed D4 move, including intermediate starting/failed states.
-    for (const { from, to } of setupMoves.splice(0)) if (!SEMANTIC_SETUP_TRANSITIONS[from].includes(to)) report(10, `unreachable D4 transition: ${from} -> ${to}`);
-    const semantic = handle.semanticRecall.status();
-    if (!(semantic.setup in SEMANTIC_SETUP_TRANSITIONS) || semantic.enabled !== (semantic.setup === 'ready') || semantic.setup === 'ready' && !semantic.configured)
-      report(10, `unreachable D4 setup: ${JSON.stringify(semantic)}`);
   };
   rig.h.observeExtension(pi => {
-    const semantic = rig.h.compactionHandle().semanticRecall, setSetup = semantic.setSetup.bind(semantic);
-    semantic.setSetup = (...args) => {
-      const from = semantic.status().setup;
-      setSetup(...args);
-      setupMoves.push({ from, to: semantic.status().setup });
-    };
     // Observe intermediate phases too: settlement erases ordinary failed runs.
     pi.on('input', () => { checkState(); });
     pi.on('before_agent_start', () => { checkState(); });
@@ -433,10 +393,9 @@ export async function runSequence(seed: number, events: Event[]) {
     for (at = 0; at < events.length; at++) {
       const event = events[at];
       const marker = `SEQ-${event.kind}-${seed}-${at}`;
-      trace.push(`${at + 1}:${event.kind === 'semantic' ? `semantic-${event.enabled ? 'on' : 'off'}` : event.kind}`
+      trace.push(`${at + 1}:${event.kind}`
         + `${event.tokens ? `(${event.tokens}t)` : ''}${event.rounds ? `/${event.rounds} rounds` : ''}`);
       const oldFaults = rig.h.faults.length;
-      const oldNotices = rig.h.notices.length;
       try {
         if (['new', 'tree', 'resume'].includes(event.kind)) {
           const ctx = rig.session.extensionRunner.createToolContext('sequence-before-reset', undefined);
@@ -478,8 +437,6 @@ export async function runSequence(seed: number, events: Event[]) {
         } else if (event.kind === 'compact') {
           try { await rig.session.compact(); coverage.manual++; boundaries.add('manual'); }
           catch (error) { if (!/Already compacted|Nothing to compact/i.test(String(error))) throw error; }
-        } else if (event.kind === 'semantic') {
-          await rig.session.prompt(`/tuck-semantic ${event.enabled ? 'on' : 'off'}`);
         } else if (event.kind === 'handled') {
           const requests: Request[] = [];
           provider(rig, event, marker, requests, false, observeRequest);
@@ -531,7 +488,7 @@ export async function runSequence(seed: number, events: Event[]) {
             const entry = rig.manager.getEntries().find(e => e.type === 'message' && e.message.role === 'toolResult'
               && e.message.toolCallId === request.searchCall);
             if (!entry || entry.type !== 'message' || entry.message.role !== 'toolResult' || entry.message.isError) {
-              report('harness', `model-issued tuck_search ${request.searchCall} did not return a successful result: ${entry?.type === 'message' && entry.message.role === 'toolResult' ? textOf(entry.message.content) : '(no result)'}`);
+              report('harness', `model-issued tuck_recall ${request.searchCall} did not return a successful result: ${entry?.type === 'message' && entry.message.role === 'toolResult' ? textOf(entry.message.content) : '(no result)'}`);
             } else {
               coverage.modelSearches++;
               checkSearch({ ...request, search: entry.message.content.filter(c => c.type === 'text').map(c => c.text) },
@@ -546,7 +503,7 @@ export async function runSequence(seed: number, events: Event[]) {
             cut.firstKeptEntryId ? `compaction's kept entry ${cut.firstKeptEntryId} is outside its own branch`
               : 'empty firstKeptEntryId (Pi compact-all sentinel) is not an entry on the compaction branch');
         }
-        await checkSemantic(rig, oldNotices, (n, m) => report(n, m), coverage);
+        await checkStatus(rig, (n, m) => report(n, m), coverage);
         for (const fault of rig.h.faults.slice(oldFaults)) if (event.kind !== 'refusal' || !/Incoming Pi prompt and response reserve cannot fit/.test(fault)) report('harness', fault);
       } catch (error) { report('harness', String(error)); }
       checkState(['new', 'tree', 'resume'].includes(event.kind));

@@ -7,18 +7,18 @@ import { harness } from './budget-fixture';
 
 // What the operator is told, as opposed to what the model sees: `/tuck` in words, and `/compact` with text after it.
 const ours = (tokensBefore: number, tokensAfter: number) => ({ type: 'compaction', tokensBefore, details: { compactor: 'pi-tuck', tokensAfter } });
-const base = { version: '9.9.9', active: true, branch: [], cutAt: undefined, search: true, semantic: { state: 'waiting' as const, lastError: null } };
+const base = { version: '9.9.9', active: true, branch: [], cutAt: undefined };
 
 test('the loaded version is the package version', () => {
  expect(LOADED_VERSION).toBe(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
 });
 
-test('/tuck before any cut, adaptive, on Apple silicon', () => {
+test('/tuck before any cut, adaptive', () => {
  expect(statusText(base)).toBe([
   'pi-tuck 9.9.9 (the version this session loaded; restart Pi after an update).',
   'Cuts: none yet in this session. The recall tools appear after the first cut.',
   'Cut point: adapts by itself.',
-  'Search: by meaning and keyword.',
+  'Search: by keyword.',
  ].join('\n'));
 });
 
@@ -28,13 +28,9 @@ test('/tuck counts pi-tuck cuts on the branch, gives the last one, and names Pi\
  expect(text).toContain("Pi's own compaction cut 1 time in this session.");
 });
 
-test('/tuck names a hand-set cut point, and search in words for each state', () => {
+test('/tuck names a hand-set cut point, and keyword search', () => {
  expect(statusText({ ...base, cutAt: 0.9 })).toContain('Cut point: fixed at cutAt 0.9 of the input room. Remove cutAt from pi-tuck.json to let it adapt.');
- expect(statusText({ ...base, search: false })).toContain('Search: by keyword (search by meaning needs macOS on Apple silicon).');
- expect(statusText({ ...base, semantic: { state: 'preparing', lastError: null } })).toContain('Search: by meaning and keyword; indexing history in the background.');
- expect(statusText({ ...base, semantic: { state: 'disabled', lastError: 'Semantic recall is being set up; word recall works meanwhile' } }))
-  .toContain('Search: by keyword; semantic recall is being set up; word recall works meanwhile.');
- expect(statusText({ ...base, semantic: { state: 'disabled', lastError: null } })).toContain('Search: by keyword; semantic recall is off in this session (/tuck-semantic on).');
+ expect(statusText(base)).toContain('Search: by keyword.');
  expect(statusText({ ...base, active: false })).toBe("pi-tuck 9.9.9 is loaded but inactive in this host; Pi's own compaction runs.");
 });
 
@@ -42,8 +38,9 @@ test('/tuck is a command, not a tool, and shows no JSON', async () => {
  const commands = new Map<string, (args: string, ctx: unknown) => Promise<void>>(), tools: string[] = [];
  const pi = { registerCommand: (name: string, c: { handler: (args: string, ctx: unknown) => Promise<void> }) => { commands.set(name, c.handler); },
   registerTool: (tool: { name: string }) => { tools.push(tool.name); }, on: () => () => {} } as unknown as ExtensionAPI;
- await installCompaction(pi, { search: false });
+ await installCompaction(pi);
  expect(tools.sort()).toEqual(['tuck_recall']);
+ expect(commands.has('tuck-semantic')).toBe(true);
  const notices: string[] = [];
  await commands.get('tuck')!('', { sessionManager: { getBranch: () => [ours(1000, 200)] }, ui: { notify: (message: string) => { notices.push(message); } } });
  expect(notices).toHaveLength(1);

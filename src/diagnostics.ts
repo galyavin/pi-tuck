@@ -21,7 +21,7 @@ export function findReceiptEntry(entries: SessionEntry[], id: string) { const ma
 export interface RecorderOptions { directory?: string; maxContentCharacters?: number; maxQueueCharacters?: number; maxFileBytes?: number; maxFiles?: number; durationMs?: number; write?: (path: string, content: string) => Promise<void>; }
 export interface IncidentRecord { kind: string; scope: string; data: unknown; partial: boolean; }
 /** A bounded clone. Budget is charged before every copy; forbidden fields are never traversed.
- * This is conservative structural/pattern redaction, not semantic secret detection. */
+ * This is conservative structural/pattern redaction, not detection of secrets conveyed by meaning. */
 export function boundedCopy(value: unknown, limit: number): { data: unknown; characters: number; partial: boolean } {
  let remaining = limit, partial = false;
  const spend = (n: number) => { if (n > remaining) { partial = true; return false; } remaining -= n; return true; };
@@ -80,7 +80,7 @@ export class IncidentRecorder {
   if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) { notify('Recorder directory must be outside project'); return; }
   this.projectDirectory = resolve(project); this.notify = notify; this.state = 'recording'; this.nextCut = nextCut; this.sawCut = false; this.requests = 0; this.response = false; this.total = 0; this.captureCalls = 0; this.inlineMs = 0; this.hookMs = 0; this.id = randomUUID(); this.path = join(this.directory, 'tuck-incident-' + this.id + '.jsonl');
   this.timer = setTimeout(() => this.stop(this.sawCut ? 'duration-exhausted' : 'no-cut-expired'), this.options.durationMs); this.timer.unref();
-  this.capture('start', 'operator-session-control', { id: this.id, build: DIAGNOSTIC_BUILD, nextCut, notice: 'Structural/pattern exclusions; partial replay possible. No semantic secret guarantee.' });
+  this.capture('start', 'operator-session-control', { id: this.id, build: DIAGNOSTIC_BUILD, nextCut, notice: 'Structural/pattern exclusions; partial replay possible. Secrets without recognizable patterns may remain.' });
  }
  measureInline<T>(operation: () => T): T { if (!this.enabled) return operation(); const started = performance.now(); try { return operation(); } finally { this.hookMs += performance.now() - started; } }
  capture(kind: string, scope: string, value: unknown, inheritedPartial = false) {

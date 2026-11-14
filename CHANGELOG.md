@@ -3,6 +3,21 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Removed
+
+- **Semantic search and `tuck_search`.** Semantic-unique hits were 18 of 1,935 events (0.9%), against a 15% bar. The local model,
+  setup and downloads, worker, indexes and background indexing are gone. `tuck_recall` still provides exact reads and keyword search.
+
+### Changed
+
+- **Old sessions still load, cut and recall.** Historical `tuck_search` and `vcc_search` calls remain readable; old private entries are
+  ignored. A leftover `semanticRecall` setting is ignored silently, and `/tuck` no longer reports semantic state.
+- **The old runtime folder can be deleted by hand.** If it exists, pi-tuck shows its absolute path and best-effort size once, with stderr
+  delivery when there is no UI. pi-tuck never deletes it. `/tuck-semantic` remains for one release to explain the removal and show the
+  folder's path, or say that no folder exists.
+
 ## [1.1.2] - 2026-11-14
 
 ### Changed

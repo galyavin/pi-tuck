@@ -295,7 +295,7 @@ test('filtering a summary by native omission keeps its format: v1 stays v1, v2 s
 	expect(parseRecords(splitSummary(filterOmittedSummary(v1Summary(V2_RECORDS), omitted))!.body)).toEqual(kept(V2_RECORDS));
 	// A summary saved before the rename: its records stay, its header is the v1 one, and its closing names the tools of today.
 	const closing = '\n\n---\n\nUse vcc_recall or vcc_search for anything else.';
-	expect(filterOmittedSummary(legacySummary(V1_RECORDS, closing), omitted)).toBe(v1Summary(kept(V1_RECORDS), '\n\n---\n\nUse tuck_recall or tuck_search for anything else.'));
+	expect(filterOmittedSummary(legacySummary(V1_RECORDS, closing), omitted)).toBe(v1Summary(kept(V1_RECORDS), '\n\n---\n\nUse tuck_recall for anything else.'));
 	for (const summary of [v1Summary(V1_RECORDS), serializeTranscript(V2_RECORDS) + DIALOGUE_SUFFIX]) expect(filterOmittedSummary(summary, new Set())).toBe(summary);
 	// Omitting every record leaves the header and the closing, in the summary's own format.
 	expect(filterOmittedSummary(serializeTranscript(V2_RECORDS.slice(0, 1)) + DIALOGUE_SUFFIX, new Set([0]))).toBe(`${TRANSCRIPT_HEADER}\n${DIALOGUE_SUFFIX}`);

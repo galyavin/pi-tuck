@@ -1291,7 +1291,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   });
  };
  const freshAssistant = (window: number, ratio: number, floor: number, reserve = SETUP_RESERVE): Cell => {
-  const { estimated, actual } = freshBand(window, ratio, floor);
+  const { estimated } = freshBand(window, ratio, floor);
   const size = Math.max(200, Math.round(estimated * 1.05));
   return base(`setup ${SETUP_SIZE} with a fresh assistant body of ${size} above the estimated room at window ${window} (factor ${ratio})`, {
    window, reserve, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: SETUP_SIZE, system: SETUP_SIZE - 500 - SETUP_SCHEMA, host: 500,

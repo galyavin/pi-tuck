@@ -2,7 +2,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { buildGlobalIndexById } from "./tuck/core/global-indices";
 import { createRecall, type RecallPolicy, type ReadableEntry } from "./recall";
 
-/** Select one original readable source. No filesystem, state, paging or semantic inference. */
+/** Select one original readable source. No filesystem, state, paging or inference about meaning. */
 export function exportSource(entries: readonly SessionEntry[], branch: readonly SessionEntry[],
  input: { entryId: string } | { index: number }, policy: RecallPolicy = {}): (ReadableEntry & { index: number | undefined }) | undefined {
  if (branch.some(e => e.type === "context_edit" && e.replacement !== null))
