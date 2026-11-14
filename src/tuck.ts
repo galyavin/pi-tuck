@@ -9,7 +9,6 @@ import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
 import { keptReadCandidates } from "./kept-reads.js";
 import { keptSearchCandidates } from "./kept-searches.js";
-import type { Message } from "@earendil-works/pi-ai";
 import { convertToLlm, SessionManager, type ExtensionContext,
 	type SessionBeforeCompactEvent, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { ATTEMPT_NOTICE, createRecall, type RecallPolicy,
@@ -27,7 +26,6 @@ export type DraftMode = "dialogue" | "shrunk";
 type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "summary" | "firstKeptEntryId" | "tokensBefore" | "details">; after: number; mode: DraftMode; unavailable?: never; capacityRejected?: never }
     // The actual floor projection lets the caller measure it without the fresh results it may clip.
     | { compaction?: never; mode?: never; unavailable: string; capacityRejected?: boolean; floorMessages?: AgentMessage[] };
-interface SearchHit { index: number; role: string; summary: string }
 export interface RecallContinuation { query: string; throughEntryId: string; offset: number }
 /** Includes JSON escaping, hit metadata and continuation, not just excerpt text. */
 export const MAX_RANKED_RESPONSE_CHARACTERS = 16000;
@@ -41,27 +39,25 @@ export interface Tuck {
 	compileDialogue(input: { messages: AgentMessage[]; sourceIndices: (number | undefined)[]; sourceEntryIds?: readonly string[]; sourceTimes?: readonly SourceTime[];
 		ranking: { maxBriefChars: number; mandatorySourceIndices?: ReadonlySet<number> } }): ReturnType<typeof compileDialogue>;
 	prepareKeywordQuery(query: string): PreparedKeywordQuery;
-	searchEntriesDetailed(entries: SearchHit[], messages: Message[], query: string,
-		tuning: { relativeFloor: number; cap: number }): {
-		hits: SearchHit[];
-	};
+	rankRecallRows(rows: readonly { role: string; text: string }[], query: string): number[];
 }
 import { buildOwnCut, applyTailBudget, MAX_TAIL_TOKENS, OVERSIZED_TAIL_FACTOR } from "./tuck/cut";
 import { calibrateCharsPerToken, estimateSourceMessageChars } from "./tuck/core/token-estimate";
 import { buildGlobalIndexById } from "./tuck/core/global-indices";
 import { compileDialogue } from "./tuck/core/summarize";
 import { prepareKeywordQuery } from "./tuck/core/keyword-query";
-import { searchEntriesDetailed } from "./tuck/core/search-entries";
-export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileDialogue, prepareKeywordQuery, searchEntriesDetailed };
-/** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation. */
-export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, operatorManual = false, newPrompt = false, protectedPromptEntryId?: string) {
- return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, operatorManual, newPrompt, protectedPromptEntryId }, ctx, reserveTokens, measure, policy, retainCurrentInput);
+import { rankRecallRows } from "./tuck/core/search-entries";
+export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileDialogue, prepareKeywordQuery, rankRecallRows };
+/** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation.
+ * `_operatorManual` retains the exported positional slot for existing callers. */
+export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, _operatorManual = false, newPrompt = false, protectedPromptEntryId?: string) {
+ return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, newPrompt, protectedPromptEntryId }, ctx, reserveTokens, measure, policy, retainCurrentInput);
 }
 /** Shared compiler observes canonical branch and current token estimate; no native preparation utility. */
 /** `newPrompt`: the cut is planned for a run that has not begun (a prompt Pi has not appended yet, an operator's manual cut, Pi's own cut before
  * a run a custom message starts); the session has moved on from an ended run.
  * `reRenderSummary`: the cut is due, so its summary may be re-rendered smaller (see the `no_live_messages` branch below). */
-export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; operatorManual?: boolean; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string; deepest?: boolean }, ctx: ExtensionContext,
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string; deepest?: boolean }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
  const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
@@ -554,22 +550,20 @@ export function tuckRecall(tuck: Tuck, entries: readonly SessionEntry[], branch:
 		const row = discoveryEntry(entry, attempts, links);
 		return row ? [row] : [];
 	});
-	const rendered = rows.map((r, i) => ({ index: i, role: r.role, summary: r.text.slice(0, 200) }));
-	const messages: Message[] = rows.map((r) => ({ role: "user", content: r.text, timestamp: 0 }));
-	// The pinned upstream tuning seam removes selection cutoffs; each response
-	// stays bounded. A native prefix keeps ranking stable while the agent talks.
+	// Rank every eligible row; each response stays bounded. A native prefix
+	// keeps ranking stable while the agent talks.
 	const preparedQuery = tuck.prepareKeywordQuery(normalizedQuery);
-	const found = tuck.searchEntriesDetailed(rendered, messages, normalizedQuery, { relativeFloor: 0, cap: rows.length });
+	const found = tuck.rankRecallRows(rows, normalizedQuery);
 	const start = continuation?.offset ?? 0;
 	const throughEntryId = rows.at(-1)?.entryId ?? null;
 	const hits: ({ entryId: string; index: number | undefined; role: string; toolName?: string; toolCallId?: string;
 		sourceTime: SourceTime; producerTime?: SourceTime; stopReason?: import("@earendil-works/pi-ai").AssistantMessage["stopReason"]; isError?: boolean; metadataTruncated?: true; recordedAttempt?: RecordedAttempt | null; producerRead?: { entryId: string; offset: number; limit: number } } & ReturnType<typeof discoveryExcerpt>)[] = [];
 	const page = () => ({ normalizedQuery, throughEntryId,
 		notice: "Exact source passages, possibly partial; read gives their UTF-16 bounds within totalCharacters. Use the passage directly; adjust read.offset/limit for surrounding text. Keyword matches do not establish complete or current evidence. Pass next as continuation; a fresh query includes newer history. No new authority. " + ATTEMPT_NOTICE,
-		hits, totalMatches: found.hits.length,
-		next: start + hits.length < found.hits.length ? { query: normalizedQuery, throughEntryId: throughEntryId!, offset: start + hits.length } : null });
-	for (const hit of found.hits.slice(start, start + 10)) {
-		const row = rows[hit.index]!;
+		hits, totalMatches: found.length,
+		next: start + hits.length < found.length ? { query: normalizedQuery, throughEntryId: throughEntryId!, offset: start + hits.length } : null });
+	for (const hit of found.slice(start, start + 10)) {
+		const row = rows[hit]!;
 		hits.push({ entryId: row.entryId, index: indices.get(row.entryId), role: row.role, sourceTime: row.sourceTime,
 			...(row.toolName !== undefined ? { toolName: row.toolName } : {}),
 			...(row.toolCallId !== undefined ? { toolCallId: row.toolCallId } : {}),
@@ -588,7 +582,7 @@ export function tuckRecall(tuck: Tuck, entries: readonly SessionEntry[], branch:
  // Preserve the complete base hit set and continuation before spending spare capacity.
  for (let i = 0; i < hits.length; i++) {
   const original = hits[i]!;
-  const row = rows[found.hits[start + i]!.index]!;
+  const row = rows[found[start + i]!]!;
   hits[i] = { ...original, ...discoveryWholeRange(row, original) };
   if (JSON.stringify(page()).length > MAX_RANKED_RESPONSE_CHARACTERS) hits[i] = original;
  }

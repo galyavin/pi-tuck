@@ -10,7 +10,7 @@ export function inspectIncident(records: IncidentRecord[]) {
   const manager = SessionManager.inMemory('/offline-compaction-replay', undefined, [i.header, ...i.entries]);
   if (i.branchEntryIds?.length) manager.branch(i.branchEntryIds.at(-1)!);
   const ctx = { sessionManager: manager, cwd: '/offline-compaction-replay', model: { contextWindow: i.contextWindow } } as unknown as ExtensionContext;
-  const draft = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: i.tokensBefore!, previousSummary: i.previousSummary, operatorManual: i.operatorManual }, ctx, i.reserve!, messages => measurableConversationTokens(messages, ctx), {}, i.retainCurrentInput);
+  const draft = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: i.tokensBefore!, previousSummary: i.previousSummary }, ctx, i.reserve!, messages => measurableConversationTokens(messages, ctx), {}, i.retainCurrentInput);
   const proposal = records.find(r => r.kind === 'proposal' && (r.data as { details?: { diagnosticReceipt?: { id?: string } } })?.details?.diagnosticReceipt?.id === i.receiptId)?.data as { summary?: string; firstKeptEntryId?: string } | undefined;
   const matchesRecordedProposal = proposal && draft.compaction ? proposal.summary === draft.compaction.summary && proposal.firstKeptEntryId === draft.compaction.firstKeptEntryId : null;
   return { mode: 'deterministic-selection-replay', draft, receiptId: i.receiptId ?? null, matchesRecordedProposal, notice: 'Supplied permitted originals and resolved state only; no tools, inference, meaning preservation, persistence or transmission claim.' };
