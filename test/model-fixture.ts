@@ -2,7 +2,7 @@ import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { vi } from "vitest";
 
-export async function scriptedModelRuntime(limits: { contextWindow: number; maxTokens: number } = { contextWindow: 272000, maxTokens: 128000 }, pick?: { provider: string; id: string }) {
+export async function scriptedModelRuntime(limits: { contextWindow: number; maxTokens: number } = { contextWindow: 272000, maxTokens: 128000 }, pick?: { provider: string; id: string }, trackSpies = true) {
  const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
  // A case that depends on the model's API asks for another catalogue entry; the limits are pinned either way.
  const catalogued = runtime.getModel(pick?.provider ?? "openai-codex", pick?.id ?? "gpt-6.1-sol");
@@ -10,7 +10,17 @@ export async function scriptedModelRuntime(limits: { contextWindow: number; maxT
  // The tests' budgets are worked out for a 272,000-token window with 128,000 output tokens, this model's limits in Pi 1.1.0's catalogue.
  // Later catalogues changed the window, so the fixture pins both rather than following the installed catalogue; a test of a small window sets its own.
  const model = { ...catalogued, ...limits }, getModel = runtime.getModel.bind(runtime);
- vi.spyOn(runtime, "getModel").mockImplementation((provider, id) => provider === model.provider && id === model.id ? model : getModel(provider, id));
+ const getPinned: typeof runtime.getModel = (provider, id) => provider === model.provider && id === model.id ? model : getModel(provider, id);
+ // A resume grid creates thousands of runtimes. Vitest's global spy registry would retain every catalogue through its restore closure.
+ if (!trackSpies) {
+  runtime.getModel = getPinned;
+  runtime.hasConfiguredAuth = provider => provider === model.provider;
+  runtime.getAuth = async () => ({ auth: { headers: { "x-scripted-fixture": "1" } }, source: "scripted test" });
+  runtime.getAvailable = async () => [model];
+  runtime.getAvailableSnapshot = () => [model];
+  return runtime;
+ }
+ vi.spyOn(runtime, "getModel").mockImplementation(getPinned);
  // Only scripted stream functions consume this admission; no provider transport/auth runs.
  vi.spyOn(runtime, "hasConfiguredAuth").mockImplementation(provider => provider === model.provider);
  vi.spyOn(runtime, "getAuth").mockResolvedValue({ auth: { headers: { "x-scripted-fixture": "1" } }, source: "scripted test" });

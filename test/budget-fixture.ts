@@ -45,6 +45,8 @@ export function referenceSystemPart(saved: Messages, observedPrompt: string, too
 export interface Unseen { growHost: (tokens: number) => void; setTools: (dormant: boolean) => void; steer: (tokens: number) => Promise<void>; }
 
 export interface Options {
+ /** Avoid Vitest's global spy retention when a stress dimension creates thousands of model runtimes. */
+ trackRuntimeSpies?: boolean;
  /** Apply Pi's actual SimpleStreamOptions and capped OpenAI payload builders before the scripted server answers. */
  piRequestPath?: boolean;
  /** Keep the scripted provider and host/probes, but do not install pi-tuck. Native Pi owns all cuts. */
@@ -224,7 +226,7 @@ export async function harness(options: Options) {
  const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { throw Error('Unexpected HTTP'); });
  const cleanup = async () => { Date.now = realNow; if (physicalClock) vi.useRealTimers(); if (session) { await session.abort(); session.dispose(); } network.mockRestore(); rmSync(dir, { recursive: true, force: true }); };
  try {
-  const runtime = await scriptedModelRuntime(options.limits, options.model), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
+  const runtime = await scriptedModelRuntime(options.limits, options.model, options.trackRuntimeSpies), model = runtime.getModel(options.model?.provider ?? 'openai-codex', options.model?.id ?? 'gpt-6.1-sol');
   if (!model) throw Error('Required catalogue model unavailable');
   if (!options.limits && !options.model) expect(model.contextWindow - Math.max(32768, model.maxTokens)).toBe(ROOM);
   // A reopened session has to be a persisted one, so its entries reach a file and come back from it. `persist` stops short of the reopen: the file
@@ -285,16 +287,19 @@ export async function harness(options: Options) {
   let atRunEnd: { hostCalls: number; kept: number } | undefined;
   let extension: ExtensionAPI | undefined;
   const activeToolsJson = () => JSON.stringify(extension!.getAllTools().filter(t => extension!.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
-  const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, systemPrompt, extensionFactories: [async pi => {
+  let install = installCompaction;
+  const extensionObservers: ((pi: ExtensionAPI) => void)[] = [];
+  // These counters belong to the scripted host, whose remaining scenario must be identical on both sides of a resume.
+  let sectionRun = 0, sectionText: string | undefined, decisions = 0;
+  const makeLoader = () => new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager: settings, noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true, systemPrompt, extensionFactories: [async pi => {
    extension = pi;
    if (options.cancelCompact) pi.on('session_before_compact', () => { state.vetoes++; return { cancel: true }; });
    // Another extension at the turn boundary: it appends entries that carry no content, as a plugin writing its own boundaries does.
    const addSection = () => {
-    let run = 0, section: string | undefined;
     pi.on('before_agent_start', event => {
-     const size = options.systemSection!(run++);
-     if (size === null) section = undefined; else if (size !== undefined) section = sized(size);
-     if (section) event.systemPromptOptions.sections = { ...event.systemPromptOptions.sections, standoff: section };
+     const size = options.systemSection!(sectionRun++);
+     if (size === null) sectionText = undefined; else if (size !== undefined) sectionText = sized(size);
+     if (sectionText) event.systemPromptOptions.sections = { ...event.systemPromptOptions.sections, standoff: sectionText };
      else if (event.systemPromptOptions.sections) delete event.systemPromptOptions.sections.standoff;
     });
    };
@@ -328,7 +333,7 @@ export async function harness(options: Options) {
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ after: state.requests, at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
    // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
    // and `cutAtDefault` leaves it to the compactor's default.
-   if (!options.plainPi) await installCompaction(pi, {
+   if (!options.plainPi) await install(pi, {
     // The response reserve is Pi's setting, which is what the session actually holds; a case that needs an exact reserve passes its own below.
     requestReserve: () => ({ response: options.reserveTokens ?? 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
@@ -339,14 +344,15 @@ export async function harness(options: Options) {
    if (options.systemSection && options.systemSectionLate) addSection(); // registered after the compactor: its patch is the last one
    // Unseen growth: after the compactor has decided, before the next request is made.
    if (options.afterDecision) {
-    let decisions = 0;
     const unseen: Unseen = { growHost: tokens => { host += tokens; }, setTools: dormant => { pi.setActiveTools(dormant ? ['effect', 'dormant'] : ['effect']); }, steer: async tokens => { await session!.steer(note + exact(tokens - 6)); } };
     pi.on('before_agent_start', () => { options.afterDecision!(decisions++, unseen); });
     pi.on('turn_end', event => { if (event.toolResults.length) options.afterDecision!(decisions++, unseen); });
    }
    // The guard's number for every request, computed independently (registered after the compactor's hook).
    pi.on('context_with_system', (event, ctx) => { wholePrompt.push(JSON.stringify(event.messages).includes(promptText)); guard.push(referenceGuardSystem(event.messages, ctx.getSystemPrompt()) + nonSystem(event.messages)); cutsAtRequest.push(manager.getEntries().filter(e => e.type === 'compaction').length); state.cutCounts.push(cutsAtRequest.at(-1)!); if (event.messages.some(m => m.role === 'toolResult' && JSON.stringify((m as { content?: unknown }).content ?? '').includes('[pi-tuck: characters'))) state.clips++; });
+   for (const observe of extensionObservers) observe(pi);
   }] });
+  let loader = makeLoader();
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
   const newSession = async (m: SessionManager) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
    name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
@@ -464,7 +470,8 @@ export async function harness(options: Options) {
    return failed;
   };
   session.agent.streamFunction = async (_m, _ctx, streamOptions) => {
-   if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); state.answers.push(m); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
+   // No provider request went out when the already-aborted signal short-circuited it. Keep request-indexed answers aligned.
+   if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
    if (options.plainPi && nativeSummarizing) {
     // Pi chooses the boundary, kept tail and summary prompt. The same scripted model's normal
     // final answer ("Finished") answers its summary call; summary calls are not tool-work requests.
@@ -622,7 +629,31 @@ export async function harness(options: Options) {
   const runEnd = () => allCompactions().filter(isRunEnd);
   const compactions = () => allCompactions().filter(e => !isRunEnd(e));
   return {
-   dir, manager, session, settings, state, providerRequests, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
+   dir, get manager() { return manager; }, get session() { return session!; }, settings, state, providerRequests, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
+   observeExtension: (observe: (pi: ExtensionAPI) => void) => { extensionObservers.push(observe); observe(extension!); },
+   /** End every old hook/runtime, open the same file, and import pi-tuck cold. */
+   async coldResume() {
+    const file = manager.getSessionFile();
+    if (!file) throw Error('Cold resume needs a file-backed SessionManager');
+    const old = session!, oldInstall = install, oldExtension = extension, activeTools = extension!.getActiveTools();
+    await old.abort();
+    await old.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
+    old.dispose();
+    session = undefined; extension = undefined;
+    vi.resetModules();
+    install = (await import('../src/compaction')).installCompaction;
+    expect(install).not.toBe(oldInstall);
+    manager = SessionManager.open(file, dir);
+    loader = makeLoader();
+    await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
+    session = await newSession(manager);
+    session.agent.streamFunction = old.agent.streamFunction; // scripted server state belongs to the scenario
+    expect(extension).not.toBe(oldExtension);
+    await session.bindExtensions({ uiContext: ui as never, abortHandler: () => { state.aborts++; void session!.abort(); } });
+    extension!.setActiveTools(activeTools);
+    expect(network).not.toHaveBeenCalled();
+    return { file, entries: manager.getEntries().length };
+   },
    // Open the session's file again the way Pi does when a saved session is resumed, and report how many messages came back. The run's own session is
    // left alone: this reads what reached the disk, which is all the operator has if the run ends where it stands.
    reopenFile: () => {
