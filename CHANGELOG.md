@@ -3,6 +3,22 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-11-14
+
+### Changed
+
+- **Internal: pi-tuck's run and calibration state each have one owner.** A run's failure is now its phase alone, changed only through a
+  fixed table of allowed moves, so a failed run can no longer be treated as admitted. The calibration values that three events used to
+  reset separately are one object reseeded in one place. Nothing the model sees changes. The lifecycle test now also resumes sessions
+  cold, switches models mid-session and back, and checks after every event that no impossible state appears.
+
+### Release gates
+
+- **Shipped without a live gate: replay matches 1.1.1 byte for byte.** 29 recordings, 13,946 of 13,946 requests identical, the same
+  1,971 cuts, 0 lost or dead tasks.
+- **Strict stress:** 318 cells and the resumed-session suite, 0 findings. Lifecycle with 40 seeds. Tests and CI. The packed tarball loaded
+  in the real installed Pi.
+
 ## [1.1.1] - 2026-11-14
 
 ### Fixed
