@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { installCompaction } from "./src/compaction";
 import { validCutAt } from "./src/budget";
 import { notify } from "./src/notify";
-import { showRemovedRuntimeNotice } from "./src/removed-runtime";
+import { cleanupLegacyFiles } from "./src/legacy-cleanup";
 
 export type { CompactionOptions } from "./src/compaction";
 export { installCompaction } from "./src/compaction";
@@ -38,7 +38,7 @@ export default async function (pi: ExtensionAPI) {
 	const handle = await installCompaction(pi, { cutAt: settings.cutAt });
 	let said = false;
 	pi.on("session_start", async (_event, ctx) => {
-		await showRemovedRuntimeNotice(ctx);
+		await cleanupLegacyFiles(ctx);
 		if (handle.state?.(ctx).kind === "standingDown") return;
 		if (settings.error && !said) {
 			said = notify(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");

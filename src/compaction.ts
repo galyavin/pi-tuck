@@ -23,7 +23,6 @@ import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
 import { LOADED_VERSION, statusText } from "./status.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { notify } from "./notify.js";
-import { removedRuntimeStatus } from "./removed-runtime.js";
 import { applyHistoryTools, historyToolDeclarations, historyToolNames, stageHistoryTools } from "./history-tools.js";
 
 const query = Type.String({ minLength: 1, maxLength: MAX_RECALL_QUERY_CHARACTERS });
@@ -222,9 +221,6 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     } });
     pi.on("session_compact", (_event, ctx) => observe(ctx));
     pi.on("session_shutdown", () => { recorder.stop("session-shutdown"); });
-    pi.registerCommand("tuck-semantic", { description: "Semantic search was removed; show where its old files can be deleted by hand.", handler: async (_args, ctx) => {
-        notify(ctx, await removedRuntimeStatus(), "info");
-    } });
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
         ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, pending: view(ctx).pending }), "info");
     } });

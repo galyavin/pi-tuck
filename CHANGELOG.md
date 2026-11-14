@@ -14,9 +14,16 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 
 - **Old sessions still load, cut and recall.** Historical `tuck_search` and `vcc_search` calls remain readable; old private entries are
   ignored. A leftover `semanticRecall` setting is ignored silently, and `/tuck` no longer reports semantic state.
-- **The old runtime folder can be deleted by hand.** If it exists, pi-tuck shows its absolute path and best-effort size once, with stderr
-  delivery when there is no UI. pi-tuck never deletes it. `/tuck-semantic` remains for one release to explain the removal and show the
-  folder's path, or say that no folder exists.
+- **Old search files are cleaned up once per machine.** Under `~/.pi/agent/pi-tuck/` (from the home directory, independent of Pi's agent-folder
+  setting), cleanup removes the real directories `python`, `index`,
+  `downloads`, `staging-<digits>` (exactly `staging-` followed by one or more digits), and `.pi-semantic-<six alphanumeric characters>`.
+  It removes `runtime` only when a child has a `pins.json` with pi-tuck's old pin fields, then removes the root only if empty.
+  Symlinks at the root or candidate paths and foreign files in the root are left in place; links inside removed directories are unlinked without
+  following their targets. On macOS and Linux, a directory is left alone if a live process has it open or the bounded `lsof` check fails;
+  Windows leaves all candidates alone. A notice names only removed directories, with the path and best-effort space freed, using stderr
+  without a UI. An empty `~/.pi/agent/pi-tuck-semantic-removed` marker records a completed attempt, including partial cleanup or nothing
+  to clean; an attempt that cannot start is retried. Once marked, a folder recreated later by another program is left alone.
+  `/tuck-semantic`, its stub text and the old notice are gone.
 
 ## [1.1.2] - 2026-11-14
 

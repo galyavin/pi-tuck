@@ -1313,7 +1313,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   providerCell('Anthropic rejects the prompt', { rejectWith: 'prompt is too long: 21000 tokens > 20000 maximum' }),
   providerCell('OpenAI rejects the prompt', { rejectWith: 'Your input exceeds the context window of this model. Please adjust your input.' }),
   providerCell('Google rejects the prompt', { rejectWith: 'The input token count (21000) exceeds the maximum number of tokens allowed (20000).' }),
-  providerCell('llama.cpp rejects the prompt', { rejectWith: 'the request exceeds the available context size, try increasing it' }),
+  providerCell('local provider rejects the prompt', { rejectWith: 'the request exceeds the available context size, try increasing it' }),
   // `providerRejection` on the two cells below: pi-ai does not class either wording as a context overflow, so Pi ends the turn on the provider's
   // error and never asks pi-tuck to reduce the request. A refusal or a notice finding would hold pi-tuck to a room the provider never showed it,
   // so the cell states the `provider` rules instead — see the Cell field. `persist` gives those rules a session file to reopen.

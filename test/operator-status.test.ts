@@ -40,7 +40,7 @@ test('/tuck is a command, not a tool, and shows no JSON', async () => {
   registerTool: (tool: { name: string }) => { tools.push(tool.name); }, on: () => () => {} } as unknown as ExtensionAPI;
  await installCompaction(pi);
  expect(tools.sort()).toEqual(['tuck_recall']);
- expect(commands.has('tuck-semantic')).toBe(true);
+ expect([...commands.keys()].sort()).toEqual(['tuck', 'tuck-incident']);
  const notices: string[] = [];
  await commands.get('tuck')!('', { sessionManager: { getBranch: () => [ours(1000, 200)] }, ui: { notify: (message: string) => { notices.push(message); } } });
  expect(notices).toHaveLength(1);

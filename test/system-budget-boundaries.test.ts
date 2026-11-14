@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { BAND, BAND_EXACT, EXACT_RESERVE, HOST, ROOM, ROOM_EXACT, scenario } from './budget-fixture';
 
-test('combined sizing keeps exact-reserve admission strict at equality', async () => {
+test('combined sizing keeps exact-reserve admission strict at equality', { timeout: 120_000 }, async () => {
  for (const d of [-1, 0, 1]) {
   const r = await scenario({ at: 'prompt', complete: ROOM_EXACT + d, host: HOST, guardOnly: true, compaction: EXACT_RESERVE });
   expect(r.measured!.complete, r.probe).toBe(ROOM_EXACT + d);

@@ -8,7 +8,7 @@ import { MAX_RECALL_CHARACTERS, type RecallPage } from '../../src/recall';
 import { MAX_RANKED_RESPONSE_CHARACTERS, type tuckRecall } from '../../src/tuck';
 
 // The v1.1.1 large-session generator: real-sized rounds, cuts every 400 rounds, and growth between searches. At this size three field
-// defects lived in tuck_search: keyword timeouts failed the call, a fully indexed plan looked empty, and results went stale after growth.
+// defects affected history search: keyword timeouts failed the call, a prepared plan looked empty, and results went stale after growth.
 // Exercise the registered keyword-only tuck_recall now, including exact source reads. Runs only with STRESS=1; no model or encoder.
 const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const TARGET_MB = Number(process.env.LARGE_SESSION_MB) || 85;
