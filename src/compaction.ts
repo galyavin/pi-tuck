@@ -82,7 +82,8 @@ export const MEASURED_CALIBRATION: Readonly<Record<string, number>> = {};
 function initialWindow(key: string): number[] {
     try { const [provider, , id] = JSON.parse(key) as [string, string, string]; return [Math.min(MEASURED_CALIBRATION[`${provider}/${id}`] ?? 1, CALIBRATION_CEILING)]; } catch { return [1]; }
 }
-/** The calibration window a session starts with under accounting identity `key`: the newest compaction on the branch that carries this package's
+export const CALIBRATION_RECEIPT = 'pi-tuck-calibration';
+/** The calibration window a session starts with under accounting identity `key`: the newest calibration entry or compaction on the branch that carries this package's
  * receipt decides, and no older receipt is consulted. A receipt without the identity field (written before it existed) or from another identity gives `initialWindow`.
  * Otherwise its `calibrationWindow` (an array of 1..CALIBRATION_WINDOW finite numbers, oldest first) is the window, each entry clamped to
  * [0, CALIBRATION_CEILING]; without a valid one, the window is its `calibrationFactor` clamped to [1, CALIBRATION_CEILING] as one entry, else
@@ -91,16 +92,29 @@ function initialWindow(key: string): number[] {
 export function seedWindow(branch: readonly SessionEntry[], key: string): number[] {
     for (let i = branch.length; i--;) {
         const entry = branch[i]!;
-        const receipt = entry.type === "compaction" ? (entry.details as { diagnosticReceipt?: { settings?: Partial<Receipt["settings"]> } | null } | undefined)?.diagnosticReceipt : undefined;
+        const receipt = entry.type === "custom" && entry.customType === CALIBRATION_RECEIPT ? { settings: entry.data as Partial<Receipt["settings"]> | undefined }
+            : entry.type === "compaction" ? (entry.details as { diagnosticReceipt?: { settings?: Partial<Receipt["settings"]> } | null } | undefined)?.diagnosticReceipt : undefined;
         if (receipt === undefined) continue;
         const { calibrationIdentity, calibrationFactor, calibrationWindow } = receipt?.settings ?? {}, stored: unknown = calibrationWindow;
-        if (calibrationIdentity !== key) return initialWindow(key);
+        if (calibrationIdentity !== key) {
+            if (entry.type === "custom") continue; // Another model's new observation does not hide this model's last saved seed.
+            return initialWindow(key);
+        }
         if (Array.isArray(stored) && stored.length >= 1 && stored.length <= CALIBRATION_WINDOW && stored.every(n => typeof n === "number" && Number.isFinite(n)))
             return stored.map(n => Math.min(Math.max(n, 0), CALIBRATION_CEILING));
         if (typeof calibrationFactor === "number" && Number.isFinite(calibrationFactor)) return [Math.min(Math.max(calibrationFactor, 1), CALIBRATION_CEILING)];
         return initialWindow(key);
     }
     return initialWindow(key);
+}
+export type CompactionState = { kind: "active" } | { kind: "standingDown"; reason: string };
+/** Only evidenced prerequisites disable our request/summary transforms. A missing model keeps the existing explicit error. */
+export function compactionState(model: { api: string; contextWindow?: number } | undefined, enabled: boolean): CompactionState {
+    const reason = !enabled ? "compaction is disabled" : model?.api === "pi-virtual" ? "pi-virtual model" : !model ? undefined
+        : model.contextWindow === undefined ? "context window is missing"
+        : !Number.isFinite(model.contextWindow) ? "context window is not finite"
+        : model.contextWindow <= 0 ? "context window is zero or negative" : undefined;
+    return reason ? { kind: "standingDown", reason } : { kind: "active" };
 }
 export interface CompactionOptions {
  semanticRecall?: SemanticRecallController;
@@ -189,7 +203,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     } });
     pi.on("session_compact", (_event, ctx) => observe(ctx));
     // A saved cut moves entries out of view: index them now, in the background, even for a session that has not searched or whose worker the idle limit stopped.
-    pi.on("session_compact", (_event, ctx) => { semantic.indexAtCut(semanticProvider(ctx)); });
+    pi.on("session_compact", (_event, ctx) => { if (!standDown(ctx)) semantic.indexAtCut(semanticProvider(ctx)); });
     pi.on("session_shutdown", async () => { semanticRequest++; recorder.stop("session-shutdown"); await semantic.close(); await Promise.allSettled([...semanticPending]); });
     pi.on("session_start", () => { semanticRequest++; semanticTransition = semantic.close();void semanticTransition.catch(error => { options.fail?.(error); }); });
     pi.on("turn_end", (_event,ctx) => { semantic.schedule(semanticProvider(ctx)); });
@@ -226,7 +240,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     }});
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
         const state = semantic.status();
-        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, search, semantic: state, pending: view(ctx).pending }), "info");
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, search, semantic: state, pending: view(ctx).pending }), "info");
     } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
@@ -237,11 +251,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const clips = () => run?.clips ?? emptyClips;
     const emptyClips = new Map<string, Clip>();
     const resetRun = () => { run = undefined; pending = undefined; };
-    // Virtual models can defer their window to Pi. Without a finite positive
-    // window there is no budget to enforce; discard any plan from a prior model.
+    const stateFor = (ctx: ExtensionContext) => compactionState(ctx.model, settingsFor().getCompactionSettings(ctx.model).enabled);
+    // A prerequisite can change with the model/settings; discard the old plan before returning control to native.
     const standDown = (ctx: ExtensionContext) => {
-        if (!ctx.model || Number.isFinite(ctx.model.contextWindow) && ctx.model.contextWindow > 0) return false;
+        if (stateFor(ctx).kind === "active") return false;
         resetRun();
+        windowObservation = undefined;
+        lengthStop = false;
         return true;
     };
     const promptRefusal = () => new Refusal("Prompt check failed: the whole starting prompt cannot fit after cutting to the band and room, shrinking the summary and clipping fresh results. Shorten the prompt or choose a model with a larger context window, then retry");
@@ -275,7 +291,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         };
     });
     // The factor is max(1, the last CALIBRATION_WINDOW paired ratios, overflow bounds and seed): it rises at once and a stale high ratio ages out.
-    const learn = (value: number) => { ratios.push(value); if (ratios.length > CALIBRATION_WINDOW) ratios.shift(); factor = Math.max(1, ...ratios); };
+    const learn = (value: number, ctx: ExtensionContext) => {
+        ratios.push(value); if (ratios.length > CALIBRATION_WINDOW) ratios.shift(); factor = Math.max(1, ...ratios);
+        // Compare what a cold instance would seed (including the existing clamps). Stable windows write nothing.
+        if (!isDeepStrictEqual(seedWindow(ctx.sessionManager.getBranch(), identity), ratios.map(n => Math.min(Math.max(n, 0), CALIBRATION_CEILING))))
+            pi.appendEntry(CALIBRATION_RECEIPT, { calibrationIdentity: identity, calibrationWindow: [...ratios] });
+    };
     const corrected = (tokens: number, ctx: ExtensionContext) => { identityFor(ctx); return Math.ceil(tokens * factor); };
     const observeBudget = (rawTokens: number, ctx: ExtensionContext) => {
         if (options.observeBudget) options.observeBudget({ rawTokens, tokens: corrected(rawTokens, ctx), factor, ...limits(ctx), context: ctx });
@@ -310,7 +331,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const window = contextWindow(ctx), bound = (window + 1) / paired.tokens;
             const learned = bound <= CALIBRATION_CEILING;
             notify(ctx, overflowNotice(window, bound, learned), "warning");
-            if (learned) learn(bound);
+            if (learned) learn(bound, ctx);
             return;
         }
         const usage = message.usage;
@@ -329,9 +350,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // A request that was answered cannot have held more than the model's window, so a report above it describes something that never happened.
         // Learning from one sets the factor for the requests after it: a 60,000-token cache read reported in a 32,768-token window made a
         // 6,000-token prompt refuse. The overflow branch above learns from a refusal, where the count is a lower bound, and the ceiling is unchanged.
-        if (input > 0 && input <= ctx.model.contextWindow && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio);
+        if (input > 0 && input <= ctx.model.contextWindow && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio, ctx);
     });
-    pi.on("turn_end", event => {
+    pi.on("turn_end", (event, ctx) => {
+        if (standDown(ctx)) return;
         if (windowObservation?.message !== event.message) return;
         const observation = windowObservation; windowObservation = undefined;
         pi.appendEntry(WINDOW_RECEIPT, { calibrationIdentity: observation.identity, learnedContextWindow: observation.window,
@@ -340,18 +362,18 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
     let lengthStop = false;
-    pi.on("agent_start", () => { run ??= createRun("admitted"); run.phase = "admitted"; run.thinkingRetryPending = false; lengthStop = false; pending = undefined; });
+    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= createRun("admitted"); run.phase = "admitted"; run.thinkingRetryPending = false; lengthStop = false; pending = undefined; });
     pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason === "length"; });
     pi.on("agent_settled", (_event, ctx) => {
         try {
-            if (!lengthStop || !active()) return;
+            if (standDown(ctx) || !lengthStop || !active()) return;
             lengthStop = false;
             const message = "pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
             notify(ctx, message, "warning");
         } finally { resetRun(); }
     });
 	const active = () => options.active?.() ?? true;
-	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings());
+	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings?.());
 	// The one reserve decision; every consumer takes its room from limits. Standalone starts at Pi's native cut point. Once a reply did
 	// not fit (a length stop with text/tools, or a refusal pi-ai classes as a context overflow), hold the catalogue maximum too. A thinking-only
 	// length stop uses branchReplyFloor's observed output instead; reserving the catalogue maximum would strand setups above the room.
@@ -624,12 +646,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	});
 	pi.on("session_before_tree", (event, ctx) => !standDown(ctx) && event.preparation.userWantsSummary ? { cancel: true } : undefined);
     pi.on("session_start", () => { resetRun(); recorder.stop("session-transition"); proposalId = undefined; commitFault = undefined; estimatedTokens = 0; identity = ""; factor = 1; learnedContextWindow = undefined; windowObservation = undefined; });
-    const historyToolsEnabled = (ctx: ExtensionContext) => view(ctx).hasTuckCut;
+    const historyToolsEnabled = (ctx: ExtensionContext) => stateFor(ctx).kind === "active" && view(ctx).hasTuckCut;
     const syncHistoryTools = (ctx: ExtensionContext) => { if (active()) applyHistoryTools(pi, historyToolsEnabled(ctx)); };
     pi.on("session_start", (_event, ctx) => syncHistoryTools(ctx));
     // A plan decided on `input` is for the branch it was decided on: moving in the tree leaves it planned for another branch, whose kept entry
     // may not be on this one.
-    pi.on("session_tree", (_event, ctx) => { resetRun(); windowObservation = undefined; learnedContextWindow = seedContextWindow(ctx.sessionManager.getBranch(), identityFor(ctx)); syncHistoryTools(ctx); });
+    pi.on("session_tree", (_event, ctx) => { resetRun(); windowObservation = undefined; identity = ""; identityFor(ctx); syncHistoryTools(ctx); });
     pi.on("session_compact", (_event, ctx) => { if (run?.phase !== "admitted") syncHistoryTools(ctx); });
     pi.on("turn_start", (_event, ctx) => syncHistoryTools(ctx));
     pi.on("agent_settled", (_event, ctx) => syncHistoryTools(ctx));
@@ -1170,7 +1192,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 
 		} catch (error) { fail(error, ctx); }
 	});
-    return {close:async()=>{semanticRequest++;recorder.stop("caller-close");await semantic.close();await Promise.allSettled([...semanticPending]);}, semanticRecall:semantic, setSemanticEnabled, semanticStatus};
+    return {close:async()=>{semanticRequest++;recorder.stop("caller-close");await semantic.close();await Promise.allSettled([...semanticPending]);}, semanticRecall:semantic, setSemanticEnabled, semanticStatus, state: stateFor};
 }
 
 function checkedInput(raw: unknown) { if (!Check(RecallInput, raw)) throw new Error("Invalid recall input"); return structuredClone(raw); }

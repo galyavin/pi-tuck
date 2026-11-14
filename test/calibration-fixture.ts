@@ -87,7 +87,8 @@ export const reporting = (input: number): Partial<AssistantMessage> => ({ usage:
  * The same preparation in a fresh installation each time.
  */
 export async function guarded(session: SessionManager, tokens: number, prepare: (d: Drive) => Promise<void> = async () => {}, options: Partial<CompactionOptions> = {}) {
- const d = await drive(session, options);
+ // Each boundary probe replays the same preparation. Learning now persists; isolate the two probes' branches.
+ const d = await drive(SessionManager.inMemory(session.getCwd(), undefined, [session.getHeader()!, ...session.getBranch()]), options);
  try { await d.start(); await prepare(d); const before = d.errors.length; await d.offer(tokens); return d.errors.slice(before).map(String); }
  finally { await d.close(); vi.restoreAllMocks(); }
 }

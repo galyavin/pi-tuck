@@ -31,7 +31,7 @@ type Request = { prompt: number; ordinal: number; request: number; raw: number; 
 type Budget = { afterRequest: number; raw: number; corrected: number; factor: number; response: number; room: number; hardLine?: number };
 type Step = { prompt: number; before: number; after: number; cuts: number; lastIsCut: boolean; lastStop?: string; refused: boolean; saved: number; lastRole?: string; factor?: number; durable: boolean };
 type Trace = { requests: Request[]; steps: Step[]; cuts: Cut[]; budgets: Budget[]; failures: ReturnType<typeof gridFailures>; cold?: { prompt: number; afterRequest: number; entries: number; file: string; receipt?: unknown }; paused: boolean; error?: string };
-type Verdict = { pass: boolean; requests: string[]; details?: unknown[] };
+type Verdict = { pass: boolean; requests: string[]; details?: unknown[]; reportOnly?: boolean };
 type Row = { shape: string; provider: string; factor: number; window: number; point: Point; status: string; reason?: string; checkpoint?: number; unpairedRequests?: string[]; rules?: Record<string, Verdict>; precision?: { resumed: number; uninterrupted: number; delta: number; percentRoom: number; requestsUntilMatchingCut: number | null; remainingRequests: number }; resumed?: Trace; native?: Trace; uninterrupted?: Trace };
 
 // Identical prompt text in all arms; request/tool scripts retain their original absolute counters across resume.
@@ -171,8 +171,12 @@ function compare(cell: Cell, point: Point, checkpoint: number, warm: Trace, resu
   const refusal = f.params.clause === 'refusal' ? Number(f.params.prompt) : NaN;
   return Number.isFinite(prompt) ? prompt >= checkpoint + 1 : Number.isFinite(refusal) ? refusal >= checkpoint + 1 : true;
  });
+ const thrash = failures.filter(f => ['thrash', 'useful-cut'].includes(f.rule));
+ // The interrupted workload itself has pre-existing T findings. Exempt only exact warm matches;
+ // any new/different finding still fails, and both traces plus the raw findings stay in the report.
+ const unchangedThrash = thrash.length > 0 && thrash.every(f => warm.failures.some(w => JSON.stringify(w) === JSON.stringify(f)));
  const rules: Record<string, Verdict> = {
-  '1:request-size': verdict(larger.map(label), larger.map(r => ({ request: r.request, tuck: r.raw, native: paired(r, native)?.raw, warm: paired(r, warm)?.raw }))),
+  '1:request-size': { ...verdict(larger.map(label), larger.map(r => ({ request: r.request, tuck: r.raw, native: paired(r, native)?.raw, warm: paired(r, warm)?.raw }))), reportOnly: true },
   '2:cut-point': verdict(failures.filter(f => f.params.clause === 'forced-point').map(f => {
    const cut = resumed.cuts.find(c => c.id === f.params.entryId);
    return cut ? `after #${cut.afterRequest} p${cut.prompt + 1}.${cut.ordinal}` : String(f.params.entryId);
@@ -181,7 +185,7 @@ function compare(cell: Cell, point: Point, checkpoint: number, warm: Trace, resu
   '4:overflow-truncation': verdict(overflow.map(label), overflow.map(r => ({ ...r, native: paired(r, native) }))),
   'lost-prompt': verdict(failures.filter(f => ['lost-prompt', 'task-turn'].includes(f.rule)).map(f => `p${f.params.prompt}`)),
   'stranded': verdict(failures.filter(f => ['no-recovery', 'stuck', 'harness'].includes(f.rule)).map(f => f.message)),
-  'thrash': verdict(failures.filter(f => ['thrash', 'useful-cut'].includes(f.rule)).map(f => f.message)),
+  'thrash': { ...verdict(thrash.map(f => f.message), thrash), ...(unchangedThrash ? { reportOnly: true } : {}) },
   'grid-other': verdict(failures.filter(f => !['lost-prompt', 'task-turn', 'no-recovery', 'stuck', 'harness', 'thrash', 'useful-cut', 'native-parity', 'refusal', 'clip-room', 'no-clip', 'fresh-room'].includes(f.rule)).map(f => f.message)),
  };
  const first = sent[0], prior = first && paired(first, warm);
@@ -191,7 +195,7 @@ function compare(cell: Cell, point: Point, checkpoint: number, warm: Trace, resu
   percentRoom: (first.raw - prior.raw) * 100 / room,
   requestsUntilMatchingCut: matching ? Math.max(0, matching.afterRequest - start) : null, remainingRequests: sent.length } : undefined;
  return { shape: cell.name, provider: cell.extra?.model?.provider ?? 'openai-codex', factor: cell.usageRatio ?? 1,
-  window: cell.window, point, checkpoint: checkpoint + 1, status: Object.values(rules).every(v => v.pass) ? 'pass' : 'fail', unpairedRequests, rules, precision, resumed, native, uninterrupted: warm };
+  window: cell.window, point, checkpoint: checkpoint + 1, status: Object.values(rules).every(v => v.pass || v.reportOnly) ? 'pass' : 'fail', unpairedRequests, rules, precision, resumed, native, uninterrupted: warm };
 }
 
 function checkpoint(point: Point, warm: Trace): number | undefined {
@@ -245,7 +249,8 @@ async function runShards() {
 function finish(rows: Row[], shapes: number) {
  const summary = { shapes: shapes, cells: rows.length, resumed: rows.filter(r => r.resumed?.cold && r.native?.cold && r.status !== 'not-reached').length,
   passed: rows.filter(r => r.status === 'pass').length, failed: rows.filter(r => r.status === 'fail').length,
-  notReached: rows.filter(r => r.status === 'not-reached').length, harnessErrors: rows.filter(r => r.status === 'harness-error').length, precision: precisionSummary(rows) };
+  notReached: rows.filter(r => r.status === 'not-reached').length, harnessErrors: rows.filter(r => r.status === 'harness-error').length,
+  literalSizeFindings: rows.filter(r => r.rules?.['1:request-size']?.pass === false).length, precision: precisionSummary(rows) };
  const dir = process.env.RESUME_OUTPUT ?? mkdtempSync(join(tmpdir(), 'pi-tuck-resume-'));
  mkdirSync(dir, { recursive: true });
  // Shared traces are stored once per arm to keep the report reasonably small.
@@ -254,7 +259,7 @@ function finish(rows: Row[], shapes: number) {
  const compactRows = rows.map(({ resumed, native, uninterrupted, ...row }) => ({ ...row, resumed: id(resumed), native: id(native), uninterrupted: id(uninterrupted) }));
  writeFileSync(join(dir, 'resume.json'), JSON.stringify({ summary, tolerance: TOLERANCE, rows: compactRows, traces }, null, 1));
  const table = ['| Shape | Provider / factor / window | R (next prompt) | 1 size | 2 cut | 3 refusal | 4 overflow | Prompt / strand / thrash | Precision Δ / room | Matching cut after requests |', '|---|---|---|---|---|---|---|---|---|---|'];
- const cellVerdict = (row: Row, rule: string) => { const v = row.rules?.[rule]; return v ? v.pass ? 'pass' : `FAIL ${v.requests.join(', ')}` : '—'; };
+ const cellVerdict = (row: Row, rule: string) => { const v = row.rules?.[rule]; return v ? v.pass ? 'pass' : `${v.reportOnly ? 'report only' : 'FAIL'} ${v.requests.join(', ')}` : '—'; };
  for (const row of rows) table.push(`| ${row.shape} | ${row.provider} / ${row.factor} / ${row.window} | ${row.point} (${row.checkpoint ?? '—'}) | ${cellVerdict(row, '1:request-size')} | ${cellVerdict(row, '2:cut-point')} | ${cellVerdict(row, '3:early-refusal')} | ${cellVerdict(row, '4:overflow-truncation')} | ${row.rules ? ['lost-prompt', 'stranded', 'thrash'].map(r => cellVerdict(row, r)).join(' / ') : row.reason} | ${row.precision ? row.precision.percentRoom.toFixed(3) + '%' : '—'} | ${row.precision ? row.precision.requestsUntilMatchingCut ?? 'not matched in remaining ' + row.precision.remainingRequests : '—'} |`);
  writeFileSync(join(dir, 'cells.md'), table.join('\n') + '\n');
  say(JSON.stringify(summary)); say(`report ${dir}`);

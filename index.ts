@@ -72,6 +72,7 @@ export default async function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		const current = ++session;
 		stderrSaid.clear();
+		if (handle.state?.(ctx).kind === "standingDown") return;
 		if (settings.error) once(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");
 		if (!appleSilicon)
 			return announce(ctx, "off-platform");

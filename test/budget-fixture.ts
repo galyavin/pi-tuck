@@ -172,6 +172,8 @@ export interface Options {
  onRequest?: (request: number, context: { setHost: (tokens: number) => void; pi: ExtensionAPI }) => void;
  compaction?: Partial<CompactionOptions>;
  compactionEnabled?: boolean;
+ /** Isolate final capacity/projection arithmetic: native auto-cuts and pi-tuck's planners are absent, while the guard remains active. */
+ guardOnly?: boolean;
  /** The model's window and maximum output when they are not the 272,000 and 128,000 the pins assume (a small-room test). The fixture then does not check the room. */
  limits?: { contextWindow: number; maxTokens: number };
  /** Tokens of the system prompt (default 12,000, about the size of a real host's). Sized by the fixture's `text()`, which estimates to about 0.6 of the number, because its items are 13 characters and the estimator's length count assumes 24. */
@@ -258,7 +260,7 @@ export async function harness(options: Options) {
    manager.appendMessage(answer([{ type: 'text', text: 'Observed prior result' }]));
   };
   const saved = () => manager.buildSessionProjection().messages;
-  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: options.compactionEnabled ?? true, reserveTokens: options.reserveTokens ?? 32768, keepRecentTokens: options.keepRecent ?? 0 } });
+  const settings = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: options.guardOnly ? false : options.compactionEnabled ?? true, reserveTokens: options.reserveTokens ?? 32768, keepRecentTokens: options.keepRecent ?? 0 } });
   // stops records the stop reason of every reply the scripted model handed back, in order, so a caller can tell what one of its own prompts got.
   // counts records, per request, what the provider's tokenizer makes of it and whether a reply before it had reported usage (so density was known);
   // overflows counts the requests the provider refused for size; vetoes the cuts another extension cancelled.
@@ -333,11 +335,14 @@ export async function harness(options: Options) {
    pi.on('turn_end', (event, ctx) => { if (event.toolResults.length) cutsAtProbe.push(manager.getEntries().filter(e => e.type === 'compaction').length); if (event.toolResults.length) probes.push({ after: state.requests, at: 'tool', queued: nonSystem(event.context.pendingMessages as Messages), complete: referenceSystemPart(event.context.contextMessages, ctx.getSystemPrompt(), toolsJson()) + hostTokens() + nonSystem(event.context.contextMessages) }); });
    // The trigger and guard tests pin the band at cutAt 1 (the room less the margin); a test of another cut point sets it in `compaction`,
    // and `cutAtDefault` leaves it to the compactor's default.
-   if (!options.plainPi) await install(pi, {
+   const plannerEvents = new Set(['input', 'before_agent_start', 'agent_start', 'turn_end', 'agent_before_settle']);
+   const compactorAPI = options.guardOnly ? { ...pi, on: ((name: string, handler: any) => { if (!plannerEvents.has(name)) (pi.on as any)(name, handler); }) as ExtensionAPI['on'] } : pi;
+   if (!options.plainPi) await install(compactorAPI, {
     // The response reserve is Pi's setting, which is what the session actually holds; a case that needs an exact reserve passes its own below.
     requestReserve: () => ({ response: options.reserveTokens ?? 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
-    fail: e => { faults.push(String(e) + (process.env.BUDGET_TRACE ? ' @ ' + String((e as Error).stack).split('\n').slice(1, 4).join(' | ') : '')); options.onFailure?.(e); }, settings,
+    fail: e => { faults.push(String(e) + (process.env.BUDGET_TRACE ? ' @ ' + String((e as Error).stack).split('\n').slice(1, 4).join(' | ') : '')); options.onFailure?.(e); },
+    settings: options.guardOnly ? SettingsManager.inMemory({ compaction: { ...settings.getCompactionSettings(model), enabled: true } }) : settings,
     ...options.compaction,
     ...(options.cutAtDefault ? { cutAt: undefined } : { cutAt: options.compaction?.cutAt ?? 1 }),
    });

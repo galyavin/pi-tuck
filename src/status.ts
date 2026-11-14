@@ -15,6 +15,7 @@ export const LOADED_VERSION: string = (() => {
 export function statusText(input: {
     version: string;
     active: boolean;
+    compaction?: import('./compaction').CompactionState;
     branch: readonly { type: string; tokensBefore?: unknown; details?: unknown; customType?: unknown; data?: unknown }[];
     pending?: boolean;
     cutAt: number | undefined;
@@ -22,6 +23,7 @@ export function statusText(input: {
     semantic: { state: SemanticState; lastError: string | null };
 }): string {
     if (!input.active) return `pi-tuck ${input.version} is loaded but inactive in this host; Pi's own compaction runs.`;
+    if (input.compaction?.kind === 'standingDown') return `pi-tuck ${input.version}: standing down: ${input.compaction.reason}; Pi's own compaction runs.`;
     const cuts = input.branch.filter(e => e.type === "compaction"), ours = cuts.filter(e => (e.details as { compactor?: unknown } | null | undefined)?.compactor === "pi-tuck");
     const last = ours.at(-1), before = last?.tokensBefore, after = (last?.details as { tokensAfter?: unknown } | undefined)?.tokensAfter;
     const count = (n: number) => n.toLocaleString("en-US");

@@ -1,7 +1,27 @@
 import { expect, test } from 'vitest';
-import { SemanticRecallController } from '../src/semantic-recall';
+import { SemanticRecallController, type SemanticSetup } from '../src/semantic-recall';
 
 const config = { pythonPath: '/usr/bin/python3', runtimeRoot: '/tmp/tuck-transition-runtime', indexDirectory: '/tmp/tuck-transition-index' };
+const off: SemanticSetup[] = ['off-settings', 'off-user', 'off-platform', 'off-project'];
+const allowed: Record<SemanticSetup, SemanticSetup[]> = {
+ 'off-settings': [...off],
+ 'off-user': [...off, 'not-installed', 'starting', 'failed'],
+ 'off-platform': [...off, 'not-installed', 'starting'],
+ 'off-project': [...off, 'not-installed', 'starting'],
+ 'not-installed': [...off, 'not-installed', 'starting', 'failed'],
+ starting: [...off, 'not-installed', 'starting', 'failed', 'ready'],
+ failed: [...off, 'not-installed', 'starting', 'failed'],
+ ready: [...off, 'not-installed', 'starting', 'failed', 'ready'],
+};
+for (const from of Object.keys(allowed) as SemanticSetup[]) for (const to of Object.keys(allowed) as SemanticSetup[])
+test(`setSetup guards ${from} -> ${to}`, async () => {
+ const c = new SemanticRecallController(config);
+ try {
+  c.setSetup('starting'); c.setSetup(from);
+  c.setSetup(to);
+  expect(c.status().setup).toBe(allowed[from].includes(to) ? to : from);
+ } finally { await c.close(); }
+});
 test.each(['off-project', 'off-platform', 'off-settings'] as const)('enable preserves the %s policy state', async state => {
  const controller = new SemanticRecallController(config);
  try {

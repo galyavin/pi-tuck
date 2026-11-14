@@ -140,6 +140,18 @@ export function healDelayMs(attempts:number,integrity:boolean,delays:readonly nu
 const CHURN=/indexing incomplete|history changed|source changed before|branch or source changed|cancelled/i;
 export type SemanticState='disabled'|'unavailable'|'preparing'|'ready'|'waiting';
 export type SemanticSetup = 'off-settings' | 'off-user' | 'not-installed' | 'off-platform' | 'off-project' | 'starting' | 'failed' | 'ready';
+const OFF_SETUP: readonly SemanticSetup[] = ['off-settings', 'off-user', 'off-platform', 'off-project'];
+/** Host policy is re-evaluated at session start; only a start may publish ready. */
+export const SEMANTIC_SETUP_TRANSITIONS: Readonly<Record<SemanticSetup, readonly SemanticSetup[]>> = {
+ 'off-settings': OFF_SETUP,
+ 'off-user': [...OFF_SETUP, 'not-installed', 'starting', 'failed'],
+ 'off-platform': [...OFF_SETUP, 'not-installed', 'starting'],
+ 'off-project': [...OFF_SETUP, 'not-installed', 'starting'],
+ 'not-installed': [...OFF_SETUP, 'not-installed', 'starting', 'failed'],
+ starting: [...OFF_SETUP, 'not-installed', 'starting', 'failed', 'ready'],
+ failed: [...OFF_SETUP, 'not-installed', 'starting', 'failed'],
+ ready: [...OFF_SETUP, 'not-installed', 'starting', 'failed', 'ready'],
+};
 interface SetupDetail { installed?: boolean; reason?: string; stage?: 'setup' | 'start'; notice?: string; announced?: boolean }
 /** Setup and operator wording have one owner; runtime indexing state remains separate. */
 export function semanticSetupMessage(setup: SemanticSetup, detail: SetupDetail = {}): string | null {
@@ -307,7 +319,10 @@ export class SemanticRecallController {
  onStateChange(listener:(state:SemanticState,reason:string|null)=>void):()=>void{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};}
  private touch(){if(this.announcing)return;this.announcing=true;queueMicrotask(()=>{this.announcing=false;const {state,lastError}=this.status(),key=state+'\0'+(lastError??'');if(key===this.announced)return;this.announced=key;for(const listener of [...this.listeners])try{listener(state,lastError);}catch{}});}
  /** A host that could not configure the runtime records why a requested start failed. The controller stays disabled and `lastError` carries the reason until the next `enable`. */
- setSetup(setup: SemanticSetup, detail: SetupDetail = {}) { const announced = setup === 'ready' && this.setupDetail.announced; this.setup = setup; this.setupDetail = announced ? { ...detail, announced: true } : detail; this.touch(); }
+ setSetup(setup: SemanticSetup, detail: SetupDetail = {}) {
+  if(!SEMANTIC_SETUP_TRANSITIONS[this.setup].includes(setup))return;
+  const announced = setup === 'ready' && this.setupDetail.announced; this.setup = setup; this.setupDetail = announced ? { ...detail, announced: true } : detail; this.touch();
+ }
  /** Compatibility for hosts that already record an external start failure. */
  refuse(reason:string){this.setSetup('failed', { stage: 'start', reason });}
  setupNotice(){return semanticSetupNotice(this.setup, this.setupDetail);}
@@ -318,7 +333,8 @@ export class SemanticRecallController {
   this.configure({...JSON.parse(text) as SemanticRecallConfig,...(runtime?.nativeOwnerHelperPath===undefined?{}:{nativeOwnerHelperPath:runtime.nativeOwnerHelperPath})});}
  enable(){
   // Explicit opt-in can end off-user; project, platform and settings policy belongs to the host.
-  if(['off-project','off-platform','off-settings'].includes(this.setup))return;
+  if(['off-user','not-installed','failed'].includes(this.setup))this.setSetup('starting');
+  if(!SEMANTIC_SETUP_TRANSITIONS[this.setup].includes('ready'))return;
   try{if(this.closing||this.joiningSearches||this.cleanupError)throw new Error('Semantic cleanup is unresolved; retry close before enable');if(!this.config)throw new Error('Optional local semantic runtime is not configured');this.setSetup('ready');this.enabled=true;this.error=null;this.healReason=null;this.healAttempts=0;this.cancelHeal();if(this.provider&&this.active)this.schedule(this.provider);}
   catch(error){this.setSetup('failed',{stage:'start',reason:error instanceof Error?error.message:String(error)});throw error;}
  }
