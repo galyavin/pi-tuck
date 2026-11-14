@@ -75,18 +75,53 @@ export class StartingPrompt {
     }
 }
 
-export interface Run {
-    phase: 'decided' | 'starting' | 'admitted' | 'failed';
-    claimed: boolean;
-    expired: boolean;
+export type RunPhase = 'decided' | 'claimed' | 'expired' | 'starting' | 'admitted' | 'failed' | 'commit-failed';
+/** Claim/expiry describe the input plan; a failed attempt cannot re-enter a live phase. */
+export const RUN_TRANSITIONS: Readonly<Record<RunPhase, readonly RunPhase[]>> = {
+    decided: ['claimed', 'expired', 'starting', 'failed', 'commit-failed'],
+    claimed: ['claimed', 'starting', 'failed', 'commit-failed'],
+    expired: ['starting', 'failed', 'commit-failed'],
+    starting: ['admitted', 'failed', 'commit-failed'],
+    admitted: ['admitted', 'failed', 'commit-failed'],
+    failed: ['failed', 'commit-failed'],
+    'commit-failed': ['commit-failed'],
+};
+let reportedInvalidTransition = false;
+type RunState = { phase: Exclude<RunPhase, 'failed' | 'commit-failed'> } | { phase: 'failed' | 'commit-failed'; error: Error };
+
+export class Run {
+    private state: RunState;
+    // Input-plan provenance survives starting/admission: later native threshold
+    // checks still choose the live view when the original input plan expired.
+    private expiredPlan = false;
+    constructor(phase: Exclude<RunPhase, 'failed' | 'commit-failed'>) { this.state = { phase }; }
+    get phase() { return this.state.phase; }
+    get expired() { return this.expiredPlan; }
+    /** Failure data, only present in a failed phase. The phase alone decides admission. */
+    get error() { return 'error' in this.state ? this.state.error : undefined; }
+    transition(phase: RunPhase, ctx?: Pick<ExtensionContext, 'hasUI'>, error?: Error): boolean {
+        if (!RUN_TRANSITIONS[this.phase].includes(phase) || ((phase === 'failed' || phase === 'commit-failed') && !error)) {
+            const message = `pi-tuck: invalid run transition ${this.phase} -> ${phase}`;
+            if (process.env.NODE_ENV === 'test') throw new Error(message);
+            if (ctx?.hasUI === false && !reportedInvalidTransition) {
+                reportedInvalidTransition = true;
+                try { process.stderr.write(message + '\n'); } catch { /* ended */ }
+            }
+            return false;
+        }
+        this.state = phase === 'failed' || phase === 'commit-failed' ? { phase, error: error! } : { phase };
+        if (phase === 'expired') this.expiredPlan = true;
+        return true;
+    }
     prompt?: StartingPrompt;
-    cut: PendingCut;
-    clips: Map<string, Clip>;
-    pendingBoundaryCommit: boolean;
-    pendingBoundaryReceipts: string[];
-    thinkingRetryPending: boolean;
-    failure?: Error;
-    refusalReceipted: boolean;
+    cut = new PendingCut();
+    clips = new Map<string, Clip>();
+    pendingBoundaryReceipts: string[] = [];
+    thinkingRetryPending = false;
+    refusalReceipted = false;
+    clear() {
+        this.prompt = undefined; this.cut.clear(); this.clips.clear(); this.pendingBoundaryReceipts = [];
+        this.thinkingRetryPending = false; this.refusalReceipted = false; this.expiredPlan = false;
+    }
 }
-export const createRun = (phase: Run['phase']): Run => ({ phase, claimed: false, expired: false,
-    cut: new PendingCut(), clips: new Map(), pendingBoundaryCommit: false, pendingBoundaryReceipts: [], thinkingRetryPending: false, refusalReceipted: false });
+export const createRun = (phase: ConstructorParameters<typeof Run>[0]): Run => new Run(phase);

@@ -1,20 +1,23 @@
-import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, normalizeContext, type Context } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, normalizeContext, type Context, type Model } from '@earendil-works/pi-ai';
 import {
   convertToLlm, createAgentSession, DefaultResourceLoader, SessionManager, sessionEntryToContextMessages,
   type CompactionEntry, type SessionEntry,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { harness } from './budget-fixture';
+import { SEMANTIC_SETUP_TRANSITIONS, type SemanticSetup } from '../src/semantic-recall';
 
 // Only Pi's public APIs and the existing scripted-provider fixture are used here.
-// In particular, neither receipts/details nor pi-tuck's planner/state are an oracle.
+// Request/view expectations do not use receipts/details or pi-tuck's planner. The
+// additional impossible-state checks observe a read-only compactor snapshot.
 export type Event = {
-  kind: 'prompt' | 'handled' | 'custom' | 'tools' | 'tree' | 'new' | 'compact' | 'abort' | 'semantic';
+  kind: 'prompt' | 'handled' | 'custom' | 'tools' | 'tree' | 'new' | 'compact' | 'abort' | 'semantic' | 'resume' | 'model' | 'refusal';
   tokens?: number;
   rounds?: number;
   resultTokens?: number;
   target?: number;
   enabled?: boolean;
+  switched?: boolean;
   scenario?: 'handled-custom' | 'handled-tree-custom';
 };
 export type Finding = { invariant: number | 'harness'; check: string; at: number; message: string; scenario?: Event['scenario'] };
@@ -25,12 +28,14 @@ export type Coverage = {
   modelSearches: number; searchBoundaries: number; disabledSearches: number; noCutRequests: number; savedViews: number;
   quotedPrompts: number;
   aborts: number; handled: number; sessions: number; treeMoves: number; manual: number; semantic: number; semanticNotices: number;
+  resumes: number; modelSwitches: number; stateChecks: number; failedRuns: number; pendingResets: number;
 };
 export const emptyCoverage = (): Coverage => ({ requests: 0, promptCuts: 0, boundaryCuts: 0, fresh: 0,
   searches: 0, modelSearches: 0, searchBoundaries: 0, disabledSearches: 0, noCutRequests: 0, savedViews: 0, quotedPrompts: 0,
-  aborts: 0, handled: 0, sessions: 0, treeMoves: 0, manual: 0, semantic: 0, semanticNotices: 0 });
+  aborts: 0, handled: 0, sessions: 0, treeMoves: 0, manual: 0, semantic: 0, semanticNotices: 0,
+  resumes: 0, modelSwitches: 0, stateChecks: 0, failedRuns: 0, pendingResets: 0 });
 export const emptyAppendOnlyCoverage = () => ({ checked: 0,
-  exempt: { new: 0, tree: 0, manual: 0, abort: 0, summary: 0, historyTools: 0 } });
+  exempt: { new: 0, tree: 0, manual: 0, abort: 0, model: 0, resume: 0, summary: 0, historyTools: 0 } });
 type AppendOnlyExemption = keyof ReturnType<typeof emptyAppendOnlyCoverage>['exempt'];
 
 const textOf = (content: unknown): string => typeof content === 'string' ? content : Array.isArray(content)
@@ -140,25 +145,32 @@ function body(marker: string, tokens: number): string {
   return `${marker} ` + 'recorded context data '.repeat(Math.ceil(tokens * 4 / 22)) + ` END-${marker}`;
 }
 
-async function open(branch?: SessionEntry[], cwd?: string) {
+async function open(branch?: SessionEntry[], cwd?: string, selectedModel?: Model<any>) {
+  let refuse = false;
   const h = await harness({ at: 'prompt', complete: 0, host: 0, noHistory: true, noOpening: true,
+    persist: !branch, trackRuntimeSpies: false,
     systemTokens: 200, stableHost: true, liveTools: true, reserveTokens: 4096, keepRecent: 0,
     toolResultTokens: () => effectTokens,
-    limits: { contextWindow: 32768, maxTokens: 4096 }, cutAtDefault: true });
+    limits: { contextWindow: 32768, maxTokens: 4096 }, cutAtDefault: true,
+    compaction: { requestReserve: () => ({ response: refuse ? 32768 : 4096 }) } });
   let session = h.session;
+  session.modelRuntime.checkAuth = async () => ({ type: 'api_key', source: 'scripted test' });
   // Load a genuinely separate, later extension. The loader's public extension
   // list is shared with Pi's runner; this extension needs no runtime actions.
-  const handled = new DefaultResourceLoader({ cwd: h.dir, agentDir: h.dir, settingsManager: h.settings,
+  const loadHandled = async () => {
+   const handled = new DefaultResourceLoader({ cwd: h.dir, agentDir: h.dir, settingsManager: h.settings,
     noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true,
     extensionFactories: [pi => { pi.on('input', event => event.text.startsWith('SEQ-handled-') ? { action: 'handled' } : undefined); }] });
   await handled.reload();
   h.session.resourceLoader.getExtensions().extensions.push(...handled.getExtensions().extensions);
+  };
+  await loadHandled();
   if (branch) {
     // A new in-memory manager preserves IDs and timestamps, but has only this
     // branch. The new harness above installed a completely fresh pi-tuck instance.
     const manager = SessionManager.inMemory(cwd ?? h.dir, undefined, structuredClone(branch));
     session = (await createAgentSession({ cwd: cwd ?? h.dir, modelRuntime: h.session.modelRuntime,
-      model: h.session.model, thinkingLevel: 'low', sessionManager: manager, settingsManager: h.settings,
+      model: selectedModel ?? h.session.model, thinkingLevel: 'low', sessionManager: manager, settingsManager: h.settings,
       resourceLoader: h.session.resourceLoader, tools: ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'], customTools: [{
         name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
         execute: async () => ({ content: [{ type: 'text' as const, text: 'oracle unused effect' }], details: {} }),
@@ -168,7 +180,22 @@ async function open(branch?: SessionEntry[], cwd?: string) {
       onError: event => h.faults.push(event.error), abortHandler: () => { void session.abort(); } });
   }
   h.extension().setActiveTools(['effect']);
-  return { h, session, manager: session.sessionManager, async close() {
+  return { h, get session() { return session; }, get manager() { return session.sessionManager; },
+    setRefusal(value: boolean) { refuse = value; },
+    async coldResume() {
+      if (branch) throw new Error('Fresh branch comparison cannot resume');
+      const before = JSON.stringify(session.sessionManager.buildSessionProjection().messages);
+      const file = session.sessionManager.getSessionFile();
+      if (!file) throw new Error('Cold resume needs a saved session file');
+      // Pi's unsummarized /tree only moves an in-memory leaf pointer. Reopening
+      // selects the last saved leaf until a new entry has persisted that branch.
+      const saved = JSON.stringify(SessionManager.open(file, h.dir).buildSessionProjection().messages);
+      const result = await h.coldResume();
+      session = h.session;
+      await loadHandled();
+      if (JSON.stringify(session.sessionManager.buildSessionProjection().messages) !== saved) throw new Error('Cold resume changed the saved projection');
+      return { ...result, changedBranch: saved !== before };
+    }, async close() {
     try {
       await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
       if (session !== h.session) { await session.abort(); session.dispose(); }
@@ -199,6 +226,12 @@ function provider(rig: Rig, event: Event, marker: string, requests: Request[], i
   let reached!: () => void;
   const ready = new Promise<void>(resolve => { reached = resolve; });
   rig.session.agent.streamFunction = async (_model, context, options) => {
+    // Like the stress transport, an already-aborted attempt never sends a request.
+    if (options?.signal?.aborted) {
+      const stream = createAssistantMessageEventStream(), message = rig.h.answer([], 'aborted');
+      stream.push({ type: 'error', reason: 'aborted', error: message }); stream.end(message);
+      return stream;
+    }
     // Isolate the received request from Pi's live state, including test faults.
     context = structuredClone(context);
     observeRequest?.(context);
@@ -230,6 +263,7 @@ function provider(rig: Rig, event: Event, marker: string, requests: Request[], i
       ? [{ type: 'toolCall', id: `${marker}-call-${round}`, name, arguments: name === 'tuck_search' ? { query: 'recorded context' } : {} }]
       : [{ type: 'text', text: body(`${marker}-answer`, 500) }], toolRound ? 'toolUse' : 'stop');
     message.timestamp = Date.now();
+    Object.assign(message, { provider: rig.session.model!.provider, api: rig.session.model!.api, model: rig.session.model!.id });
     round++;
     stream.push({ type: 'done', reason: toolRound ? 'toolUse' : 'stop', message }); stream.end(message);
     reached();
@@ -323,6 +357,45 @@ export async function runSequence(seed: number, events: Event[]) {
       findings.push({ invariant, check, at, message, scenario: events[at]?.scenario });
     }
   };
+  const originalModel = rig.session.model!;
+  const switchedModel = { ...originalModel, provider: 'sequence-provider', api: 'openai-completions', id: 'sequence-model' };
+  const failedRuns = new WeakSet<object>();
+  const setupMoves: { from: SemanticSetup; to: SemanticSetup }[] = [];
+  const checkState = (reset = false) => {
+    const ctx = rig.session.extensionRunner.createToolContext('sequence-state', undefined);
+    const handle = rig.h.compactionHandle(), state = handle.inspectState(ctx);
+    coverage.stateChecks++;
+    if (state.run) {
+      if (state.phase === 'admitted' && failedRuns.has(state.run)) report(7, 'failed run became admitted');
+      if (state.phase === 'failed' || state.phase === 'commit-failed') {
+        if (!failedRuns.has(state.run)) coverage.failedRuns++;
+        failedRuns.add(state.run);
+      }
+    }
+    const key = ctx.model ? JSON.stringify([ctx.model.provider, ctx.model.api, ctx.model.id]) : '';
+    if (state.calibrationIdentity !== key) report(8, `calibration identity ${state.calibrationIdentity} differs from current model ${key}`);
+    if (reset && state.pendingCut) report(9, 'pending cut survived a session/tree change');
+    // Validate every observed D4 move, including intermediate starting/failed states.
+    for (const { from, to } of setupMoves.splice(0)) if (!SEMANTIC_SETUP_TRANSITIONS[from].includes(to)) report(10, `unreachable D4 transition: ${from} -> ${to}`);
+    const semantic = handle.semanticRecall.status();
+    if (!(semantic.setup in SEMANTIC_SETUP_TRANSITIONS) || semantic.enabled !== (semantic.setup === 'ready') || semantic.setup === 'ready' && !semantic.configured)
+      report(10, `unreachable D4 setup: ${JSON.stringify(semantic)}`);
+  };
+  rig.h.observeExtension(pi => {
+    const semantic = rig.h.compactionHandle().semanticRecall, setSetup = semantic.setSetup.bind(semantic);
+    semantic.setSetup = (...args) => {
+      const from = semantic.status().setup;
+      setSetup(...args);
+      setupMoves.push({ from, to: semantic.status().setup });
+    };
+    // Observe intermediate phases too: settlement erases ordinary failed runs.
+    pi.on('input', () => { checkState(); });
+    pi.on('before_agent_start', () => { checkState(); });
+    pi.on('agent_start', () => { checkState(); });
+    pi.on('agent_settled', () => { checkState(); });
+    pi.on('session_start', () => { checkState(true); });
+    pi.on('session_tree', () => { checkState(true); });
+  });
   let previousRequest: Context | undefined, previousAt = -1, requestNumber = 0, faultInjected = false;
   const boundaries = new Set<AppendOnlyExemption>();
   const observeRequest = (context: Context) => {
@@ -330,7 +403,7 @@ export async function runSequence(seed: number, events: Event[]) {
     if (previousRequest) {
       // Count each exempt pair once. Completed public lifecycle actions take
       // precedence over summary/tool changes visible in the requests themselves.
-      const boundary = (['new', 'tree', 'manual', 'abort'] as const).find(reason => boundaries.has(reason));
+      const boundary = (['new', 'tree', 'manual', 'abort', 'model', 'resume'] as const).find(reason => boundaries.has(reason));
       let pair = appendOnlyPair(previousRequest, context);
       if (!boundary && !pair.exempt && !pair.difference && !faultInjected && process.env.LIFECYCLE_FAULT === 'reorder') {
         const oldCount = previousRequest.messages.filter(message => message.role !== 'system'
@@ -365,6 +438,10 @@ export async function runSequence(seed: number, events: Event[]) {
       const oldFaults = rig.h.faults.length;
       const oldNotices = rig.h.notices.length;
       try {
+        if (['new', 'tree', 'resume'].includes(event.kind)) {
+          const ctx = rig.session.extensionRunner.createToolContext('sequence-before-reset', undefined);
+          if (rig.h.compactionHandle().inspectState(ctx).pendingCut) coverage.pendingResets++;
+        }
         if (event.kind === 'new') {
           await rig.session.abort();
           rig.manager.newSession();
@@ -385,6 +462,19 @@ export async function runSequence(seed: number, events: Event[]) {
           if (result.cancelled || result.aborted) throw new Error('Tree move was cancelled');
           coverage.treeMoves++;
           boundaries.add('tree');
+        } else if (event.kind === 'resume') {
+          if ((await rig.coldResume()).changedBranch) boundaries.add('resume');
+          coverage.resumes++;
+        } else if (event.kind === 'model') {
+          await rig.session.setModel(event.switched ? switchedModel : originalModel);
+          coverage.modelSwitches++;
+          boundaries.add('model');
+        } else if (event.kind === 'refusal') {
+          const requests: Request[] = [];
+          provider(rig, event, marker, requests, false, observeRequest);
+          rig.setRefusal(true); // a real host reserve refusal; leave a normal-sized saved prompt
+          try { await rig.session.prompt(body(marker, 200)); } finally { rig.setRefusal(false); }
+          if (requests.length || rig.h.faults.length === oldFaults) report('harness', `capacity refusal did not block the provider: requests=${requests.length} faults=${JSON.stringify(rig.h.faults.slice(oldFaults))}`);
         } else if (event.kind === 'compact') {
           try { await rig.session.compact(); coverage.manual++; boundaries.add('manual'); }
           catch (error) { if (!/Already compacted|Nothing to compact/i.test(String(error))) throw error; }
@@ -417,7 +507,7 @@ export async function runSequence(seed: number, events: Event[]) {
           if (requests[0]?.view.summary && (requests[0].view.summary !== previousSummary?.summary
             || previousSummary.firstKeptEntryId && requests[0].view.kept !== previousSummary.firstKeptEntryId)) {
             coverage.promptCuts++;
-            const fresh = await open(branch, rig.manager.getCwd());
+            const fresh = await open(branch, rig.manager.getCwd(), rig.session.model);
             try {
               const expected: Request[] = [];
               await start(fresh, { ...event, rounds: 0 }, marker, expected, false);
@@ -457,8 +547,9 @@ export async function runSequence(seed: number, events: Event[]) {
               : 'empty firstKeptEntryId (Pi compact-all sentinel) is not an entry on the compaction branch');
         }
         await checkSemantic(rig, oldNotices, (n, m) => report(n, m), coverage);
-        for (const fault of rig.h.faults.slice(oldFaults)) report('harness', fault);
+        for (const fault of rig.h.faults.slice(oldFaults)) if (event.kind !== 'refusal' || !/Incoming Pi prompt and response reserve cannot fit/.test(fault)) report('harness', fault);
       } catch (error) { report('harness', String(error)); }
+      checkState(['new', 'tree', 'resume'].includes(event.kind));
     }
     return { seed, findings, coverage, appendOnly, trace };
   } finally { await rig.close(); }

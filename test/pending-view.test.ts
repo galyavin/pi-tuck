@@ -161,7 +161,7 @@ test('starting prompt binds once to its entry, including repeated text in steeri
   expect(prompt.id(manager.getBranch())).toBe(id);
   manager.appendMessage({ role: 'user', content: 'steer start', timestamp: 2 });
   expect(prompt.id(manager.getBranch())).toBe(id); expect(prompt.text(manager.getBranch())).toBe('start');
-  expect(createRun('decided')).toMatchObject({ phase: 'decided', pendingBoundaryCommit: false, expired: false, claimed: false });
+  expect(createRun('decided')).toMatchObject({ phase: 'decided', pendingBoundaryReceipts: [] });
 });
 
 test('a custom starting prompt binds by role and entry id before later identical custom text', () => {

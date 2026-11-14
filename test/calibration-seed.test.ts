@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import { CALIBRATION_CEILING, CALIBRATION_WINDOW, seedWindow } from '../src/compaction';
+import { CALIBRATION_CEILING, CALIBRATION_WINDOW, CALIBRATION_RECEIPT, seedWindow } from '../src/compaction';
 import { BAND_EXACT, EXACT_RESERVE, HOST, OVERFLOW_TEXT, ROOM_EXACT, WINDOW, harness, receiptOf } from './budget-fixture';
 import { CAPACITY, KEY, MODEL, SUMMARY, drive, edge, expectFactor, receipted, reporting, sessionWith, stamp, stampWindow } from './calibration-fixture';
 
@@ -14,6 +14,27 @@ import { CAPACITY, KEY, MODEL, SUMMARY, drive, edge, expectFactor, receipted, re
 // The factor is read through the guard (calibration-fixture.ts); exact values are also read off the receipts of real cuts.
 const OTHER = { ...MODEL, id: 'another-model' };
 const sessionOf = (details: unknown[]) => sessionWith(details).manager;
+
+test('switching identities away and back without a request keeps the in-process factor above the persisted ceiling', async () => {
+ await expectFactor(1.8, sessionOf([]), 'unused model switch', async d => {
+  await d.offer(10000); await d.reply(reporting(18000));
+  const original = d.ctx.model;
+  d.ctx.model = { ...MODEL, provider: 'other-provider', api: 'openai-completions', id: 'other-model' };
+  await d.emit('model_select', {});
+  d.ctx.model = original;
+  await d.emit('model_select', {});
+ });
+});
+
+test('the first request after model selection reads receipts appended by later selection handlers', async () => {
+ await expectFactor(1.23, sessionOf([]), 'late selection receipt', async d => {
+  d.ctx.model = OTHER;
+  await d.emit('model_select', {});
+  (d.ctx.sessionManager as SessionManager).appendCustomEntry(CALIBRATION_RECEIPT, {
+   calibrationIdentity: JSON.stringify([OTHER.provider, OTHER.api, OTHER.id]), calibrationWindow: [1.23],
+  });
+ });
+});
 
 test('a Resume starts at the newest receipt: 1.19 over an earlier 1.05, and 1.05 over an earlier 1.19 (the newest, not the largest)', async () => {
  await expectFactor(1.19, sessionOf([stamp(1.05), stamp(1.19)]), 'newest 1.19');

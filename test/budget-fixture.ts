@@ -290,6 +290,7 @@ export async function harness(options: Options) {
   let extension: ExtensionAPI | undefined;
   const activeToolsJson = () => JSON.stringify(extension!.getAllTools().filter(t => extension!.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
   let install = installCompaction;
+  let compactionHandle: Awaited<ReturnType<typeof installCompaction>> | undefined;
   const extensionObservers: ((pi: ExtensionAPI) => void)[] = [];
   // These counters belong to the scripted host, whose remaining scenario must be identical on both sides of a resume.
   let sectionRun = 0, sectionText: string | undefined, decisions = 0;
@@ -337,7 +338,7 @@ export async function harness(options: Options) {
    // and `cutAtDefault` leaves it to the compactor's default.
    const plannerEvents = new Set(['input', 'before_agent_start', 'agent_start', 'turn_end', 'agent_before_settle']);
    const compactorAPI = options.guardOnly ? { ...pi, on: ((name: string, handler: any) => { if (!plannerEvents.has(name)) (pi.on as any)(name, handler); }) as ExtensionAPI['on'] } : pi;
-   if (!options.plainPi) await install(compactorAPI, {
+   if (!options.plainPi) compactionHandle = await install(compactorAPI, {
     // The response reserve is Pi's setting, which is what the session actually holds; a case that needs an exact reserve passes its own below.
     requestReserve: () => ({ response: options.reserveTokens ?? 32768 }),
     hostMessages: () => { state.hostCalls++; return [hostInput()]; },
@@ -359,7 +360,7 @@ export async function harness(options: Options) {
   }] });
   let loader = makeLoader();
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-  const newSession = async (m: SessionManager) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
+  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
    name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
    execute: async () => {
     state.effects++;
@@ -637,6 +638,7 @@ export async function harness(options: Options) {
   return {
    dir, get manager() { return manager; }, get session() { return session!; }, settings, state, providerRequests, faults, notices, probes, guard, saved, promptTokens, cleanup, compactions, answer, text, sized, fit, cycle, round, setHost: (tokens: number) => { host = tokens; }, hostInput, hostSnapshot: () => { if (!latestHostInput) throw Error('No host input observed'); return latestHostInput; }, extension: () => extension!, mandatory,
    observeExtension: (observe: (pi: ExtensionAPI) => void) => { extensionObservers.push(observe); observe(extension!); },
+   compactionHandle: () => { if (!compactionHandle) throw Error('No compactor installed'); return compactionHandle; },
    /** End every old hook/runtime, open the same file, and import pi-tuck cold. */
    async coldResume() {
     const file = manager.getSessionFile();
@@ -652,7 +654,7 @@ export async function harness(options: Options) {
     manager = SessionManager.open(file, dir);
     loader = makeLoader();
     await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-    session = await newSession(manager);
+    session = await newSession(manager, old.model ?? model);
     session.agent.streamFunction = old.agent.streamFunction; // scripted server state belongs to the scenario
     expect(extension).not.toBe(oldExtension);
     await session.bindExtensions({ uiContext: ui as never, abortHandler: () => { state.aborts++; void session!.abort(); } });

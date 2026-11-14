@@ -90,12 +90,16 @@ function sequence(seed: number): Event[] {
     [{ kind: 'new' }, { kind: 'prompt', tokens: 3500 + pick(2500) }, { kind: 'tools', tokens: 200 + pick(300), rounds: 4 + pick(3), resultTokens: 6500 + pick(1500) }],
     [{ kind: 'new' }, { kind: 'abort', tokens: 4000 + pick(1500) }, { kind: 'prompt', tokens: 200 }, { kind: 'compact' }, { kind: 'custom', tokens: 200, rounds: 2 }],
     [{ kind: 'new' }, { kind: 'semantic', enabled: true }, { kind: 'semantic', enabled: false }, { kind: 'prompt', tokens: 2500 }],
+    [{ kind: 'new' }, { kind: 'prompt', tokens: 500 }, { kind: 'handled', tokens: 8000 }, { kind: 'resume' }, { kind: 'custom', tokens: 200 }],
+    [{ kind: 'new' }, { kind: 'prompt', tokens: 500 }, { kind: 'model', switched: true }, { kind: 'tools', tokens: 300, rounds: 2 },
+      { kind: 'resume' }, { kind: 'model', switched: false }, { kind: 'prompt', tokens: 200 }],
+    [{ kind: 'new' }, { kind: 'refusal' }, { kind: 'resume' }, { kind: 'prompt', tokens: 200 }],
   ];
-  const kinds = ['prompt', 'handled', 'custom', 'tools', 'tree', 'new', 'compact', 'abort'] as const;
+  const kinds = ['prompt', 'handled', 'custom', 'tools', 'tree', 'new', 'compact', 'abort', 'resume', 'model'] as const;
   const noise: Event[] = Array.from({ length: 8 }, () => {
     const kind = kinds[pick(kinds.length)];
     const tokens = kind === 'handled' ? 8000 : 500 + pick(5000);
-    return { kind, tokens: ['prompt', 'handled', 'custom', 'tools', 'abort'].includes(kind) ? tokens : undefined, target: pick(30),
+    return { kind, switched: Boolean(pick(2)), tokens: ['prompt', 'handled', 'custom', 'tools', 'abort'].includes(kind) ? tokens : undefined, target: pick(30),
       rounds: kind === 'tools' ? 3 + pick(4) : kind === 'custom' ? pick(3) : 0, resultTokens: 6000 + pick(2000) };
   });
   return [...shuffled(motifs).flat(), ...noise];
@@ -160,7 +164,7 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
   }
   process.stderr.write(`lifecycle seeds=${chosen.join(',')} runtime=${((Date.now() - started) / 1000).toFixed(2)}s coverage=${JSON.stringify(coverage)} appendOnly=${JSON.stringify(appendOnly)}\n`);
   // No silent successes from a generator which never actually cuts or searches.
-  for (const key of ['requests', 'promptCuts', 'boundaryCuts', 'fresh', 'modelSearches', 'savedViews', 'quotedPrompts', 'aborts', 'handled', 'sessions', 'treeMoves', 'manual', 'semantic', 'semanticNotices'] as const) {
+  for (const key of ['requests', 'promptCuts', 'boundaryCuts', 'fresh', 'modelSearches', 'savedViews', 'quotedPrompts', 'aborts', 'handled', 'sessions', 'treeMoves', 'manual', 'semantic', 'semanticNotices', 'resumes', 'modelSwitches', 'stateChecks', 'failedRuns', 'pendingResets'] as const) {
     expect(coverage[key], `no lifecycle coverage: ${key}`).toBeGreaterThan(0);
   }
   expect(failures, failures.join('\n\n')).toEqual([]);
