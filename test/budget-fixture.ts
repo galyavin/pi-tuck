@@ -12,6 +12,7 @@ import { bandOf } from '../src/budget';
 import { serializeTranscript } from '../src/tuck/core/transcript';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { providerRequest } from './request-options';
+import { requestBytes } from './request-bytes';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
 
 // Window 272,000 and response reserve max(32,768, model.maxTokens 128,000) leave an input room of 144,000 estimated tokens.
@@ -503,7 +504,7 @@ export async function harness(options: Options) {
    // No provider request went out when the already-aborted signal short-circuited it. Keep request-indexed answers aligned.
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
    // Use the same normalization for every request, including Pi's native summary calls.
-   const fingerprint = options.fingerprintWire ? createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' || key === 'durationMs' ? undefined : value).replaceAll(dir, '<session>')).digest('hex') : undefined;
+   const fingerprint = options.fingerprintWire ? createHash('sha256').update(requestBytes(_ctx, dir)).digest('hex') : undefined;
    if (fingerprint) providerFingerprints.push({ summary: Boolean(nativeCompaction && nativeSummarizing), wire: fingerprint });
    if (nativeCompaction && nativeSummarizing) {
     // Pi chooses the boundary, kept tail and summary prompt. The same scripted model's normal

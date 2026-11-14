@@ -1,11 +1,12 @@
 import { BUILD_ID } from './build-id.js';
 import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readdir, lstat, unlink, realpath } from 'node:fs/promises';
+import { mkdir, open, readdir, lstat, unlink, realpath, type FileHandle } from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { createRecall, type RecallPolicy } from './recall.js';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
+import { assertWindowsPrivateStorage } from './windows-private-storage.js';
 export const DIAGNOSTIC_BUILD = BUILD_ID;
 export interface Receipt { id: string; build: string; reason: string; selectedView: string; boundary: string; settings: { draftReservedTokens: number; contextWindow: number; responseReserveTokens?: number; hostInputTokens?: number; mandatoryInputTokens?: number; target?: 'band' | 'room'; triggerMarginTokens?: number; cutAt?: number; calibrationFactor?: number; calibrationWindow?: number[]; calibrationIdentity?: string; learnedContextWindow?: number; activeInputCeilingTokens?: number | null }; before: { value: number; unit: 'estimated-input-tokens'; scope: 'native-preparation' | 'public-conversation' }; after: { value: number | null; unit: 'estimated-input-tokens'; scope: 'draft-preview' }; }
 export function attachReceipt<T extends { details?: unknown; firstKeptEntryId: string; tokensBefore: number }>(draft: T, reason: string, reserveTokens: number, contextWindow: number, resolved: Partial<Receipt['settings']> = {}): T & { details: Record<string, unknown> & { diagnosticReceipt: Receipt } } {
@@ -60,6 +61,7 @@ export function permittedEntries(entries: SessionEntry[], policy: RecallPolicy =
  return { entries: allowed, partial };
 }
 export class IncidentRecorder {
+ private windowsFile?: FileHandle;
  private queue: string[] = []; private queued = 0; private total = 0; private pumping?: Promise<void>; private timer?: ReturnType<typeof setTimeout>;
  private captureCalls = 0; private inlineMs = 0; private hookMs = 0;
  private projectDirectory = ''; private id = ''; private path = ''; private state = 'off'; private nextCut = false; private sawCut = false; private requests = 0; private response = false;
@@ -70,7 +72,7 @@ export class IncidentRecorder {
  constructor(options: RecorderOptions = {}) {
   const bound = (value: number | undefined, fallback: number, max: number) => Number.isSafeInteger(value) && value! > 0 ? Math.min(value!,max) : fallback;
   this.options = { ...options, maxContentCharacters: bound(options.maxContentCharacters,200000,1500000), maxQueueCharacters: bound(options.maxQueueCharacters,500000,3000000), maxFileBytes: bound(options.maxFileBytes,2000000,10000000), maxFiles: bound(options.maxFiles,4,8), durationMs: bound(options.durationMs,120000,600000) };
-  this.directory = resolve(options.directory ?? join(homedir(), '.local/state/pi-tuck-incidents')); }
+  this.directory = resolve(options.directory ?? join(homedir(), '.local', 'state', 'pi-tuck-incidents')); }
  get waitingForCut() { return this.enabled && this.nextCut && !this.sawCut; }
  get enabled() { return this.state === 'recording'; }
  status() { return { state: this.state, incidentId: this.id || null, queuedCharacters: this.queued, recordedCharacters: this.total, path: this.path || null, captureCalls: this.captureCalls, inlineMilliseconds: this.inlineMs, inlineHookMilliseconds: this.hookMs }; }
@@ -113,6 +115,7 @@ export class IncidentRecorder {
  private schedule() { if (!this.pumping) this.pumping = Promise.resolve().then(() => this.pump()); }
  private async pump() {
   try {
+   const windows = process.platform === 'win32';
    // Resolve existing ancestors before creating anything; an outside path may
    // traverse a parent symlink into the active project.
    let ancestor = this.directory; const missing: string[] = [];
@@ -126,19 +129,29 @@ export class IncidentRecorder {
    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error('Recorder directory resolves inside project');
    await mkdir(this.directory, { recursive: true, mode: 0o700 });
    const directoryStat = await lstat(this.directory);
-   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o077) !== 0 || directoryStat.uid !== process.getuid?.()) throw new Error('Recorder directory ownership/permissions');
+   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || !windows && ((directoryStat.mode & 0o077) !== 0 || directoryStat.uid !== process.getuid?.())) throw new Error('Recorder directory ownership/permissions');
    const names: { name: string; time: number }[] = [];
-   for (const name of await readdir(this.directory)) if (/^tuck-incident-[0-9a-f-]{36}\.jsonl$/.test(name)) { const stat = await lstat(join(this.directory,name)); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Retention ownership gap'); names.push({name,time:stat.mtimeMs}); }
+   for (const name of await readdir(this.directory)) if (/^tuck-incident-[0-9a-f-]{36}\.jsonl$/.test(name)) { const stat = await lstat(join(this.directory,name)); if (!stat.isFile() || stat.isSymbolicLink() || !windows && (stat.uid !== process.getuid?.() || (stat.mode & 0o077))) throw new Error('Retention ownership gap'); names.push({name,time:stat.mtimeMs}); }
+   if (windows) await assertWindowsPrivateStorage([this.directory, ...names.map(({ name }) => join(this.directory, name))]);
    names.sort((a,b)=>a.time-b.time);
    while (names.length >= this.options.maxFiles) { const { name } = names.shift()!; if (join(this.directory, name) !== this.path) await unlink(join(this.directory, name)); }
+   if (windows && !this.options.write && !this.windowsFile) {
+    // O_NOFOLLOW is unavailable on Windows. Exclusive creation rejects an existing link/file,
+    // and the same handle is retained until recording stops; subsequent pumps never reopen the path.
+    this.windowsFile = await open(this.path, 'wx', 0o600);
+    await assertWindowsPrivateStorage([this.path]);
+   }
    while (this.queue.length) {
     const line = this.queue.shift()!; this.queued -= line.length;
     if (Buffer.byteLength(line) > this.options.maxFileBytes) throw new Error('File bound');
     if (this.options.write) await this.options.write(this.path, line);
-    else { const file = await open(this.path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); try { const stat = await file.stat(); if (stat.size + Buffer.byteLength(line) > this.options.maxFileBytes) throw new Error('File bound'); if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('Recorder file ownership/permissions'); await file.write(line); } finally { await file.close(); } }
+    else { const file = this.windowsFile ?? await open(this.path, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); try { const stat = await file.stat(); if (stat.size + Buffer.byteLength(line) > this.options.maxFileBytes) throw new Error('File bound'); if (!stat.isFile() || !windows && (stat.uid !== process.getuid?.() || (stat.mode & 0o077))) throw new Error('Recorder file ownership/permissions'); await file.write(line); } finally { if (!windows) await file.close(); } }
    }
   } catch { this.queue = []; this.queued = 0; if (this.timer) clearTimeout(this.timer); this.timer = undefined; this.state = 'storage-failed-gap'; this.safeNotify('Compaction recorder storage failed; incident has a gap'); }
-  finally { this.pumping = undefined; if (this.queue.length) this.schedule(); }
+  finally {
+   if (!this.enabled && this.windowsFile) { const file = this.windowsFile; this.windowsFile = undefined; await file.close().catch(() => {}); }
+   this.pumping = undefined; if (this.queue.length) this.schedule();
+  }
  }
  async flush() { while (this.pumping) await this.pumping; }
 }

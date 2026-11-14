@@ -3,6 +3,7 @@ import { isLookupTool } from "./tuck/core/recall-operation";
 import { isDiscardedResponse } from "./protocol";
 import { extractPath } from "./tuck/core/tool-args";
 import type { TranscriptRecord } from "./tuck/core/transcript";
+import { pathKey } from "./path-key";
 
 /** Owner default; older distinct paths are counted, not listed. */
 export const MAX_LEDGER_LINES = 60;
@@ -25,7 +26,7 @@ export interface LedgerItem { path: string; operation: "wrote/edited" | "read"; 
 /** Paths exactly as recorded in read/write/edit tool-call arguments before the cut, newest last operation first. Nothing is inferred.
  * A call from a failed or aborted response, a write/edit whose result is an error, and a path with a line break are not listed. */
 export function ledgerItems(entries: readonly SessionEntry[], indices: ReadonlyMap<string, number>, resolvable: (entry: SessionEntry) => boolean,
-	failedCalls: ReadonlySet<string>): LedgerItem[] {
+	failedCalls: ReadonlySet<string>, cwd?: string): LedgerItem[] {
 	const results = new Map<string, SessionEntry>();
 	for (const entry of entries) if (entry.type === "message" && entry.message.role === "toolResult") results.set(entry.message.toolCallId, entry);
 	const last = new Map<string, { path: string; operation: LedgerItem["operation"]; entry: SessionEntry; target: SessionEntry }>();
@@ -37,8 +38,9 @@ export function ledgerItems(entries: readonly SessionEntry[], indices: ReadonlyM
 			const operation = OPERATIONS.get(block.name);
 			const path = operation && extractPath(block.arguments as Record<string, unknown>);
 			if (!operation || !path || /[\r\n]/u.test(path) || operation === "wrote/edited" && failedCalls.has(block.id)) continue;
-			last.delete(path);
-			last.set(path, { path, operation, entry, target: operation === "read" ? results.get(block.id) ?? entry : entry });
+			const key = pathKey(path, cwd);
+			last.delete(key);
+			last.set(key, { path, operation, entry, target: operation === "read" ? results.get(block.id) ?? entry : entry });
 		}
 	}
 	// Only listed lines show a locator, so resolvability (which renders the entry) is checked for those alone.

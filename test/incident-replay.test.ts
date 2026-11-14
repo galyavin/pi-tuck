@@ -9,10 +9,12 @@ import type { IncidentRecord } from '../src/diagnostics';
 // The offline replay of a recorded cut counts the draft with the same function as the live planner, so it reproduces the live summary.
 // A cut also records the arithmetic it was made with: the target, the margin and the mandatory input.
 async function recorded(directory: string, wait: () => boolean) {
-	for (let i = 0; i < 200 && !wait(); i++) await new Promise(resolve => setTimeout(resolve, 10));
+	for (let i = 0; i < (process.platform === 'win32' ? 2000 : 200) && !wait(); i++) await new Promise(resolve => setTimeout(resolve, 10));
 	const files = readdirSync(directory).filter(name => name.endsWith('.jsonl'));
 	return files.flatMap(name => readFileSync(join(directory, name), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as IncidentRecord));
 }
+// Windows starts a native ACL checker before the first write; retain the POSIX wait and timeout.
+const RECORDING_TIMEOUT = process.platform === 'win32' ? 30_000 : 5_000;
 const BOUNDS = { maxContentCharacters: 1500000, maxQueueCharacters: 3000000, maxFileBytes: 10000000 };
 const hasProposal = (directory: string) => () => readdirSync(directory).some(name => name.endsWith('.jsonl') && readFileSync(join(directory, name), 'utf8').includes('"kind":"proposal"'));
 
@@ -33,8 +35,7 @@ test('an offline replay of a recorded operator cut reproduces the live summary',
 		expect(result.mode).toBe('deterministic-selection-replay');
 		expect(result.matchesRecordedProposal).toBe(true);
 	} finally { await h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
-});
-
+}, RECORDING_TIMEOUT);
 for (const how of ['operator cut', 'tool-boundary cut'] as const)
 test(`a recorded ${how} shows the arithmetic it was made with`, async () => {
 	const directory = mkdtempSync(join(tmpdir(), 'pi-incident-'));
@@ -52,4 +53,4 @@ test(`a recorded ${how} shows the arithmetic it was made with`, async () => {
 		expect(settings).not.toHaveProperty('projectedHostInputTokens');
 		expect(settings).not.toHaveProperty('incomingPromptEstimateTokens');
 	} finally { await h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
-});
+}, RECORDING_TIMEOUT);

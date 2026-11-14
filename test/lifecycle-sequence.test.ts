@@ -125,8 +125,9 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
   const started = Date.now(), chosen = seeds(), failures: string[] = [], coverage = emptyCoverage(), appendOnly = emptyAppendOnlyCoverage();
   const scratch = mkdtempSync(join(tmpdir(), 'pi-tuck-lifecycle-'));
   const agentDir = mkdtempSync(join(scratch, 'lifecycle-agent-'));
-  const previousTmp = process.env.TMPDIR, previousAgent = process.env.PI_CODING_AGENT_DIR;
-  process.env.TMPDIR = scratch;
+  const tempVariables = ['TMPDIR', 'TMP', 'TEMP'] as const;
+  const previousTemp = tempVariables.map(name => process.env[name]), previousAgent = process.env.PI_CODING_AGENT_DIR;
+  for (const name of tempVariables) process.env[name] = scratch;
   process.env.PI_CODING_AGENT_DIR = agentDir; // no installed runtime, no user's settings
   try {
     for (const seed of chosen) {
@@ -157,7 +158,7 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
       process.stderr.write(`lifecycle seed=${seed} events=${events.length} coverage=${JSON.stringify(result.coverage)} appendOnly=${JSON.stringify(result.appendOnly)}\n`);
     }
   } finally {
-    if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
+    tempVariables.forEach((name, i) => { if (previousTemp[i] === undefined) delete process.env[name]; else process.env[name] = previousTemp[i]; });
     if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgent;
     rmSync(agentDir, { recursive: true, force: true }); rmSync(scratch, { recursive: true, force: true });
   }

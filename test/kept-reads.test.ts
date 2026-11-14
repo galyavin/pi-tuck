@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { win32 } from 'node:path';
 import { expect, test } from 'vitest';
 import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -15,8 +16,9 @@ const answer = (content: unknown[], stopReason = 'stop') => ({ role: 'assistant'
 	api: 'openai-completions', provider: 'fixture', model: 'fixture', timestamp: 0,
 	usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as never;
 interface Call { name?: string; path: string; text?: string; content?: ToolResultMessage['content']; isError?: boolean; noResult?: boolean; args?: Record<string, unknown> }
-function fixture(calls: Call[]) {
-	const manager = SessionManager.inMemory('/kept-reads');
+function fixture(calls: Call[], cwd = '/kept-reads') {
+	const manager = SessionManager.inMemory(cwd);
+	manager.getHeader()!.cwd = cwd; // Preserve the simulated recorded cwd, independent of the host's resolve().
 	manager.appendMessage({ role: 'user', content: 'Inspect the recorded files.', timestamp: 0 });
 	const results = calls.map((call, i) => {
 		const name = call.name ?? 'read', id = `c${i}`;
@@ -32,7 +34,7 @@ function fixture(calls: Call[]) {
 		manager.appendMessage(answer([{ type: 'text', text: `Finished step ${i}.` }]));
 	}
 	manager.appendMessage({ role: 'user', content: 'Continue the task.', timestamp: 0 });
-	const ctx = { cwd: '/kept-reads', sessionManager: manager, model: { contextWindow: 131072, maxTokens: 8192 } } as unknown as ExtensionContext;
+	const ctx = { cwd, sessionManager: manager, model: { contextWindow: 131072, maxTokens: 8192 } } as unknown as ExtensionContext;
 	const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
 	return { manager, ctx, results, measure };
 }
@@ -46,6 +48,20 @@ const keptOf = (summary: string) => recordsOf(summary).filter(r => r.kind === 's
 const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, record) => n + serializeRecord(record).length + 1, 0);
 const candidatesOf = (s: ReturnType<typeof fixture>, indices = buildGlobalIndexById(s.manager.getEntries()), readable = createRecall({}).readable) =>
 	keptReadCandidates(s.manager.getBranch(), indices, entry => readable(entry) !== undefined);
+
+test('a real draft resolves Windows aliases in both Files and kept reads, with the original result recallable', () => {
+	const cwd = win32.join('C:\\', 'repo'), recorded = '.\\src\\a.ts';
+	const s = fixture([{ path: win32.join(cwd, 'src', 'a.ts'), text: 'old' }, { path: recorded, text: 'latest exact contents' }], cwd);
+	const summary = draftOf(s).compaction.summary;
+	expect(keptOf(summary)).toHaveLength(1);
+	expect(keptOf(summary)[0]!.text).toContain(`read ${recorded} (as recorded`);
+	const files = recordsOf(summary).filter(r => r.title === 'Files' && r.text?.startsWith('- '));
+	expect(files).toHaveLength(1);
+	expect(files[0]!.text).toContain(`- read ${recorded} (tuck_recall`);
+	const index = Number(/"index":(\d+)/.exec(files[0]!.text!)![1]);
+	const page = tuckRecall(tuck, s.manager.getEntries(), s.manager.getBranch(), { index }) as { entries: { text: string }[] };
+	expect(page.entries[0]!.text).toBe('latest exact contents');
+});
 
 test.each([{ offset: 1 }, { limit: 5 }, { offset: 0, limit: 0 }])('partial reads are excluded without displacing a whole read: %j', partial => {
 	const s = fixture([{ path: 'a', text: 'whole' }, { path: 'a', text: 'partial', args: { path: 'a', ...partial } },

@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test, expect, afterAll } from 'vitest';
 import { pathToFileURL } from 'node:url';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -93,7 +95,7 @@ function syntheticLowProse(turns: number): Session {
 		result(e, 'edit', 'Edited.');
 		messages.push(reply([{ type: 'text', text: `Round ${turn} done. ${words(15)}` }], turn % 60 === 0 ? 'stop' : 'toolUse', stamp()));
 	}
-	return { name: 'synthetic-low-prose', cwd: '/tmp/synthetic-project', messages };
+	return { name: 'synthetic-low-prose', cwd: join(tmpdir(), 'synthetic-project'), messages };
 }
 
 interface Metrics {
@@ -267,9 +269,11 @@ for (const make of sessions) {
 			// Cut time against the same-run reference: at most three times the golden's ratio on a machine like the one that recorded it, six times
 			// on any CI runner or other platform (the reference and the cut do not scale alike across CPUs: an x86 Linux runner read 3.6 times, and
 			// GitHub's Apple-silicon runner 3.1 times over three cuts). Load moves both, so a
-			// busy machine passes, and a tenfold slower cut fails everywhere. Under 5 ms a cut is timer noise; medianCutMs is a record, not a bound.
+			// busy machine passes, and a tenfold slower cut fails on platforms with usable CPU timing. Under 5 ms a cut is timer noise; medianCutMs is a record, not a bound.
 			const limit = !process.env.CI && `${process.platform}-${process.arch}` === GOLDEN_PLATFORM ? 3 : 6;
-			if (m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5 && m.cutPerReference! > g.cutPerReference * limit)
+			// Windows process CPU accounting quantizes short cuts/reference runs to 0 or a scheduler tick (x13: ratios of 3100).
+			// Both timing fields are diagnostic there; every deterministic assertion above still runs. Keep POSIX timing gates unchanged.
+			if (process.platform !== 'win32' && m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5 && m.cutPerReference! > g.cutPerReference * limit)
 				violations.push(`cutPerReference ${m.cutPerReference}, golden ${g.cutPerReference} (limit ${limit} times; median cut ${m.medianCutMs} ms)`);
 			expect(violations, JSON.stringify({ got: m, golden: g })).toEqual([]);
 		}, 600_000);

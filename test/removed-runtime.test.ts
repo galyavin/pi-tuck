@@ -9,7 +9,7 @@ import { installCompaction } from '../src/compaction';
 
 vi.mock('node:child_process', { spy: true });
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function fixture(present = true, hasUI = true) {
     const agent = mkdtempSync(join(tmpdir(), 'pi-tuck-removed-'));
@@ -23,7 +23,7 @@ function fixture(present = true, hasUI = true) {
     }
     const ctx = { hasUI, ui: { notify: (message: string) => notices.push(message) } } as unknown as ExtensionContext;
     const notice = () => showRemovedRuntimeNotice(ctx, root);
-    return { agent, root, notices, ctx, notice, marker: root + '.notice-shown' };
+    return { agent, root, notices, ctx, notice, marker: join(agent, 'pi-tuck.notice-shown') };
 }
 
 test('an existing runtime is announced once across concurrent starts and module reloads, with nothing deleted', async () => {
@@ -31,7 +31,8 @@ test('an existing runtime is announced once across concurrent starts and module 
     await Promise.all([f.notice(), f.notice()]);
     expect(f.notices).toHaveLength(1);
     expect(isAbsolute(f.root)).toBe(true);
-    expect(f.notices[0]).toMatch(new RegExp(`^pi-tuck no longer uses semantic search; its runtime folder .+ \\(about \\d+ MB\\) can be deleted\\.$`));
+    if (process.platform === 'win32') expect(f.notices[0]).toBe(`pi-tuck no longer uses semantic search; its runtime folder ${f.root} can be deleted.`);
+    else expect(f.notices[0]).toMatch(new RegExp(`^pi-tuck no longer uses semantic search; its runtime folder .+ \\(about \\d+ MB\\) can be deleted\\.$`));
     expect(f.notices[0]).toContain(f.root);
     expect(existsSync(f.marker)).toBe(true);
     await f.notice();
@@ -79,6 +80,8 @@ test('an ended UI leaves no marker and can retry delivery', async () => {
 });
 
 test.each(['failed', 'timeout'] as const)('a %s size estimate omits the size and preserves the folder', async mode => {
+    // Exercise the POSIX branch on every host; execFile itself is fully mocked.
+    vi.stubGlobal('process', new Proxy(process, { get: (target, key) => key === 'platform' ? 'darwin' : Reflect.get(target, key) }));
     const f = fixture();
     const clock = vi.spyOn(performance, 'now');
     if (mode === 'timeout') clock.mockReturnValueOnce(0).mockReturnValue(1001);
@@ -90,6 +93,16 @@ test.each(['failed', 'timeout'] as const)('a %s size estimate omits the size and
     expect(spawn).toHaveBeenCalledWith('du', ['-sk', f.root], expect.objectContaining({ timeout: 1000 }), expect.any(Function));
     expect(f.notices).toEqual([`pi-tuck no longer uses semantic search; its runtime folder ${f.root} can be deleted.`]);
     expect(existsSync(join(f.root, 'runtime', 'original'))).toBe(true);
+});
+
+test('on Windows the notice never invokes du, including when a leftover directory exists', async () => {
+    const f = fixture();
+    vi.stubGlobal('process', new Proxy(process, { get: (target, key) => key === 'platform' ? 'win32' : Reflect.get(target, key) }));
+    const spawn = vi.mocked(execFile).mockClear();
+    await f.notice();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(f.notices).toEqual([`pi-tuck no longer uses semantic search; its runtime folder ${f.root} can be deleted.`]);
+    expect(existsSync(f.marker)).toBe(true);
 });
 
 test('extension startup resolves the old root under the configured agent directory', async () => {

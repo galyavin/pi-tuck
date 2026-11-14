@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test, expect } from 'vitest';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { DEFAULT_CUT_AT, bandOf, decideCut, measurableConversationTokens, planningReserve, type Plan } from '../src/budget';
@@ -26,7 +28,7 @@ const WINDOW = 32768, RESPONSE = 16384, ROOM = WINDOW - RESPONSE, SYSTEM = 2489,
 function recordedBoundary() {
 	let clock = 1_700_000_000_000; const stamp = () => (clock += 1000);
 	const filler = (chars: number, tag: string) => { let text = '', i = 0; while (text.length < chars) text += `${tag}${i++} lorem ipsum data; `; return text.slice(0, chars); };
-	const manager = SessionManager.inMemory('/tmp/p');
+	const manager = SessionManager.inMemory(join(tmpdir(), 'p'));
 	const user = (text: string) => manager.appendMessage({ role: 'user', content: text, timestamp: stamp() });
 	const reply = (content: unknown[], stopReason = 'toolUse') => manager.appendMessage({ role: 'assistant', content, api: 'openai-completions', provider: 'p', model: 'p', usage, stopReason, timestamp: stamp() } as never);
 	const result = (id: string, name: string, text: string) => manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: name, content: [{ type: 'text', text }], isError: false, timestamp: stamp() });
@@ -47,7 +49,7 @@ function recordedBoundary() {
 
 test('a 16k room, a live system part and a slow tokenizer: the boundary 1.0.1 refused drafts a cut, as the tool-loop trigger decides it', () => {
 	const manager = recordedBoundary();
-	const ctx = { sessionManager: manager, cwd: '/tmp/p', model: { contextWindow: WINDOW, maxTokens: RESPONSE, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
+	const ctx = { sessionManager: manager, cwd: join(tmpdir(), 'p'), model: { contextWindow: WINDOW, maxTokens: RESPONSE, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
 	const measure = (m: never[]) => measurableConversationTokens(m, ctx);
 	const before = measure(manager.buildSessionProjection().messages as never[]);
 	const band = bandOf(ROOM, DEFAULT_CUT_AT), fits = (tokens: number, limit: number) => Math.ceil(tokens * FACTOR) < limit;

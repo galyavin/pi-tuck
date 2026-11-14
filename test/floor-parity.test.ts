@@ -1,5 +1,6 @@
 import { test, expect } from 'vitest';
 import { harness } from './budget-fixture';
+import { requestBytes } from './request-bytes';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 
@@ -15,7 +16,7 @@ test('a never-reaches-room session sends byte-identical contexts with the standa
    expect(h.faults).toEqual([]);
    expect(h.state.stops.filter(s => s === 'stop')).toHaveLength(3);
    expect(h.manager.getBranch().filter(e => e.type === 'custom' && e.customType === 'pi-tuck-capacity')).toHaveLength(0);
-   return contexts.map(context => JSON.stringify(context, (key, value) => key === 'timestamp' || key === 'durationMs' ? undefined : value).replaceAll(h.dir, '<session>'));
+   return contexts.map(context => requestBytes(context, h.dir));
   } finally { await h.cleanup(); }
  };
  const standalone = await run(true), host = await run(false);

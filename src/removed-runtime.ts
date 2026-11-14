@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { access, stat, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { notify } from "./notify.js";
 
 const pending = new Map<string, Promise<void>>();
@@ -19,6 +19,7 @@ export async function removedRuntimeStatus(root = defaultRoot()): Promise<string
 
 /** Size only for the operator's deletion notice. The old runtime is never started, changed or deleted. */
 async function sizeHint(root: string): Promise<string> {
+    if (process.platform === "win32") return ""; // du is POSIX-only; leftovers still get a deletion notice.
     const started = performance.now();
     return new Promise(resolveHint => {
         execFile("du", ["-sk", root], { timeout: 1000, maxBuffer: 1024 }, (error, stdout) => {
@@ -34,7 +35,7 @@ export function showRemovedRuntimeNotice(ctx: ExtensionContext, root = defaultRo
     const held = pending.get(root);
     if (held) return held;
     const notice = (async () => {
-        const marker = root + ".notice-shown";
+        const marker = join(dirname(root), basename(root) + ".notice-shown");
         try {
             try { await access(marker); return; } catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;

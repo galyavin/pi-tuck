@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test, expect } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Session } from 'node:inspector';
@@ -17,8 +19,8 @@ test.skipIf(!enabled)('Part 3: compare a 128k cut and the 3,888-entry stall work
   const saved = JSON.parse(readFileSync(process.env.PART3_STALL_FIXTURE, 'utf8')) as { header: NonNullable<ReturnType<SessionManager['getHeader']>>; entries: SessionEntry[]; window: number; reserve: number };
   // The original session has 3,888 journal records including its native header.
   expect(saved.entries.length + 1).toBe(3888);
-  const manager = SessionManager.inMemory('/tmp/synthetic-project', undefined, [saved.header, ...saved.entries]);
-  const ctx = { sessionManager: manager, cwd: '/tmp/synthetic-project', model: { contextWindow: saved.window, maxTokens: 8192, provider: 'probe', id: 'probe', api: 'openai-completions' } } as unknown as ExtensionContext;
+  const manager = SessionManager.inMemory(join(tmpdir(), 'synthetic-project'), undefined, [saved.header, ...saved.entries]);
+  const ctx = { sessionManager: manager, cwd: join(tmpdir(), 'synthetic-project'), model: { contextWindow: saved.window, maxTokens: 8192, provider: 'probe', id: 'probe', api: 'openai-completions' } } as unknown as ExtensionContext;
   const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
   const stall = { manager, ctx, measure, before: measure(manager.buildSessionProjection().messages), reserve: saved.reserve };
   const rows: { entries: number; before: number; v117: number; current: number; ratio: number }[] = [];

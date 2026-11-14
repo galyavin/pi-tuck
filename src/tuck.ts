@@ -319,7 +319,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const cached = listCache.get(boundary);
         if (cached) return cached;
         const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
-        const files = ledgerItems(compacted, indices, resolves, failedCalls), actions = actionItems(compacted, indices, resolves, failedCalls);
+        const files = ledgerItems(compacted, indices, resolves, failedCalls, header.cwd), actions = actionItems(compacted, indices, resolves, failedCalls);
         const lists = { files, actions, records: [...actionRecords(actions), ...ledgerRecords(files)] };
         listCache.set(boundary, lists);
         return lists;
