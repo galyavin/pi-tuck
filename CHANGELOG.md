@@ -3,6 +3,25 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.3] - 2026-11-15
+
+### Fixed
+
+- **A steering message after a very large tool round could end the run with a false refusal.** When the user or a harness sent a message
+  while the agent was working, right after a round of tool results too large for the window, pi-tuck planned that cut as if a new run
+  were starting. The summary could then leave out the prompt that started the run, and pi-tuck's own prompt check refused with "the
+  request is missing the whole text of the prompt that started this run". The cut now keeps the running task's prompt and the fresh tool
+  round, as a cut at a tool boundary does. Cuts without a steering message are unchanged.
+
+### Release gates
+
+- **Shipped without a live gate: replay matches 1.1.2 byte for byte.** 29 recordings, 13,946 of 13,946 requests identical, 0 lost or
+  dead tasks; none of them contains a mid-run steer.
+- **The defect is pinned by two tests that fail on 1.1.2 and pass here:** a scripted large parallel round followed by a steer, and a
+  replay of the recorded session where it was found (a public benchmark task, paths scrubbed).
+- **Strict stress:** 322 cells, including 4 new steer cells, and the resumed-session and stand-down suites; 0 findings. Lifecycle with 40
+  seeds. Tests and CI. The packed tarball loaded in the real installed Pi.
+
 ## [1.1.2] - 2026-11-14
 
 ### Changed
