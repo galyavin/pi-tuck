@@ -43,7 +43,8 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 - **Live gate on NIM Nemotron (10 paired tasks at room 16,384, against 1.1.2):** solved wins minus losses +1 (bar at least -1), turn-cap
   stops 3 against 4, doubt moments 6 against 9, 0 lost tasks. Kept-read records quoting a partial or stale read: 0 against 141. The gate
   found one false refusal after a steering message; it was fixed (1.1.3) and pinned by tests built from that run.
-- **Replay against 1.1.3:** <filled at release>.
+- **Replay against 1.1.3 (byte-identical to 1.1.2):** 29 recordings, cuts 1,975 → 1,869 and clips 16 → 8 with the smaller tool list and
+  the stricter kept reads; 0 lost or dead tasks, 0 faults.
 - **Strict stress:** 322 cells, the resumed-session and stand-down suites and an 85 MB recall test, 0 findings. Lifecycle with 40 seeds.
   Tests and CI on macOS and Ubuntu; the full suite also passed on Windows. The packed tarball loaded in the real installed Pi on macOS and
   Windows.
