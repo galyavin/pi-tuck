@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { nonSystem } from '../budget-fixture';
+import { nativeFloorAdmission } from '../native-parity';
 import {
  calibrationCells, gridFailures, limitsOf, measureCell, measuredFloor, namedCells, runCell, sample,
  type Cell, type GridHooks, type Harness,
@@ -27,7 +28,7 @@ type Pause = { prompt: number; round: number; afterCut: boolean };
 type Point = 'a:after-saved-cut' | 'b:before-cut-turn' | 'c:tool-then-continue' | 'd:after-output-limit' | 'e:after-refusal';
 const POINTS: Point[] = ['a:after-saved-cut', 'b:before-cut-turn', 'c:tool-then-continue', 'd:after-output-limit', 'e:after-refusal'];
 type Cut = { id: string; prompt: number; afterRequest: number; ordinal: number; reason: string; before?: number; factor?: number; response?: number; room?: number };
-type Request = { prompt: number; ordinal: number; request: number; raw: number; count: number; factor?: number; cap?: number; stop?: string; overflow: boolean; truncation: boolean };
+type Request = { prompt: number; ordinal: number; request: number; raw: number; count: number; factor?: number; cap?: number; stop?: string; overflow: boolean; truncation: boolean; nativeFloor?: boolean };
 type Budget = { afterRequest: number; raw: number; corrected: number; factor: number; response: number; room: number; hardLine?: number };
 type Step = { prompt: number; before: number; after: number; cuts: number; lastIsCut: boolean; lastStop?: string; refused: boolean; saved: number; lastRole?: string; factor?: number; durable: boolean };
 type Trace = { requests: Request[]; steps: Step[]; cuts: Cut[]; budgets: Budget[]; failures: ReturnType<typeof gridFailures>; cold?: { prompt: number; afterRequest: number; entries: number; file: string; receipt?: unknown }; paused: boolean; error?: string };
@@ -73,6 +74,7 @@ async function arm(source: Cell, plainPi: boolean, checkpoint: number | undefine
   },
  };
  let activeHarness: Harness | undefined;
+ const nativeAdmissions = new Map<number, boolean>();
  const captureCuts = (h: Harness) => {
   for (const e of h.manager.getEntries()) {
    if (e.type !== 'compaction' || cutsSeen.has(e.id)) continue;
@@ -102,6 +104,9 @@ async function arm(source: Cell, plainPi: boolean, checkpoint: number | undefine
    activeHarness = h;
    cutsSeen = new Set(h.manager.getEntries().filter(e => e.type === 'compaction').map(e => e.id));
    observeSavedCuts(h);
+   h.observeExtension(pi => pi.on('context_with_system', (event, ctx) => {
+    nativeAdmissions.set(h.state.requests, nativeFloorAdmission(ctx.model!, event.messages, h.manager.getBranch()));
+   }));
    h.observeExtension(pi => pi.on('turn_end', event => {
     captureCuts(h);
     if (pause && (!pause.afterCut || plainPi) && p === plan.split && h.state.requests - start >= pause.round && !trace.paused && event.toolResults.length) {
@@ -136,6 +141,7 @@ async function arm(source: Cell, plainPi: boolean, checkpoint: number | undefine
     trace.requests.push({ prompt: i, ordinal: j - start, request: j + 1, raw, count,
      factor: trace.budgets.findLast(b => b.afterRequest === j)?.factor,
      cap: h.state.requestOptions[j]?.maxTokens, stop: answer?.stopReason,
+     nativeFloor: nativeAdmissions.get(j),
      overflow: Boolean(answer?.usage && isContextOverflow(answer, cell.window)),
      truncation: Boolean(source.extra?.truncateOverWindow && count > cell.window || replyClip),
     });
@@ -165,7 +171,7 @@ function compare(cell: Cell, point: Point, checkpoint: number, warm: Trace, resu
  const label = (r: Request) => `#${r.request} (p${r.prompt + 1}.${r.ordinal + 1})`;
  const unpairedRequests = sent.filter(r => !paired(r, native)).map(label);
  const larger = sent.filter(r => { const n = paired(r, native); return n && r.raw > n.raw + TOLERANCE; });
- const overflow = sent.filter(r => { const n = paired(r, native); return (r.overflow || r.truncation) && n && !n.overflow && !n.truncation; });
+ const overflow = sent.filter(r => { const n = paired(r, native); return !r.nativeFloor && (r.overflow || r.truncation) && n && !n.overflow && !n.truncation; });
  const failures = resumed.failures.filter(f => {
   const prompt = Number(f.params.prompt);
   return Number.isFinite(prompt) ? prompt >= checkpoint + 1 : true;

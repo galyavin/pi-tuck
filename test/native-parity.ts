@@ -2,6 +2,20 @@ import { convertToLlm, SettingsManager, shouldCompact, type ExtensionContext, ty
 import { normalizeContext, type Api, type Model, type Message, type UserMessage } from '@earendil-works/pi-ai';
 import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
+import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
+
+/** Independently validate a refusal-path admission against the installed Pi, on the exact request it admitted. */
+export function nativeFloorAdmission(model: Model<Api>, messages: Parameters<typeof convertToLlm>[0], branch: readonly SessionEntry[]): boolean {
+ const leaf = branch.at(-1);
+ if (leaf?.type !== 'custom' || leaf.customType !== 'pi-tuck-capacity') return false;
+ const data = leaf.data as { kind?: string; piCap?: number; piEstimateTokens?: number };
+ if (data?.kind !== 'native-floor') return false;
+ const context = normalizeContext({ messages: convertToLlm(messages) }), empty = normalizeContext({ messages: [] });
+ const window = 1_000_000;
+ const margin = window - estimateContextTokens(empty).tokens - clampMaxTokensToContext({ ...model, contextWindow: window, maxTokens: window }, empty, window);
+ const estimate = estimateContextTokens(context).tokens, cap = clampMaxTokensToContext(model, context, model.maxTokens);
+ return cap > 0 && estimate + margin + cap <= model.contextWindow && data.piCap === cap && data.piEstimateTokens === estimate;
+}
 
 export type BudgetObservation = { rawTokens: number; tokens: number; factor: number; response: number; room: number; hardLine?: number; context: ExtensionContext };
 export type NativeState = {
