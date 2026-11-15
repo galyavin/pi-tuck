@@ -276,7 +276,9 @@ for (const make of sessions) {
 			const limit = !process.env.CI && `${process.platform}-${process.arch}` === GOLDEN_PLATFORM ? 3 : 6;
 			// Windows process CPU accounting quantizes short cuts/reference runs to 0 or a scheduler tick (x13: ratios of 3100).
 			// Both timing fields are diagnostic there; every deterministic assertion above still runs. Keep POSIX timing gates unchanged.
-			const timed = process.platform !== 'win32' && m.cuts && g.cutPerReference !== undefined && m.medianCutMs > 5;
+			// A cell with fewer than 3 cuts is a record only: one or two samples are not a bound (the macOS release runner read a one-cut cell at
+			// 6.8-7.1 times its golden on every run while the many-cut cells held).
+			const timed = process.platform !== 'win32' && m.cuts >= 3 && g.cutPerReference !== undefined && m.medianCutMs > 5;
 			// A cell with one or two cuts has one or two samples, so a busy moment can carry it over: it is timed up to twice more, and the
 			// lowest attempt counts (CI read 6.84 against a 6.66 bound on a one-cut cell). A real slowdown is slow on every attempt.
 			for (let retry = 0; timed && retry < 2 && lowCutPerReference > g.cutPerReference! * limit; retry++)
