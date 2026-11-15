@@ -52,7 +52,8 @@
     "check": "tsc -p tsconfig.tests.json",
     "test": "vitest run --config vitest.config.ts",
     "build": "node scripts/build.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "timing": "PI_TUCK_TIMING=1 STRESS=1 vitest run --config vitest.config.ts --maxWorkers=1 test/regression-bench.test.ts test/stress/large-session.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=1.2.0",

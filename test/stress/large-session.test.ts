@@ -117,7 +117,8 @@ test.skipIf(!RUN)(`recall on a ~${TARGET_MB} MB session that grows by ~5 MB betw
     process.stderr.write(`large-session: ${JSON.stringify({ call: label, sessionBytes, sessionMB: sessionBytes / 1e6, rounds: i, elapsedMs, budgetMs })}\n`);
    }
    expect(result.isError, label).not.toBe(true);
-   expect.soft(elapsedMs, label + ' wall time against the recall search budget').toBeLessThanOrEqual(budgetMs);
+   // Wall time is bounded only in the local timing bench (`npm run timing`); CI records it.
+   if (process.env.PI_TUCK_TIMING === '1') expect.soft(elapsedMs, label + ' wall time against the recall search budget').toBeLessThanOrEqual(budgetMs);
    expect(result.content).toHaveLength(1);
    const block = result.content[0]!;
    expect(block.type).toBe('text');

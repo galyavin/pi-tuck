@@ -118,6 +118,9 @@ interface Metrics {
 const referenceHistory = Array.from({ length: 600 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `turn ${i}: ` + 'reference words '.repeat(40 + i % 17) }));
 // The goldens' cutPerReference values were recorded here (GOLDEN_RECORD=1 on Apple silicon).
 const GOLDEN_PLATFORM = 'darwin-arm64';
+// Wall-time bounds run only in the local timing bench (`npm run timing`, PI_TUCK_TIMING=1) on the Mac that recorded the goldens, before
+// each tag; CI and the release workflow assert functional values and counts only (shared-runner timing is noise; CEO, 2026-11-15).
+const TIMING = process.env.PI_TUCK_TIMING === '1';
 const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
 function referenceCpuMs(): number {
 	const times: number[] = [];
@@ -278,7 +281,7 @@ for (const make of sessions) {
 			// Both timing fields are diagnostic there; every deterministic assertion above still runs. Keep POSIX timing gates unchanged.
 			// A cell with fewer than 3 cuts is a record only: one or two samples are not a bound (the macOS release runner read a one-cut cell at
 			// 6.8-7.1 times its golden on every run while the many-cut cells held).
-			const timed = process.platform !== 'win32' && m.cuts >= 3 && g.cutPerReference !== undefined && m.medianCutMs > 5;
+			const timed = TIMING && process.platform !== 'win32' && m.cuts >= 3 && g.cutPerReference !== undefined && m.medianCutMs > 5;
 			// A cell with one or two cuts has one or two samples, so a busy moment can carry it over: it is timed up to twice more, and the
 			// lowest attempt counts (CI read 6.84 against a 6.66 bound on a one-cut cell). A real slowdown is slow on every attempt.
 			for (let retry = 0; timed && retry < 2 && lowCutPerReference > g.cutPerReference! * limit; retry++)
