@@ -3,7 +3,20 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-15
+
+### Added
+
+- **Windows.** pi-tuck now installs and runs on Windows. Paths are compared the same way however Windows spells them (drive letter case,
+  backslashes, relative paths), and Windows shell commands that change files (`Set-Content`, `Remove-Item`, `del`, `move` and others)
+  count as changes. `/tuck-incident` creates its folder and files with private Windows permissions and refuses folders other users can read.
+  Tested on Windows 10 with Node 24 and Pi 1.5.2.
+
+### Fixed
+
+- **Kept reads no longer quote a stale or partial file as if it were whole and current.** A cut's summary now keeps only whole reads;
+  a read is dropped from it when a later shell command that is not read-only names the file, or when a git command such as `checkout`,
+  `stash`, `restore` or `reset` ran, and paths are compared after normalising their spelling.
 
 ### Removed
 
@@ -24,6 +37,36 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   without a UI. An empty `~/.pi/agent/pi-tuck-semantic-removed` marker records a completed attempt, including partial cleanup or nothing
   to clean; an attempt that cannot start is retried. Once marked, a folder recreated later by another program is left alone.
   `/tuck-semantic`, its stub text and the old notice are gone.
+
+### Release gates
+
+- **Live gate on NIM Nemotron (10 paired tasks at room 16,384, against 1.1.2):** solved wins minus losses +1 (bar at least -1), turn-cap
+  stops 3 against 4, doubt moments 6 against 9, 0 lost tasks. Kept-read records quoting a partial or stale read: 0 against 141. The gate
+  found one false refusal after a steering message; it was fixed (1.1.3) and pinned by tests built from that run.
+- **Replay against 1.1.3 (byte-identical to 1.1.2):** 29 recordings, cuts 1,975 → 1,869 and clips 16 → 8 with the smaller tool list and
+  the stricter kept reads; 0 lost or dead tasks, 0 faults.
+- **Strict stress:** 322 cells, the resumed-session and stand-down suites and an 85 MB recall test, 0 findings. Lifecycle with 40 seeds.
+  Tests and CI on macOS and Ubuntu; the full suite also passed on Windows. The packed tarball loaded in the real installed Pi on macOS and
+  Windows.
+
+## [1.1.3] - 2026-11-15
+
+### Fixed
+
+- **A steering message after a very large tool round could end the run with a false refusal.** When the user or a harness sent a message
+  while the agent was working, right after a round of tool results too large for the window, pi-tuck planned that cut as if a new run
+  were starting. The summary could then leave out the prompt that started the run, and pi-tuck's own prompt check refused with "the
+  request is missing the whole text of the prompt that started this run". The cut now keeps the running task's prompt and the fresh tool
+  round, as a cut at a tool boundary does. Cuts without a steering message are unchanged.
+
+### Release gates
+
+- **Shipped without a live gate: replay matches 1.1.2 byte for byte.** 29 recordings, 13,946 of 13,946 requests identical, 0 lost or
+  dead tasks; none of them contains a mid-run steer.
+- **The defect is pinned by two tests that fail on 1.1.2 and pass here:** a scripted large parallel round followed by a steer, and a
+  replay of the recorded session where it was found (a public benchmark task, paths scrubbed).
+- **Strict stress:** 322 cells, including 4 new steer cells, and the resumed-session and stand-down suites; 0 findings. Lifecycle with 40
+  seeds. Tests and CI. The packed tarball loaded in the real installed Pi.
 
 ## [1.1.2] - 2026-11-14
 

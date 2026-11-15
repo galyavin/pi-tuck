@@ -649,8 +649,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The cut before a run, decided on `input` while the session is idle; before_agent_start decides only for a run no input started (one a
     // custom message starts). The cut is pi-tuck's own, planned as at a tool boundary. It is not Pi's: Pi's cut finder keeps the last
     // keepRecentTokens, and where those are the whole conversation it has nothing to cut, so every later prompt was refused for good (t06 at
-    // Pi's defaults on a 32k window). Each request of the run carries the cut, and the run's first boundary saves it.
-    const preflight = (ctx: ExtensionContext, incomingPart: number, incomingMessages: Messages, observedPrompt: string, tools: readonly string[], hostSnapshot?: Messages) => {
+    // Pi's defaults on a 32k window). Each request carries the cut until the next boundary saves it. A late steer uses the same path with
+    // its existing run owner's entry protected; an incoming prompt that starts a run has no saved owner yet.
+    const preflight = (ctx: ExtensionContext, incomingPart: number, incomingMessages: Messages, observedPrompt: string, tools: readonly string[], hostSnapshot?: Messages, protectedId?: string) => {
         if (standDown(ctx)) return;
         run!.cut.clear();
         const branchLength = ctx.sessionManager.getBranch().length;
@@ -681,7 +682,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
                 // Only a due cut re-renders a summary that sits alone in the session: inside the band a cut is opportunistic, and a smaller summary
                 // there buys nothing the request needed and costs history the next recall would have found.
-                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary, newPrompt: true, reRenderSummary: !opportunistic }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, false);
+                // A steer joins the admitted run: keep its starting prompt and the unexposed tool round, just as at a tool boundary.
+                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary,
+                    newPrompt: !protectedId, protectedPromptEntryId: protectedId, reRenderSummary: !opportunistic }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, Boolean(protectedId));
                 if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 const candidate = new PendingCut();
                 candidate.plan({ type: "compaction", ...draft.compaction, tokensBefore: before }, branchLength);
@@ -699,13 +702,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 candidate => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory,
                 candidate => projectedRequest(candidate.kind === "cut" ? candidate.plan.messages : saved, ctx, hostInput, incomingMessages, observedPrompt, tools, candidate.kind === "cut"),
                 target => decide(target, target <= room ? band : target, false),
-                () => deepestDecision(ctx, true, false));
+                () => deepestDecision(ctx, !protectedId, Boolean(protectedId)));
         }
         if (decision.kind === "defer") return;
         // An opportunistic cut inside the band that cannot reach it is no fault: the request goes to the guard.
         if (decision.kind === "none") return;
         if (decision.kind === "fault") throw new (decision.capacity ? CapacityError : Refusal)(decision.message);
-        const compaction = captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, "prompt", before, false, false, previousSummary,
+        const compaction = captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, "prompt", before, Boolean(protectedId), false, previousSummary,
             { response, host, mandatory, target: decision.target, margin: room - band });
         run!.cut.plan({ type: "compaction", summary: compaction.summary, firstKeptEntryId: compaction.firstKeptEntryId, tokensBefore: before, details: compaction.details }, branchLength);
     };
@@ -750,7 +753,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const hostInput = hostMessages(ctx), host = conversationTokens(hostInput);
             const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
             if (fits(conversationTokens(saved) + system + incoming + host, limits(ctx).room, ctx)) return;
-            preflight(ctx, incoming, [message], ctx.getSystemPrompt(), pi.getActiveTools(), hostInput);
+            preflight(ctx, incoming, [message], ctx.getSystemPrompt(), pi.getActiveTools(), hostInput, protectedPrompt(ctx));
             syncHistoryTools(ctx);
         } catch (error) { fail(error, ctx); }
     });
