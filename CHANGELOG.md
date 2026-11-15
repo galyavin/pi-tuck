@@ -3,6 +3,13 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-11-15
+
+### Changed
+
+- **Same code as 1.3.0**, which never reached npm: a timing check in the test suite stopped its publish on the release runner. The check now
+  bounds only cells with at least 3 cuts. Everything listed under 1.3.0 ships in this version.
+
 ## [1.3.0] - 2026-11-15
 
 ### Added
