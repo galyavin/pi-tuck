@@ -67,19 +67,19 @@ test(`irreducible requests: an in-band request that cannot be cut is no fault; o
 		const rng = prng(1000 + seed), int = (n: number) => Math.floor(rng() * n);
 		const rounds = 1 + int(3);
 		const options: Options = { at: 'tool', host: HOST, history: 1500, fresh: 100, complete: BAND + 1500 + int(1300), rounds, laterResult: 50 + int(250), dormant: 1000, afterDecision: unseen(rng, rounds) };
-		const r = await run(options);
+        let complete = 0;
+        const refused: number[] = [];
+		const r = await run({ ...options, compaction: { observeBudget: budget => { complete = budget.rawTokens; } },
+            onFailure: () => { refused.push(complete); } });
 		const why = `seed ${seed} ` + r.probe;
 		const measure = (i: number) => r.probes[i]!.complete + r.probes[i]!.queued;
-        // A steering input can make the compiler quote only part of this run's original prompt. The new prompt check must stop that build.
-        if (r.faults.some(f => f.includes('Prompt check failed'))) {
-            expect(r.wholePrompt.at(-1), why).toBe(false);
-            expect(r.requests, why).toBe(r.guard.length - 1);
-            continue;
-        }
+        // Steering must preserve the whole run prompt. Its late growth is absent from the preceding tool-boundary probe;
+        // a refusal is judged at its own complete-request observation, including that growth and the incoming steer.
+        expect(r.faults.join(' '), why).not.toContain('Prompt check failed');
 		// Capacity faults remain confined to requests over the room.
 		for (const fault of r.faults) expect(fault.includes(GUARD) || fault.includes("pi-tuck's mandatory context cannot fit"), why).toBe(true);
 		expect(r.faults.join(' '), why).not.toContain('did not reduce');
-		if (r.faults.some(f => f.includes("pi-tuck's mandatory"))) expect(measure(r.probes.length - 1), why).toBeGreaterThanOrEqual(ROOM);
+        for (const tokens of refused) expect(tokens, why).toBeGreaterThanOrEqual(ROOM);
 		// A guard rejection only for a request the guard counts over the room.
 		const rejectedAt = r.guard.findIndex(g => g >= ROOM);
 		if (rejectedAt >= 0) { rejected++; expect(r.faults.join(' '), why).toContain(GUARD); expect(r.requests, why).toBe(rejectedAt); }
@@ -88,7 +88,7 @@ test(`irreducible requests: an in-band request that cannot be cut is no fault; o
 			const m = measure(i), cutHere = (r.cutsAtRequest[i] ?? r.cuts) - r.cutsAtProbe[i]!;
 			if (m >= BAND && m < ROOM) { inBand++; if (!cutHere) declined++; }
 			// In the band a decision never faults on its own: it cut, or it did nothing and the request went to the guard.
-			if (m < ROOM && i < r.requests) expect(r.faults.filter(f => f.includes("pi-tuck's")), why).toEqual([]);
+			if (m < ROOM && i < r.requests) expect(r.guard[i], why).toBeLessThan(ROOM);
 		}
 	}
 	expect(inBand).toBeGreaterThan(30);

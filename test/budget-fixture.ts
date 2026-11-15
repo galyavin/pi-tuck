@@ -77,6 +77,8 @@ export interface Options {
  toolCalls?: (request: number) => boolean;
  /** The size of the Nth tool result, so one run can grow by mixed amounts. */
  toolResultTokens?: (call: number) => number;
+ /** Emit one parallel read call per size instead of the ordinary effect call. */
+ parallelReads?: readonly number[];
  /** Request N never answers: the stream stays open, as a stalled provider's does, until the turn is aborted. */
  neverEnds?: (request: number) => boolean;
  /** Tokens of reply streamed to a stalling request before the transport went quiet. An aborted reply is saved with what arrived, so this is the
@@ -360,7 +362,14 @@ export async function harness(options: Options) {
   }] });
   let loader = makeLoader();
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
+  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.parallelReads ? ['read'] : options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.parallelReads ? [{
+   name: 'read', label: 'Read', description: 'Scripted parallel read', parameters: Type.Object({ index: Type.Number() }),
+   execute: async (_id: string, args: { index: number }) => {
+    const body = fit(options.parallelReads![args.index]!);
+    state.effects++; state.results.push(resultTokens(body)); state.resultAt.push(state.requests);
+    return { content: [{ type: 'text' as const, text: body }], details: {} };
+   },
+  }] : []), ...(options.dormant ? [{ name: 'dormant', label: 'Dormant', description: 'Dormant tool. ' + text(options.dormant), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), ...(options.ballast ? [{ name: 'ballast', label: 'Ballast', description: 'Ballast tool. ' + text(options.ballast), parameters: Type.Object({}), execute: async () => ({ content: [], details: {} }) }] : []), {
    name: 'effect', label: 'Effect', description: 'Local effect witness', parameters: Type.Object({}),
    execute: async () => {
     state.effects++;
@@ -573,7 +582,9 @@ export async function harness(options: Options) {
     if (failing === 'length') stream.push({ type: 'done', reason: 'length', message: failed }); else stream.push({ type: 'error', reason: 'error', error: failed });
     stream.end(failed); return stream;
    }
-   const reply: AssistantMessage['content'] = toolRound ? [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
+   const reply: AssistantMessage['content'] = toolRound ? options.parallelReads
+    ? options.parallelReads.map((_, index) => ({ type: 'toolCall' as const, id: `parallel-read-${state.requests}-${index}`, name: 'read', arguments: { index } }))
+    : [{ type: 'toolCall', id: `boundary-effect-${state.requests}`, name: 'effect', arguments: {} }] : [{ type: 'text', text: 'Finished' }];
    // Exercise actual output exhaustion, distinct from the existing input-truncation fake. Tool rounds stay small; final answers try the cap.
    const outputRoom = Math.min(request?.maxTokens ?? Infinity, Math.max(0, providerWindow - count));
    const output = Math.min(model.maxTokens, options.replyWindowOutput?.(state.requests) ?? model.maxTokens);
