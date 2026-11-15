@@ -117,9 +117,11 @@ export class Run {
     clips = new Map<string, Clip>();
     pendingBoundaryReceipts: string[] = [];
     thinkingRetryPending = false;
+    /** A refusal-path floor carried by cut; the complete request must still pass Pi's window check. */
+    nativeFloorPending = false;
     refusalReceipted = false;
     clear() {
         this.prompt = undefined; this.cut.clear(); this.clips.clear(); this.pendingBoundaryReceipts = [];
-        this.thinkingRetryPending = false; this.refusalReceipted = false; this.expiredPlan = false;
+        this.thinkingRetryPending = false; this.nativeFloorPending = false; this.refusalReceipted = false; this.expiredPlan = false;
     }
 }
