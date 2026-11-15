@@ -1242,6 +1242,19 @@ export function namedCells(): Cell[] {
   prompts: [4_000, ...Array(30).fill(1_500)], rounds: Array(31).fill(1), results: [1_000],
   extra: { noOpening: true },
  }));
+ // The steer arrives after the tool boundary's snapshot. Its late prompt plan must keep the run owner's whole prompt and clip the fresh reads.
+ const parallelRoundSteering = [16_384, 32_768].flatMap(room => [false, true].map(steer => base(
+  `large parallel round ${steer ? 'with a steer at the next boundary' : 'without a steer'} at room ${room}`, {
+   window: room + 16_384, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
+   prompts: [2_048, 100], rounds: [1, 0], results: [],
+   extra: { noOpening: true, cutAtDefault: true,
+    parallelReads: [12_806, 9_137, 4_996].map(size => size * room / 16_384),
+    afterDecision: (at, api) => { if (steer && at === 1) void api.steer(70); },
+   },
+   reached: { state: 'three parallel reads beyond the hard line, clipped and answered without a refusal',
+    check: e => e.results.length === 3 && e.results.reduce((a, b) => a + b, 0) > room + 8_704 &&
+     e.requests[0] === 2 && e.clips > 0 && e.faults === 0 && e.aborts === 0 && e.refused === 0 },
+  })));
  const tasksSmallWindow = base('a run of tasks at a 32,768 window', {
   window: 32_768, reserve: 16_384, maxTokens: 8_192, keepRecent: 20_000, system: 1_500, host: 200,
   prompts: [2_000, 100, 100, 100, 2_500, 100, 100, 100, 3_000, 100, 100, 100, 2_000, 100, 100], rounds: [1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2], results: [1_500, 800],
@@ -1462,7 +1475,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   }),
   // t03-24: a cut kept only its summary, and the next prompt fits the room alone but not beside that summary. The calibration factor is 1.29.
   t0324, veto, prepend, boundary,
-  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, ...standoffSection, tasksSmallWindow, ...longSteps, ...specThenSteering,
+  ...setupGrid, ...replayWindows, realPostCut, ...replaySetups, replaySecond, ...standoffSection, tasksSmallWindow, ...longSteps, ...specThenSteering, ...parallelRoundSteering,
   ...providerCells, ...replyReserveCells, ...floorCells, ...clampCells, ...oddUsageCells, ...wrongWindowCells(),
  ];
 }
