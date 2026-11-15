@@ -39,7 +39,7 @@ import { overflowNotice, CALIBRATION_CEILING } from '../../src/compaction.js';
 import { seedContextWindow } from '../../src/request-capacity.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
-import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
+import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, nativeFloorAdmission, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
@@ -609,8 +609,14 @@ async function runCellInner(cell: Cell, hooks?: GridHooks): Promise<Run> {
   record(cell, rule, message, { ...params, ...(refusal ? { refusal } : {}) });
  };
  const requestLimits: ReturnType<typeof limitsOf>[] = [];
- h.observeExtension(pi => pi.on('context_with_system', () => {
+ const nativeAdmissions: boolean[] = [];
+ h.observeExtension(pi => pi.on('context_with_system', (event, ctx) => {
   requestLimits.push(limitsOf(cell, h.manager.getBranch()));
+  const native = nativeFloorAdmission(ctx.model!, event.messages, h.manager.getBranch());
+  nativeAdmissions.push(native);
+  const leaf = h.manager.getBranch().at(-1);
+  if (leaf?.type === 'custom' && leaf.customType === 'pi-tuck-capacity' && (leaf.data as { kind?: string })?.kind === 'native-floor' && !native)
+   record(cell, 'window', 'A native-floor receipt does not match Pi’s estimate, cap and window margin');
   guardPrompts.push(currentPromptTokens);
   if (!lastBudget) throw new Error('Native parity budget observation is unavailable');
   nativeBuilds.push({ ...nativeState(lastBudget, h.settings), overflowRecovery });
@@ -703,6 +709,9 @@ async function runCellInner(cell: Cell, hooks?: GridHooks): Promise<Run> {
   // What the session said when it refused: the notice the operator saw and the fault pi-tuck recorded.
   const said = `${h.notices.slice(-1).join(' | ').slice(0, 120) || 'no notice'} / ${h.faults.slice(-1).join(' | ').slice(0, 90) || 'no fault'}`;
    for (const [n, tokens] of sent.entries()) {
+    // The refusal-path floor uses Pi's native cap, independently verified on the complete request above.
+    // Ordinary admissions still owe the branch reply floor.
+    if (nativeAdmissions[seen.guard + n]) continue;
     const held = requestLimits[seen.guard + n]!.replyFloor;
     const cap = h.state.requestOptions[seen.requests + n]?.maxTokens;
     if (tokens > requestLimits[seen.guard + n]!.room && cap !== undefined && cap < held)
@@ -713,6 +722,8 @@ async function runCellInner(cell: Cell, hooks?: GridHooks): Promise<Run> {
    // of the session and not a guess, so a request the provider will not take is the guard's failure to hold the window. Before any reply has
    // reported usage the count is only what this cell declared, and only the recovery rules apply.
    for (const [n, c] of charged.entries()) {
+    // Pi may send a request whose provider count exceeds its estimate; this policy deliberately follows Pi at the floor.
+    if (nativeAdmissions[seen.guard + n]) continue;
     if (c.known && c.count > cell.window) record(cell, 'window', `the provider counted request ${seen.counts + n + 1} at ${c.count} tokens against its window of ${cell.window} (measured ${sent[n]} at factor ${factor.toFixed(3)}), so it refused the request: ${said}`, { prompt: i + 1, count: c.count, measured: sent[n] });
    }
    // A refusal is a turn that asked for nothing or ended without an answer, other than one the cell stalled on purpose.

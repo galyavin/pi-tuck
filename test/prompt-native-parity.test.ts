@@ -41,8 +41,9 @@ test.each([false, true])('the whole starting prompt is refused only after every 
   expect(events.findIndex(e => e.kind === 'clip')).toBeGreaterThanOrEqual(2);
   if (irreducible) {
    expect(h.state.requests).toBe(1);
-   expect(h.faults.join(' ')).toContain('Prompt check failed: the whole starting prompt cannot fit after');
-   expect(h.notices.join(' ')).toContain('Shorten the prompt or choose a model with a larger context window, then retry');
+   expect(h.faults.join(' ')).toContain('The fresh tool round and required context exceed the estimated request budget');
+   expect(h.notices.join(' ')).toContain('shorten the input, use a model with a larger window');
+   expect(h.faults.join(' ')).not.toContain('starting prompt');
    // Text of the fresh assistant is not clippable: even no result and no summary leave more than the final room.
    expect((whole.length / 4) + 8000 + h.mandatory).toBeGreaterThan(limit);
    expect(events.some(e => e.kind === 'clip' && e.clips === 0)).toBe(true);
