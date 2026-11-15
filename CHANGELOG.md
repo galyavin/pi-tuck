@@ -3,6 +3,17 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-11-15
+
+### Added
+
+- **Kept searches.** A cut's summary now also keeps the latest output of a `grep` or `rg` search (per command, at most 4), alongside the
+  kept reads, while nothing the search lists has changed since: a later write or edit of a listed file, or a shell command that is not
+  read-only and names one, drops it. Searches with shell syntax pi-tuck cannot classify are never kept. Kept searches share kept reads'
+  space in the summary, so the summary's size target is unchanged. In a 10-task paired live gate against 1.2.0's line (NVIDIA Nemotron,
+  room 16,384), the agent repeated a search after a cut 0.23 times per cut against 0.45, and resolved 5 tasks the other build missed
+  against 2, with no refusals, lost tasks or error stops.
+
 ## [1.2.0] - 2026-11-15
 
 ### Added

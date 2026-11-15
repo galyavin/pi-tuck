@@ -99,7 +99,7 @@ test('unknown private index/setup-era custom entries are ignored by load, projec
   const { measurableConversationTokens } = await import('../src/budget');
   const summary = (m: SessionManager) => {
    const context = { ...ctx, sessionManager: m, model: { contextWindow: 272000 } } as unknown as ExtensionToolContext;
-   return tuckObservedDraft(tuck, { branchEntries: m.getBranch(), tokensBefore: 50000, operatorManual: true }, context, 32768,
+   return tuckObservedDraft(tuck, { branchEntries: m.getBranch(), tokensBefore: 50000 }, context, 32768,
     messages => measurableConversationTokens(messages, context));
   };
   const withReceipts = summary(reopened), withoutReceipts = summary(clean);
