@@ -3,6 +3,21 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - 2026-11-15
+
+### Fixed
+
+- **pi-tuck no longer refuses a request that Pi itself would send.** When a reply mid-run is too large for any cut to fit pi-tuck's own
+  limit (seen live: a reply with about 12,000 tokens of reasoning at a 32,768-token window), pi-tuck now sends its smallest cut whenever Pi's
+  own request math fits it in the window, with the reply cap Pi's clamp leaves. Nothing is removed from the request. It refuses only past
+  the window, and the refusal now names what does not fit instead of always blaming the starting prompt.
+
+### Changed
+
+- **Tests no longer assert wall time in CI.** Timing bounds run in a local bench before each release; per-test timeouts are 120 s.
+  Local timing bench for this release (Apple silicon, `npm run timing`): every regression-bench cell within its bound; keyword recall on an
+  85 MB session 671 ms before and 688 ms after growth, against a 3,000 ms budget.
+
 ## [1.3.1] - 2026-11-15
 
 ### Changed
