@@ -64,8 +64,8 @@ Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, bo
 
 - Needs Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS or Linux. On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once. Full features on macOS with Apple silicon; elsewhere, compaction and word recall.
 - On macOS with Apple silicon, the first session also downloads a local search model in the background (about 390 MB, once), and says once when it is set up. Until it is ready, search works by keyword. See [Semantic search](#semantic-search).
-- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.1.0`.
-- To pin a version, add it: `pi install npm:pi-tuck@1.1.0`.
+- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.1.2`.
+- To pin a version, add it: `pi install npm:pi-tuck@1.1.2`.
 
 ## Uninstall
 
@@ -103,9 +103,11 @@ pi-tuck's tools appear only after its first cut. Before that there is nothing ou
 
 | Command | Does |
 |---|---|
-| `/tuck` | Says in words what pi-tuck is doing in this session: the version this session loaded (an open session keeps it until Pi restarts), how many cuts and retries pi-tuck made and the last cut's size before and after, whether the cut point adapts or is fixed by `cutAt`, and how search works here. It is for you; the model sees nothing new. |
+| `/tuck` | Says in words what pi-tuck is doing in this session: the version this session loaded (an open session keeps it until Pi restarts), how many cuts and retries pi-tuck made and the last cut's size before and after, whether the cut point adapts or is fixed by `cutAt`, how search works here, and, since 1.1.1, `standing down:` with the reason when pi-tuck is not acting. It is for you; the model sees nothing new. |
 | `/tuck-semantic on\|off\|status` | Turns semantic search on or off for this session, or shows its state. |
 | `/tuck-incident on\|next\|off\|status` | Records this session's compaction decisions to a file you can attach to a bug report. |
+
+Since 1.1.1, pi-tuck stands down to native Pi when it cannot do its job safely: with an unknown context window (0, missing or not a number), with a Pi virtual model, or with Pi's auto-compaction turned off. It then does exactly what native Pi does, and `/tuck` says `standing down:` with the reason. Refusal, overflow and manual-cut notices also reach stderr when there is no UI (`pi -p`, JSON runs), as the output-limit notice already did.
 
 `/compact` works as usual. Text after it does not steer the summary, because pi-tuck builds the summary from the session itself: since 1.0.19 it cuts as plain `/compact` does and says the text was not used. Pi's own setting `"compaction": { "enabled": false }` turns compaction off.
 
@@ -136,6 +138,8 @@ Known limits today:
 - A request above the room could be admitted and then refused, leaving the session stuck where native Pi would have sent (1.0.22 to 1.0.24; fixed in 1.0.25). pi-tuck checked its line in its own corrected token count, while Pi's reply cap uses Pi's own estimate, which is higher when the provider counts fewer tokens than pi-tuck's raw measure ([`CHANGELOG.md`](CHANGELOG.md) 1.0.25).
 - Near the 1.0.22 refusal line, replies were cut to a few hundred tokens (1.0.22; fixed in 1.0.23). 1.0.22 left only its reply floor and did not count Pi's 4,096-token margin on the reply cap ([`CHANGELOG.md`](CHANGELOG.md) 1.0.23).
 - Cost of the 1.0.22 change: between the room and the window, the reply reserve no longer cushions a wrong count. At a cold start an undercount can reach the provider. A provider that errors is caught and learned from; a server that truncates silently truncates, as it does for native Pi. With a setup above the room, cuts are forced and frequent, each freeing little, which beats a stranded session ([`CHANGELOG.md`](CHANGELOG.md) 1.0.22).
+- Fixed in 1.1.1: a resumed session forgot what pi-tuck had learned about the provider's token counts. pi-tuck saved its calibration only inside a cut, so after quitting and resuming Pi before the next cut it counted at 1x again and could send a request the provider truncated or refused, where native Pi succeeded. pi-tuck now saves a small private entry in the session when what a resume would learn changes, not every turn, and reads it back on resume. The entry never reaches the model ([`CHANGELOG.md`](CHANGELOG.md) 1.1.1).
+- Fixed in 1.1.1: pi-tuck refused prompts that native Pi would have sent when the context window was unknown, the model was a Pi virtual model, or Pi's auto-compaction was turned off. It now stands down to native in those cases. Also fixed in 1.1.1: refusal, overflow and manual-cut notices were silent without a UI, so a run in `pi -p` or JSON mode could end with no word; the semantic search status could claim "ready" when it was turned off or had failed; and a retry after a reply hit the output limit skipped a check that a pending cut had really been saved in the session ([`CHANGELOG.md`](CHANGELOG.md) 1.1.1).
 - Fixed in 1.0.33: a file read's recall number pointed at the read call, not at what the read returned. The summary lists each file the session read with a `tuck_recall` number, and that number brought back the call's arguments instead of the file's contents, so recalling a read cost a turn and showed nothing useful. It now brings back the read's output ([`CHANGELOG.md`](CHANGELOG.md) 1.0.33).
 - Fixed in 1.0.32: background indexing never started at the cuts pi-tuck makes itself. Pi announces only its own compactions, so cuts pi-tuck saved after a tool round, at the end of a run, or before retrying a reply that hit the output limit started no indexing ([`CHANGELOG.md`](CHANGELOG.md) 1.0.32).
 - Fixed in 1.0.31: input that arrived after a tool round had been checked, such as another extension's context or a newly enabled tool, could push the next request past the hard line, and the final check refused a request that pi-tuck could still cut. It now cuts at that check, carries the cut in that request, saves it at the next boundary, and refuses only when no cut can fit ([`CHANGELOG.md`](CHANGELOG.md) 1.0.31).
