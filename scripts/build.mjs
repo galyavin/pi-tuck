@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { sourceId } from './source-id.mjs';
-import { mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve, extname, relative, sep } from 'node:path';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { dirname, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 writeFileSync(resolve(root,'src/build-id.ts'), `export const BUILD_ID = ${JSON.stringify(sourceId(root))};\n`);

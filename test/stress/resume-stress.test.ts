@@ -1,4 +1,4 @@
-/** Cold file-backed resume on the settings grid. No hosted provider or semantic worker is started.
+/** Cold file-backed resume on the settings grid. No hosted provider is started.
  * STRESS=1 STRESS_STRICT=1 npx vitest run test/stress/resume-stress.test.ts --testTimeout=1800000
  * RESUME_ONLY narrows this suite by shape name; STRESS_CELLS uses the original sampled-grid size.
  * Reports include unreachable checkpoints rather than substituting a different point in the script.
@@ -168,8 +168,7 @@ function compare(cell: Cell, point: Point, checkpoint: number, warm: Trace, resu
  const overflow = sent.filter(r => { const n = paired(r, native); return (r.overflow || r.truncation) && n && !n.overflow && !n.truncation; });
  const failures = resumed.failures.filter(f => {
   const prompt = Number(f.params.prompt);
-  const refusal = f.params.clause === 'refusal' ? Number(f.params.prompt) : NaN;
-  return Number.isFinite(prompt) ? prompt >= checkpoint + 1 : Number.isFinite(refusal) ? refusal >= checkpoint + 1 : true;
+  return Number.isFinite(prompt) ? prompt >= checkpoint + 1 : true;
  });
  const thrash = failures.filter(f => ['thrash', 'useful-cut'].includes(f.rule));
  // The interrupted workload itself has pre-existing T findings. Exempt only exact warm matches;

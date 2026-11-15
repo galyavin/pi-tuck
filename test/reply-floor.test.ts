@@ -1,12 +1,11 @@
 import { expect, test, vi } from 'vitest';
-import { SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { branchReplyFloor, carriesPrompt } from '../src/request-capacity';
 import { drive, MODEL } from './calibration-fixture';
 import { harness, OVERFLOW_TEXT } from './budget-fixture';
 import { assertNativeToolRounds } from '../src/protocol';
 import { tuck, tuckRecall, tuckObservedDraft } from '../src/tuck';
 import { createRecall } from '../src/recall';
-import { semanticEligibleSources } from '../src/semantic-recall';
 import { conversationTokens } from '../src/budget';
 import { serializeTranscript } from '../src/tuck/core/transcript';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
@@ -116,7 +115,7 @@ test('real Pi guard receipts preserve tool pairing, parentage, prompt cut bounda
  } finally { await h.cleanup(); }
 });
 
-test.each(['pi-tuck-capacity', 'pi-tuck-calibration'])('%s receipts cannot enter summaries, omission counts, recall, keyword search or semantic sources', type => {
+test.each(['pi-tuck-capacity', 'pi-tuck-calibration'])('%s receipts cannot enter summaries, omission counts, recall, keyword search', type => {
  const manager = SessionManager.inMemory('/x');
  manager.appendMessage({ role: 'user', content: 'Source task', timestamp: 0 });
  manager.appendMessage(response(10));
@@ -129,7 +128,6 @@ test.each(['pi-tuck-capacity', 'pi-tuck-calibration'])('%s receipts cannot enter
   expect(JSON.stringify(tuckRecall(tuck, manager.getEntries(), manager.getBranch(), input))).not.toContain('SECRET_RECEIPT_REASON');
  expect(tuckRecall(tuck, manager.getEntries(), manager.getBranch(), { query: 'SECRET_RECEIPT_REASON' })).toMatchObject({ hits: [], totalMatches: 0 });
  const ctx = { cwd: '/x', model: MODEL, sessionManager: manager } as never;
- expect(JSON.stringify(semanticEligibleSources(ctx, {}, () => {}))).not.toContain('SECRET_RECEIPT_REASON');
  const draft = () => tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: 1000, newPrompt: true }, ctx, 1000, conversationTokens, {}, false);
  const withReceipt = draft();
  manager.branch(clean.at(-1)!.id);

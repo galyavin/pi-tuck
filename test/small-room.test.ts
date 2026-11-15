@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test, expect } from 'vitest';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { DEFAULT_CUT_AT, bandOf, decideCut, measurableConversationTokens, planningReserve, type Plan } from '../src/budget';
@@ -26,7 +28,7 @@ const WINDOW = 32768, RESPONSE = 16384, ROOM = WINDOW - RESPONSE, SYSTEM = 2489,
 function recordedBoundary() {
 	let clock = 1_700_000_000_000; const stamp = () => (clock += 1000);
 	const filler = (chars: number, tag: string) => { let text = '', i = 0; while (text.length < chars) text += `${tag}${i++} lorem ipsum data; `; return text.slice(0, chars); };
-	const manager = SessionManager.inMemory('/tmp/p');
+	const manager = SessionManager.inMemory(join(tmpdir(), 'p'));
 	const user = (text: string) => manager.appendMessage({ role: 'user', content: text, timestamp: stamp() });
 	const reply = (content: unknown[], stopReason = 'toolUse') => manager.appendMessage({ role: 'assistant', content, api: 'openai-completions', provider: 'p', model: 'p', usage, stopReason, timestamp: stamp() } as never);
 	const result = (id: string, name: string, text: string) => manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: name, content: [{ type: 'text', text }], isError: false, timestamp: stamp() });
@@ -47,7 +49,7 @@ function recordedBoundary() {
 
 test('a 16k room, a live system part and a slow tokenizer: the boundary 1.0.1 refused drafts a cut, as the tool-loop trigger decides it', () => {
 	const manager = recordedBoundary();
-	const ctx = { sessionManager: manager, cwd: '/tmp/p', model: { contextWindow: WINDOW, maxTokens: RESPONSE, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
+	const ctx = { sessionManager: manager, cwd: join(tmpdir(), 'p'), model: { contextWindow: WINDOW, maxTokens: RESPONSE, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
 	const measure = (m: never[]) => measurableConversationTokens(m, ctx);
 	const before = measure(manager.buildSessionProjection().messages as never[]);
 	const band = bandOf(ROOM, DEFAULT_CUT_AT), fits = (tokens: number, limit: number) => Math.ceil(tokens * FACTOR) < limit;
@@ -86,7 +88,7 @@ const routes = {
 	'system part and host input exceed the room': { options: { ...small, system: 2000, host: 17000, at: 'impossible' as const, complete: 8000 }, free: (h: Awaited<ReturnType<typeof harness>>) => h.setHost(100), refused: 'Complete Pi context and response reserve exceed', again: 'refused' as const },
 	// The tool round fresh from the last call is larger than the room: a cut keeps it native, and the prompt it answers is too large to leave
 	// room even for the result clipped (clip-fresh-result.test.ts has the case the clip resolves), so no cut can help, and the trigger refuses.
-	'a fresh tool round larger than the room': { options: { ...small, system: 1500, host: 100, at: 'tool' as const, history: 1000, complete: 31300, fresh: 15000, replyTokens: (request: number) => request === 1 ? 1000 : 0 }, free: (h: Awaited<ReturnType<typeof harness>>) => { (h.session.model as { contextWindow: number }).contextWindow = 272000; }, refused: 'cannot fit or reduce the request budget', again: 'answered' as const },
+	'a fresh tool round larger than the room': { options: { ...small, system: 1500, host: 100, at: 'tool' as const, history: 1000, complete: 30600, fresh: 15000, replyTokens: (request: number) => request === 1 ? 1000 : 0 }, free: (h: Awaited<ReturnType<typeof harness>>) => { (h.session.model as { contextWindow: number }).contextWindow = 272000; }, refused: 'whole starting prompt cannot fit', again: 'answered' as const },
 };
 const marks = (h: Awaited<ReturnType<typeof harness>>) => ({ requests: h.state.requests, aborts: h.state.aborts, faults: h.faults.length, notices: h.notices.length });
 const since = (h: Awaited<ReturnType<typeof harness>>, m: ReturnType<typeof marks>) => ({ requests: h.state.requests - m.requests, aborts: h.state.aborts - m.aborts, faults: h.faults.slice(m.faults), notices: h.notices.slice(m.notices) });
@@ -99,7 +101,7 @@ for (const [name, route] of Object.entries(routes))
 				const first = await h.run();
 				expect(first.faults.join(' '), first.probe).toContain(route.refused);
 				expect(first.aborts, first.probe).toBeGreaterThan(0);
-				expect(first.notices.join(' '), first.probe).toContain('shorten the input');
+				expect(first.notices.join(' '), first.probe).toMatch(/shorten (?:the input|the prompt)/i);
 				// The next prompt decides afresh. While the host view still fills the room it is refused again. The refused tool round was left
 				// behind by its ended run: the next prompt's cut summarizes it, and that prompt is answered.
 				const again = marks(h);

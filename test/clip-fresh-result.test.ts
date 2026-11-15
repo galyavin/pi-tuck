@@ -121,7 +121,7 @@ test('a round the half leaves whole is clipped to what the smallest cut leaves o
 	const shown = { ...one[0]!, content: clips[0]!.content };
 	expect(conversationTokens([shown] as never)).toBeLessThanOrEqual(budgets[1]!);
 	const text = shown.content[0]!.type === 'text' ? shown.content[0]!.text : '';
-	const [, from, to] = text.match(/characters (\d+)-(\d+) of (\d+)/)!;
+	const [, from] = text.match(/characters (\d+)-(\d+) of (\d+)/)!;
 	expect(text).toContain(`tuck_recall {"entryId":"entry-r","offset":${from}}`);
 	expect(text.startsWith(one[0]!.content[0]!.type === 'text' ? one[0]!.content[0]!.text.slice(0, Number(from)) : '')).toBe(true);
 });

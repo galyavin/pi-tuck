@@ -2,15 +2,14 @@ import { test, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SemanticRecallController } from '../src/semantic-recall';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 // `"cutAt"` in pi-tuck.json in Pi's agent folder is read by index.ts and handed to installCompaction; any value that is not a number above
 // 0 and at most 1 is a settings error, reported at the next session start with the other settings errors, and the default applies.
 // installCompaction is replaced by a recorder (it is covered by cut-at.test.ts), so that the option the extension passes can be read.
-const state = vi.hoisted(() => ({ options: [] as { cutAt?: number; semanticRecall: SemanticRecallController }[] }));
+const state = vi.hoisted(() => ({ options: [] as { cutAt?: number }[] }));
 vi.mock('../src/compaction', () => ({
-	installCompaction: vi.fn(async (_pi: unknown, options: { cutAt?: number; semanticRecall: SemanticRecallController }) => { state.options.push(options); return { setSemanticEnabled: async () => {} }; }),
+	installCompaction: vi.fn(async (_pi: unknown, options: { cutAt?: number }) => { state.options.push(options); return {}; }),
 }));
 
 async function load(file: string | undefined) {
@@ -27,10 +26,10 @@ async function load(file: string | undefined) {
 		await extension(pi);
 		expect(state.options).toHaveLength(1);
 		const notices: { message: string; level: string }[] = [];
-		// A session start without a UI: nothing is downloaded, whatever the platform.
+		// The legacy setting must have no effect on startup or operator notices.
 		const ctx = { hasUI: true, cwd: join(agentDir, 'project'), ui: { notify: (message: string, level: string) => { notices.push({ message, level }); } } } as unknown as ExtensionContext;
 		for (const handler of handlers.get('session_start') ?? []) await handler({}, ctx);
-		return { cutAt: state.options[0]!.cutAt, notices, path, setup: state.options[0]!.semanticRecall.status().setup };
+		return { cutAt: state.options[0]!.cutAt, notices, path };
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(agentDir, { recursive: true, force: true });
@@ -50,10 +49,9 @@ test(`${file}: the cut point is passed on and nothing is reported`, async () => 
 	expect(r.notices.filter(n => n.level === 'warning')).toEqual([]);
 });
 
-test('with semantic recall off the cut point still applies', async () => {
+test('with the legacy setting false the cut point still applies', async () => {
 	const r = await load('{"semanticRecall": false, "cutAt": 0.6}');
 	expect(r.cutAt).toBe(0.6);
-	expect(r.setup).toBe('off-settings');
 	expect(r.notices).toEqual([]);
 });
 
@@ -63,11 +61,11 @@ test(`{"cutAt": ${bad}}: a settings error, reported with the same warning as any
 	expect(r.cutAt).toBeUndefined();
 	const warnings = r.notices.filter(n => n.level === 'warning');
 	expect(warnings).toHaveLength(1);
-	expect(warnings[0]!.message).toBe(`pi-tuck: ${r.path} should be a JSON object like {"semanticRecall": false, "cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the defaults.`);
+	expect(warnings[0]!.message).toBe(`pi-tuck: ${r.path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the defaults.`);
 });
 
 test('the error path is the one every settings error takes: a file that is not an object of known values, or not JSON, gives the same warning and the default', async () => {
-	for (const file of ['{"semanticRecall": "no"}', '{"cutAt": 0, "semanticRecall": false}', 'not json', '[]x']) {
+	for (const file of ['{"cutAt": 0, "semanticRecall": false}', 'not json', '[]x']) {
 		const r = await load(file);
 		expect(r.cutAt, file).toBeUndefined();
 		const warnings = r.notices.filter(n => n.level === 'warning');
@@ -76,3 +74,10 @@ test('the error path is the one every settings error takes: a file that is not a
 		expect(warnings[0]!.message, file).toContain('using the defaults.');
 	}
 });
+
+for (const value of [true, false, null, 0, "no", [], { enabled: true }])
+	test(`legacy semanticRecall ${JSON.stringify(value)} is ignored without warnings`, async () => {
+		const r = await load(JSON.stringify({ semanticRecall: value, cutAt: 0.6 }));
+		expect(r.cutAt).toBe(0.6);
+		expect(r.notices).toEqual([]);
+	});

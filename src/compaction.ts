@@ -1,8 +1,7 @@
 import { textOf } from "./tuck/core/content.js";
-import { PendingCut, StartingPrompt, createRun, type CutEntry, type Run } from "./run.js";
+import { PendingCut, StartingPrompt, Run, type CutEntry } from "./run.js";
 import { requestReplyFloor, replyFit, carriesPrompt, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath, seedContextWindow, WINDOW_RECEIPT, type WindowReceipt } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
-import { createSemanticRecall, budgetSemantic, type SemanticRecallController } from "./semantic-recall";
 import { DIAGNOSTIC_BUILD, IncidentRecorder, attachReceipt, permittedEntries, receiptId, findReceiptEntry, type Receipt, type RecorderOptions } from "./diagnostics.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -23,7 +22,7 @@ import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY
 import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
 import { LOADED_VERSION, statusText } from "./status.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
-import { eligibilityKey, eligibilityKeyMoved, memoizedEligibleSources } from "./eligibility-cache";
+import { notify } from "./notify.js";
 import { applyHistoryTools, historyToolDeclarations, historyToolNames, stageHistoryTools } from "./history-tools.js";
 
 const query = Type.String({ minLength: 1, maxLength: MAX_RECALL_QUERY_CHARACTERS });
@@ -46,7 +45,6 @@ const RecallInput = Type.Union([
 	Type.Object({ index: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), query: Type.Optional(query), ...paging }, { additionalProperties: false }),
 	Type.Object(paging, { additionalProperties: false }),
 ]);
-const SearchInput = Type.Object({query,priorResults:Type.Optional(Type.Array(Type.Object({sourceSha:Type.String({minLength:64,maxLength:64}),read:Type.Object({entryId,offset:Type.Integer({minimum:0}),limit:Type.Integer({minimum:0})},{additionalProperties:false})},{additionalProperties:false}),{maxItems:20}))},{additionalProperties:false});
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
 /** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. Like every failure but
  * a `CommitFault`, it ends with its attempt (`resetRun`), and the next attempt plans afresh from the session as it is. */
@@ -56,9 +54,6 @@ class Refusal extends Error {}
 class CommitFault extends Error {}
 /** A refusal for want of room, which the user can remedy: it carries advice. */
 class CapacityError extends Refusal {}
-function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") {
-    try { if (ctx.hasUI === false) process.stderr.write(message + "\n"); else ctx.ui.notify(message, level); } catch { /* ended */ }
-}
 /** What a capacity refusal tells the operator. When the provider has counted far more input than pi-tuck's estimate, the refusal most
  * likely comes from that counting (an upstream behind a router can spend much more context on tool schemas), so the notice says so. */
 export const refusalNotice = (message: string, factor: number): string =>
@@ -157,12 +152,6 @@ export function compactionState(model: { api: string; contextWindow?: number } |
     return reason ? { kind: "standingDown", reason } : { kind: "active" };
 }
 export interface CompactionOptions {
- semanticRecall?: SemanticRecallController;
- /** Whether `tuck_search` exists: false where semantic recall cannot run (off Apple silicon), so the model is offered word recall only. */
- search?: boolean;
- /** Optional host-owned transient operator preference; handle operations never call back. */
- onSemanticSetting?: (enabled: boolean) => Promise<unknown>;
- semanticStatus?: () => unknown;
  diagnostics?: RecorderOptions;
  /** Optional read-only observation of actual corrected budget checks; no request content. */
  observeBudget?: (measurement: { rawTokens: number; tokens: number; factor: number; response: number; room: number; hardLine?: number; context: ExtensionContext }) => void;
@@ -199,23 +188,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const piClamp = piMath?.clampMaxTokensToContext;
     const cutAt = options.cutAt ?? DEFAULT_CUT_AT;
     if (!validCutAt(cutAt)) throw new Error("Invalid cut point: cutAt must be a number above 0 and at most 1");
-    const semantic = options.semanticRecall ?? createSemanticRecall(), search = options.search ?? true;
     const hostAccess = () => {
         if (!active()) throw new Error("Compaction host is inactive");
         options.assertAccess?.();
     };
-    let semanticTransition: Promise<void> = Promise.resolve();
-    let semanticRequest = 0;
-    const semanticPending = new Set<Promise<unknown>>();
-    // Semantic indexing outlives any one attempt, so it checks only that the host still grants access: a compactor failure, which ends with its
-    // attempt, must not read as a revocation (that disables semantic recall and deletes its index for the rest of the session).
-    // A prompt's cut reaches the requests at once but the session only at the end of the first turn: until then search sees the history as the model does.
     const view = (ctx: ExtensionContext, threshold = false) => (threshold && run?.expired ? liveCut : run?.cut ?? liveCut).view(ctx);
     const liveCut = new PendingCut();
-    const semanticProvider = (ctx: ExtensionContext) => () => {
-        const current = view(ctx);
-        return memoizedEligibleSources(ctx, options.recallPolicy, hostAccess, current.pending ? current.keptFromId : undefined);
-    };
     const recorder = new IncidentRecorder(options.diagnostics);
     let proposalId: string | undefined;
     const observe = (ctx: ExtensionContext) => recorder.measureInline(() => {
@@ -242,50 +220,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         ctx.ui.notify(JSON.stringify(recorder.status()), "info");
     } });
     pi.on("session_compact", (_event, ctx) => observe(ctx));
-    // A saved cut moves entries out of view: index them now, in the background, even for a session that has not searched or whose worker the idle limit stopped.
-    pi.on("session_compact", (_event, ctx) => { if (!standDown(ctx)) semantic.indexAtCut(semanticProvider(ctx)); });
-    pi.on("session_shutdown", async () => { semanticRequest++; recorder.stop("session-shutdown"); await semantic.close(); await Promise.allSettled([...semanticPending]); });
-    pi.on("session_start", () => { semanticRequest++; semanticTransition = semantic.close();void semanticTransition.catch(error => { options.fail?.(error); }); });
-    pi.on("turn_end", (_event,ctx) => { semantic.schedule(semanticProvider(ctx)); });
-    const applySemanticEnabled = async (enabled: boolean, ctx: ExtensionContext) => {
-        const request = ++semanticRequest;
-        if (!enabled) { semanticTransition = semantic.disable(); await semanticTransition; return semantic.status(); }
-        await semanticTransition;
-        if (request !== semanticRequest) return semantic.status();
-        access();
-        if (!semantic.status().configured) await semantic.configureExternal(ctx.cwd);
-        if (request !== semanticRequest) return semantic.status();
-        access(); semantic.enable(); semantic.schedule(semanticProvider(ctx));
-        return semantic.status();
-    };
-    const setSemanticEnabled = (enabled: boolean, ctx: ExtensionContext) => {
-        const operation = applySemanticEnabled(enabled,ctx);
-        semanticPending.add(operation);
-        void operation.then(()=>semanticPending.delete(operation),()=>semanticPending.delete(operation));
-        return operation;
-    };
-    const semanticStatus = () => ({local:semantic.status(),...(options.semanticStatus ? {host:options.semanticStatus()} : {})});
-    pi.registerCommand("tuck-semantic", {description:"Semantic recall for this session: on, off or status. To turn it off everywhere, set \"semanticRecall\": false in pi-tuck.json in Pi's agent folder.",handler:async(args,ctx)=>{
-        const command=args.trim();
-        if (!["on","off","status"].includes(command)) { ctx.ui.notify("Use on, off or status","warning"); return; }
-        const errors: string[] = [];
-        if (command!=="status") {
-            const enabled=command==="on";
-            // Both owners start directly. Off must attempt every host handle even if this one fails.
-            const operations=[setSemanticEnabled(enabled,ctx)];
-            if(options.onSemanticSetting) operations.push(Promise.resolve().then(()=>options.onSemanticSetting!(enabled)).then(()=>semantic.status()));
-            for(const result of await Promise.allSettled(operations)) if(result.status==="rejected") errors.push(String(result.reason));
-        }
-        ctx.ui.notify(JSON.stringify({...semanticStatus(),...(errors.length?{errors}:{})}),errors.length?"warning":"info");
-    }});
+    pi.on("session_shutdown", () => { recorder.stop("session-shutdown"); });
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
-        const state = semantic.status();
-        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, search, semantic: state, pending: view(ctx).pending }), "info");
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, pending: view(ctx).pending }), "info");
     } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
     // A commit-failed phase survives attempts/tree moves until session_start: native memory may be ahead of disk.
-    const failure = () => run?.phase === "failed" || run?.phase === "commit-failed" ? run.error : undefined;
+    const failure = () => run?.error;
     const protectedPrompt = (ctx: ExtensionContext) => run?.prompt?.id(ctx.sessionManager.getBranch());
     const clips = () => run?.clips ?? emptyClips;
     const emptyClips = new Map<string, Clip>();
@@ -294,7 +236,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         calibration.pending = undefined;
     };
     const beginRun = (phase: "decided" | "starting" | "admitted") => {
-        if (run?.phase === "commit-failed") run.clear(); else run = createRun(phase);
+        if (run?.phase === "commit-failed") run.clear(); else run = new Run(phase);
     };
     const stateFor = (ctx: ExtensionContext) => compactionState(ctx.model, settingsFor().getCompactionSettings(ctx.model).enabled);
     // A prerequisite can change with the model/settings; discard the old plan before returning control to native.
@@ -396,7 +338,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
     let lengthStop = false;
-    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= createRun("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = false; calibration.pending = undefined; });
+    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = false; calibration.pending = undefined; });
     pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason === "length"; });
     pi.on("agent_settled", (_event, ctx) => {
         try {
@@ -522,7 +464,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const receipted = run?.refusalReceipted;
         calibration.pending = undefined;
         // Keep the same terminal run until Pi settles; later start hooks cannot admit it.
-        run ??= createRun("starting"); run.clear();
+        run ??= new Run("starting"); run.clear();
         run.transition(fault instanceof CommitFault ? "commit-failed" : "failed", ctx, fault);
         run.refusalReceipted = true;
         try {
@@ -554,7 +496,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 
 	pi.registerTool({
 		name: "tuck_recall", label: "pi-tuck history", parameters: RecallInput,
-        description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. " + (search ? "Use tuck_search for historical information relevant to a question, including different wording and qualifications. " : "") + "Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
+        description: "Keyword lookup locates particular text in your current branch. {query} returns ranked passages with read coordinates; punctuation separates words. Pass the returned next as {continuation} unchanged. Knowing an identifier does not itself justify narrowing discovery. {entryId} or {index} (a summary sourceIndex or #N) reads one source, optionally with query, offset and limit in UTF-16 characters (limit defaults to 8000). {} browses history; {around} expands neighbors; {entryId,image} reads an image; outputPath writes an original to a file with the native write tool. Hidden reasoning and system records are excluded.",
 		async execute(_id, raw, signal, _update, ctx) {
 			access();
             const input = checkedInput(raw);
@@ -577,27 +519,6 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             return reply(tuckRecall(tuck, ctx.sessionManager.getEntries(), branch, input, options.recallPolicy));
 		},
 	});
-    if (search) pi.registerTool({name:"tuck_search",label:"History search",parameters:SearchInput,
-        description:"Find historical information relevant to a question, including different wording and related qualifications. Combines keyword and local embedding search. Knowing a name or identifier does not imply keyword-only lookup is sufficient. Returns original evidence up to 20000 characters; not exhaustive. Semantic search may be off or incomplete, which is not the same as no matches. Read exact originals and their context with tuck_recall at the returned locators. priorResults lists sources already read: pass each returned source's sourceSha and read unchanged.",
-        async execute(_id,raw,signal,_update,ctx){
-            access();if(!Check(SearchInput,raw))throw new Error("Invalid broad search input");const input=structuredClone(raw);
-            recorder.capture("recall-action","authorized-native-tool-invocation-no-result-copy",input);
-            // Bind the actual independent lexical offer, including attribution derived
-            // from custom markers and receipts excluded from semantic indexing. Rebuild
-            // under current caller policy after await, when the session moved; never send this block to the encoder.
-            // Keyword search over a very long history can hit its time limit. That limit guards one call, not the semantic half: the agent still gets the
-            // semantic results, and is told the keyword half stopped (seen in the field on an 84.7 MB session, where the whole search failed instead).
-            const wordOffer=()=>{try{return tuckRecall(tuck,ctx.sessionManager.getEntries(),ctx.sessionManager.getBranch(),{query:input.query},options.recallPolicy);}
-                catch(error){if(error instanceof Error&&error.message.startsWith("Search aborted:"))return{status:"keyword_timeout",notice:"Keyword search stopped at its time limit on this long history; the semantic results follow. For a keyword match, use more specific words or read an entry by index.",hits:[]};throw error;}};
-            // The key is taken in the same synchronous step as the first lexical pass. After the await the second pass runs only if it moved (see eligibilityKey); a moved key alone invalidates nothing.
-            // The snapshot id check covers every in-contract change (any branch change moves the id); the key-gated second pass is defence in depth for out-of-contract callers.
-            const provider=semanticProvider(ctx),initialSnapshot=provider(),initialKey=eligibilityKey(ctx),words=wordOffer(),wordText=JSON.stringify(words);
-            const related=await semantic.search(input.query,provider,signal,(input.priorResults??[]).map(({sourceSha,read})=>({entryId:read.entryId,sourceSha,start:read.offset,end:read.offset+read.limit})),words);
-            access();if(signal?.aborted)throw Object.assign(new Error('Semantic recall cancelled'),{name:'AbortError'});const now=provider();
-            if(initialSnapshot.id!==now.id||(eligibilityKeyMoved(ctx,initialKey)&&wordText!==JSON.stringify(wordOffer())))return{...reply({status:"snapshot_invalidated",notice:"Search source eligibility or version changed; no earlier evidence delivered. Request a fresh query."}),isError:true};
-            const page=budgetSemantic(related,20000-wordText.length-1);
-            return{content:[{type:"text" as const,text:wordText},{type:"text" as const,text:JSON.stringify(page)}],details:{semantic:{status:page.status,snapshotId:page.coverage.snapshotId}}};
-        }});
 
 	pi.on("session_before_compact", (event, ctx) => {
 		try {
@@ -650,7 +571,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     // Every cut asked while no run is admitted (an operator's cut) is planned for a run that has not begun: the session has moved on
                     // from any run that ended. A retry is inside its run.
                     const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || run?.phase !== "admitted", run?.phase === "admitted" ? protectedPrompt(ctx) : undefined);
-                    return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction, reserve,
+                    return draft.compaction ? { draft: true, after: draft.after, compaction: draft.compaction, reserve,
                         messages: plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 },
@@ -722,7 +643,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (!draft.compaction) return { kind: "fault", capacity: Boolean(draft.capacityRejected), message: draft.unavailable };
         const messages = plannedView(ctx, { type: "compaction", ...draft.compaction }).session.buildSessionProjection().messages;
         assertNativeToolRounds(messages);
-        return { kind: "cut", target: "room", plan: { draft: true, after: measureFor(ctx)(messages), mode: draft.mode,
+        return { kind: "cut", target: "room", plan: { draft: true, after: measureFor(ctx)(messages),
             compaction: draft.compaction, reserve: 0, messages } };
     };
     // The cut before a run, decided on `input` while the session is idle; before_agent_start decides only for a run no input started (one a
@@ -769,7 +690,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 candidate.plan({ type: "compaction", ...draft.compaction, tokensBefore: before }, branchLength);
                 const messages = candidate.view(ctx).session.buildSessionProjection().messages;
                 assertNativeToolRounds(messages);
-                return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve, messages };
+                return { draft: true, after: measure(messages), compaction: draft.compaction, reserve, messages };
             },
         });
         let decision: Decision<CutPlan> = gate.kind === "plan" ? decide(room, band, gate.opportunistic) : { kind: "defer" };
@@ -797,7 +718,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // input, so no run started for it): plan afresh.
         const prompted = run && ["decided", "claimed", "expired"].includes(run.phase) && event.messageType !== "custom";
         if (!prompted && !failure()) beginRun("starting");
-        run ??= createRun("starting");
+        run ??= new Run("starting");
         if (!failure() && run.phase !== "starting") run.transition("starting", ctx);
         const prompt = event.messageType === "custom" ? textOf(event.message.content) : event.prompt;
         run.prompt = prompt ? new StartingPrompt(prompt, ctx.sessionManager.getBranch().length, event.messageType) : undefined;
@@ -813,7 +734,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             else applyHistoryTools(pi, false);
             const staged = pi.getActiveTools();
             event.systemPromptOptions.selectedTools = historyToolNames(pi, event.systemPromptOptions.selectedTools, true).filter(name =>
-                name !== "tuck_recall" && name !== "tuck_search" || staged.includes(name));
+                name !== "tuck_recall" || staged.includes(name));
         } catch (error) { fail(error, ctx); }
     });
     // The incoming user message is about to be appended (including steering inside a run), and later before_agent_start/turn_start
@@ -865,7 +786,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const lastCut = ctx.sessionManager.getBranch().findLast(entry => entry.type === "compaction");
         if (reason === "run-end" && lastAssistant && (!lastCut || lastAssistant.timestamp > Date.parse(lastCut.timestamp)) &&
             !saved.some(message => message.role === "assistant" &&
-            !["error", "aborted"].includes(message.stopReason) && message.usage && calculateContextTokens(message.usage) > 0)) {
+            !isDiscardedResponse(message) && message.usage && calculateContextTokens(message.usage) > 0)) {
             const forecast = historyToolDeclarations(saved, toolShapes(historyToolNames(pi, pi.getActiveTools(), true)), true);
             if (forecast !== saved) {
                 const head = getCurrentSystemMessage(convertToLlm(forecast));
@@ -909,7 +830,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 const messages = plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages;
                 assertNativeToolRounds(messages);
                 previews.push(messages);
-                return { draft: true, after: measure(messages), mode: draft.mode, compaction: draft.compaction, reserve, messages };
+                return { draft: true, after: measure(messages), compaction: draft.compaction, reserve, messages };
             },
             });
         };
@@ -980,20 +901,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     };
     const atBoundary = (event: Boundary, ctx: ExtensionContext, reason: "tool-loop" | "run-end", decide: boolean) => {
         const current = view(ctx);
-        if (!current.pending) {
-            const result = decide ? boundaryCut(event, ctx, reason) : undefined;
-            // Pi announces only its own compactions (session_compact); a cut saved here gets no event, so it starts the indexing itself.
-            if (result?.entries.some(entry => entry.type === "compaction")) setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
-            return result;
-        }
+        if (!current.pending) return decide ? boundaryCut(event, ctx, reason) : undefined;
         const entry = run!.cut.take()!;
         const preview = current.session, context: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
         const more = decide && !event.entries.length
             ? boundaryCut({ ...event, context: { ...event.context, contextMessages: preview.buildSessionProjection().messages } }, context, reason) : undefined;
         const { tokensBefore: _, ...cut } = entry;
         const saved = { ...cut, firstKeptEntryId: current.keptFromId! };
-        // As for a cut Pi makes (session_compact): the history the cut leaves behind is indexed, once Pi has committed the entries.
-        setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
         return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
     };
     const retryLength = (event: TurnEndEvent, ctx: ExtensionContext) => {
@@ -1040,8 +954,6 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 stoppedOutputTokens: event.message.role === "assistant" ? event.message.usage?.output ?? 0 : 0, cut: true,
                 estimatedTokens: corrected(tokens, view), piEstimateTokens: check.estimate, piCap: check.cap, room, hardLine, buildId: BUILD_ID } }];
         markBoundary(drafts);
-        // As at a boundary: Pi announces only its own compactions, so the cut saved for the retry starts the indexing itself.
-        setImmediate(() => { semantic.indexAtCut(semanticProvider(ctx)); });
         return { entries: drafts, continue: true };
     };
     pi.on("turn_end", (event, ctx) => {
@@ -1104,7 +1016,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 const kept = plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages;
                 assertNativeToolRounds(kept);
-                return { draft: true, after: measure(kept), mode: draft.mode, compaction: draft.compaction, reserve, messages: kept };
+                return { draft: true, after: measure(kept), compaction: draft.compaction, reserve, messages: kept };
             },
         });
         const project = (candidate: Decision<CutPlan>) => candidate.kind === "cut"
@@ -1228,7 +1140,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 
 		} catch (error) { fail(error, ctx); }
 	});
-    return {close:async()=>{semanticRequest++;recorder.stop("caller-close");await semantic.close();await Promise.allSettled([...semanticPending]);}, semanticRecall:semantic, setSemanticEnabled, semanticStatus, state: stateFor, inspectState: (ctx: ExtensionContext) => ({ run: run as Readonly<Run> | undefined, phase: run?.phase, calibrationIdentity: calibration.identity, pendingCut: view(ctx).pending })};
+    return {close:async()=>{recorder.stop("caller-close");}, state: stateFor, inspectState: (ctx: ExtensionContext) => ({ run: run as Readonly<Run> | undefined, phase: run?.phase, calibrationIdentity: calibration.identity, pendingCut: view(ctx).pending })};
 }
 
 function checkedInput(raw: unknown) { if (!Check(RecallInput, raw)) throw new Error("Invalid recall input"); return structuredClone(raw); }

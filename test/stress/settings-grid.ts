@@ -22,7 +22,7 @@
  * STRESS_PLAIN_PI=1 measures the thinking, setup 40000/window 65536 and wrong-window cells with pi-tuck not installed; STRESS_ONLY selects one.
  * Native summary calls are reported separately from workload requests.
  *
- * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures under os.tmpdir(),
+ * STRESS_CELLS changes the size of the sampled grid, STRESS_SEED moves it, STRESS_REPORT writes the failures to STRESS_FAILURES_PATH or under os.tmpdir(),
  * STRESS_TRACE="a piece of a cell name" prints what happened to each of that cell's prompts, and STRESS_STRICT=1 turns the table into a failing
  * run. Without STRESS_STRICT the run reports: a finding is a finding whether or not it is fixed yet, and the grid keeps running after the first.
  * STRESS_SETUP="a piece of a cell name" runs only the cells that carry a setup size — the sampled ones and the named grid — which is the part that
@@ -49,7 +49,7 @@ const RUN = /^(1|true|yes)$/i.test(process.env.STRESS ?? '');
 const CELLS = Math.max(1, Number(process.env.STRESS_CELLS) || 200);
 const SEED = (Number(process.env.STRESS_SEED) || 0x5eed) >>> 0;
 const REPORT = process.env.STRESS_REPORT;
-const REPORT_PATH = REPORT ? join(mkdtempSync(join(tmpdir(), 'pi-tuck-stress-')), 'failures.json') : undefined;
+const REPORT_PATH = REPORT ? process.env.STRESS_FAILURES_PATH || join(mkdtempSync(join(tmpdir(), 'pi-tuck-stress-')), 'failures.json') : undefined;
 /** Make the table a gate. Off by default, so a known finding does not turn every run red before it is fixed. */
 const STRICT = /^(1|true|yes)$/i.test(process.env.STRESS_STRICT ?? '');
 /** Ten sampled cells, evenly spaced, are run twice and compared as the named ones are; a seeded grid must give the same answer on the same seed. */
@@ -323,7 +323,6 @@ export interface GridHooks {
  paused?: (prompt: number) => boolean;
 }
 export const gridFailures = () => failures;
-export const gridRows = () => cellRows;
 
 /** The exact same workload and transport settings for guarded runs and plain-Pi measurements. */
 export function optionsOf(cell: Cell, toolCalls: NonNullable<Options['toolCalls']>): Options {
@@ -1304,7 +1303,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   });
  };
  const freshAssistant = (window: number, ratio: number, floor: number, reserve = SETUP_RESERVE): Cell => {
-  const { estimated, actual } = freshBand(window, ratio, floor);
+  const { estimated } = freshBand(window, ratio, floor);
   const size = Math.max(200, Math.round(estimated * 1.05));
   return base(`setup ${SETUP_SIZE} with a fresh assistant body of ${size} above the estimated room at window ${window} (factor ${ratio})`, {
    window, reserve, maxTokens: SETUP_MAX, keepRecent: SETUP_KEEP, setup: SETUP_SIZE, system: SETUP_SIZE - 500 - SETUP_SCHEMA, host: 500,
@@ -1327,7 +1326,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   providerCell('Anthropic rejects the prompt', { rejectWith: 'prompt is too long: 21000 tokens > 20000 maximum' }),
   providerCell('OpenAI rejects the prompt', { rejectWith: 'Your input exceeds the context window of this model. Please adjust your input.' }),
   providerCell('Google rejects the prompt', { rejectWith: 'The input token count (21000) exceeds the maximum number of tokens allowed (20000).' }),
-  providerCell('llama.cpp rejects the prompt', { rejectWith: 'the request exceeds the available context size, try increasing it' }),
+  providerCell('local provider rejects the prompt', { rejectWith: 'the request exceeds the available context size, try increasing it' }),
   // `providerRejection` on the two cells below: pi-ai does not class either wording as a context overflow, so Pi ends the turn on the provider's
   // error and never asks pi-tuck to reduce the request. A refusal or a notice finding would hold pi-tuck to a room the provider never showed it,
   // so the cell states the `provider` rules instead — see the Cell field. `persist` gives those rules a session file to reopen.

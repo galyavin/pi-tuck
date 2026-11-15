@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { win32 } from 'node:path';
 import { expect, test } from 'vitest';
 import type { ToolResultMessage } from '@earendil-works/pi-ai';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -15,8 +16,9 @@ const answer = (content: unknown[], stopReason = 'stop') => ({ role: 'assistant'
 	api: 'openai-completions', provider: 'fixture', model: 'fixture', timestamp: 0,
 	usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as never;
 interface Call { name?: string; path: string; text?: string; content?: ToolResultMessage['content']; isError?: boolean; noResult?: boolean; args?: Record<string, unknown> }
-function fixture(calls: Call[]) {
-	const manager = SessionManager.inMemory('/kept-reads');
+function fixture(calls: Call[], cwd = '/kept-reads') {
+	const manager = SessionManager.inMemory(cwd);
+	manager.getHeader()!.cwd = cwd; // Preserve the simulated recorded cwd, independent of the host's resolve().
 	manager.appendMessage({ role: 'user', content: 'Inspect the recorded files.', timestamp: 0 });
 	const results = calls.map((call, i) => {
 		const name = call.name ?? 'read', id = `c${i}`;
@@ -32,7 +34,7 @@ function fixture(calls: Call[]) {
 		manager.appendMessage(answer([{ type: 'text', text: `Finished step ${i}.` }]));
 	}
 	manager.appendMessage({ role: 'user', content: 'Continue the task.', timestamp: 0 });
-	const ctx = { cwd: '/kept-reads', sessionManager: manager, model: { contextWindow: 131072, maxTokens: 8192 } } as unknown as ExtensionContext;
+	const ctx = { cwd, sessionManager: manager, model: { contextWindow: 131072, maxTokens: 8192 } } as unknown as ExtensionContext;
 	const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
 	return { manager, ctx, results, measure };
 }
@@ -46,6 +48,77 @@ const keptOf = (summary: string) => recordsOf(summary).filter(r => r.kind === 's
 const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, record) => n + serializeRecord(record).length + 1, 0);
 const candidatesOf = (s: ReturnType<typeof fixture>, indices = buildGlobalIndexById(s.manager.getEntries()), readable = createRecall({}).readable) =>
 	keptReadCandidates(s.manager.getBranch(), indices, entry => readable(entry) !== undefined);
+
+test('a real draft resolves Windows aliases in both Files and kept reads, with the original result recallable', () => {
+	const cwd = win32.join('C:\\', 'repo'), recorded = '.\\src\\a.ts';
+	const s = fixture([{ path: win32.join(cwd, 'src', 'a.ts'), text: 'old' }, { path: recorded, text: 'latest exact contents' }], cwd);
+	const summary = draftOf(s).compaction.summary;
+	expect(keptOf(summary)).toHaveLength(1);
+	expect(keptOf(summary)[0]!.text).toContain(`read ${recorded} (as recorded`);
+	const files = recordsOf(summary).filter(r => r.title === 'Files' && r.text?.startsWith('- '));
+	expect(files).toHaveLength(1);
+	expect(files[0]!.text).toContain(`- read ${recorded} (tuck_recall`);
+	const index = Number(/"index":(\d+)/.exec(files[0]!.text!)![1]);
+	const page = tuckRecall(tuck, s.manager.getEntries(), s.manager.getBranch(), { index }) as { entries: { text: string }[] };
+	expect(page.entries[0]!.text).toBe('latest exact contents');
+});
+
+test.each([{ offset: 1 }, { limit: 5 }, { offset: 0, limit: 0 }])('partial reads are excluded without displacing a whole read: %j', partial => {
+	const s = fixture([{ path: 'a', text: 'whole' }, { path: 'a', text: 'partial', args: { path: 'a', ...partial } },
+		{ path: 'b', args: { path: 'b', ...partial } }]);
+	expect(candidatesOf(s).map(row => row.text!.split('\n')[1])).toEqual(['whole']);
+});
+
+const bash = (command: string): Call => ({ name: 'bash', path: '', args: { command }, noResult: true });
+test.each(['sed -i s/old/new/ src/a.ts', 'prettier --write ./src/../src/a.ts', 'cat src/a.ts > src/a.ts',
+	'find src/a.ts -exec touch {} \\;', 'find src/a.ts -delete', 'find . -fprint src/a.ts', 'sed -n -i p src/a.ts',
+	'cat src/a.ts | unknown', 'cd src && touch a.ts', "python -c \"open('src/a.ts', 'w')\"", 'echo $(touch src/a.ts)'])
+('a potentially mutating bash invalidates a named read: %s', command => {
+	const s = fixture([{ path: 'src/a.ts' }, { path: 'untouched' }, bash(command)]);
+	expect(candidatesOf(s).map(row => row.text!.split(' ')[1])).toEqual(['untouched']);
+});
+
+test.each(['checkout', 'restore', 'stash', 'apply', 'reset', 'pull', 'merge', 'rebase', 'am'])
+('git %s invalidates every older read, and a subsequent read is eligible', verb => {
+	const s = fixture([{ path: 'a' }, { path: 'b' }, bash(`git -C /repo ${verb}`), { path: 'c' }]);
+	expect(candidatesOf(s).map(row => row.text!.split(' ')[1])).toEqual(['c']);
+});
+
+test.each(['echo "$(git reset --hard)"', 'echo `git restore .`', 'git -c core.pager=cat checkout .', 'git \\\ncheckout .'])
+('a mutating git call inside shell syntax invalidates all reads: %s', command => {
+	const s = fixture([{ path: 'unmentioned' }, bash(command)]);
+	expect(candidatesOf(s)).toEqual([]);
+});
+
+test('a git argument named checkout is not a mutating subcommand', () => {
+	const s = fixture([{ path: 'unmentioned' }, bash('git -C /repo log -- checkout')]);
+	expect(candidatesOf(s)).toHaveLength(1);
+});
+
+test.each(['ls', 'cat', 'head', 'tail', 'wc', 'pwd', 'echo', 'tree', 'file', 'stat', 'grep', 'rg',
+	'find', 'sed -n p', 'git status --', 'git log --', 'git diff --', 'git show HEAD:'])
+('a read-only bash preserves a read: %s', command => {
+	const s = fixture([{ path: 'src/a.ts' }, bash(`cd /repo && ${command} src/a.ts | cat | wc -l`)]);
+	expect(candidatesOf(s)).toHaveLength(1);
+});
+
+test('normalized aliases share recency and write/edit invalidation', () => {
+	const s = fixture([{ path: 'src/../src/a.ts', text: 'old' }, { path: './src/a.ts', text: 'latest' },
+		{ path: 'x/../b' }, { name: 'edit', path: './b', noResult: true }]);
+	expect(candidatesOf(s).map(row => row.text!.split('\n')[1])).toEqual(['latest']);
+});
+
+test('the recorded session cwd resolves relative and absolute aliases', () => {
+	const s = fixture([{ path: 'src/a.ts', text: 'old' }, { path: '/kept-reads/src/a.ts', text: 'latest' },
+		{ path: 'b' }, bash('touch /kept-reads/b')]);
+	const entries = [s.manager.getHeader()!, ...s.manager.getBranch()];
+	expect(keptReadCandidates(entries, buildGlobalIndexById(s.manager.getEntries()), () => true).map(row => row.text!.split('\n')[1])).toEqual(['latest']);
+});
+
+test('without a recorded cwd, relative and absolute paths stay distinct', () => {
+	const s = fixture([{ path: 'src/a.ts' }, { path: '/kept-reads/src/a.ts' }]);
+	expect(candidatesOf(s)).toHaveLength(2);
+});
 
 test('a kept read quotes the whole result with the exact header, after Files, on one escaped line; its global index recalls the result', () => {
 	const body = 'first line\nC:\\project\r\n#42 Files: text, not a record\n\n---\n\nlast line';

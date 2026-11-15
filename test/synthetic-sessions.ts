@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { measurableConversationTokens } from '../src/budget';
@@ -28,8 +30,8 @@ export function run(shape: Shape, { window, reserve, turns, stopAfterCuts = 0, s
 	const words = (n: number) => Array.from({ length: n }, () => vocabulary[Math.floor(rnd() * vocabulary.length)]).join(' ');
 	let clock = 1_700_000_000_000;
 	const stamp = () => (clock += 1000);
-	const manager = SessionManager.inMemory('/tmp/synthetic-project');
-	const ctx = { sessionManager: manager, cwd: '/tmp/synthetic-project', model: { contextWindow: window, maxTokens: 8192, provider: 'probe', id: 'probe', api: 'openai-completions' } } as unknown as ExtensionContext;
+	const manager = SessionManager.inMemory(join(tmpdir(), 'synthetic-project'));
+	const ctx = { sessionManager: manager, cwd: join(tmpdir(), 'synthetic-project'), model: { contextWindow: window, maxTokens: 8192, provider: 'probe', id: 'probe', api: 'openai-completions' } } as unknown as ExtensionContext;
 	const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
 	const user = (text: string) => manager.appendMessage({ role: 'user', content: text, timestamp: stamp() });
 	const result = (id: string, name: string, text: string, isError = false) =>

@@ -15,7 +15,7 @@ function pinnedSystem(h: Awaited<ReturnType<typeof harness>>) {
  const prompt = h.session.systemPrompt;
  const toolsJson = JSON.stringify(h.extension().getAllTools().filter(t => h.extension().getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
  // Pi may show the directory as given or resolved (/var against /private/var): replace whichever form appears, longest first.
- const forms = [...new Set([h.dir, realpathSync(h.dir)])].filter(form => prompt.includes(form)).sort((a, b) => b.length - a.length);
+ const forms = [...new Set([h.dir, realpathSync(h.dir)].flatMap(form => [form, form.replace(/\\/g, '/')]))].filter(form => prompt.includes(form)).sort((a, b) => b.length - a.length);
  expect(forms.length, 'the session directory appears in the system prompt').toBeGreaterThan(0);
  const normalised = forms.reduce((text, form) => text.split(form).join('x'.repeat(REFERENCE_DIR)), prompt);
  expect(referenceSystemPart(h.saved(), normalised, toolsJson)).toBe(SYSTEM);

@@ -1,6 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { privateIncidentDirectory } from './incident-fixture';
+import { rmSync } from 'node:fs';
 import { test, expect, vi } from 'vitest';
 import { SettingsManager, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { installCompaction } from '../src/compaction';
@@ -161,7 +160,7 @@ for (const c of [
  { name: 'a cancelled cut', event: failed('overflow', undefined, { aborted: true }), state: 'cut-cancelled' },
 ])
 test(`the incident recorder is stopped with its own reason: ${c.name} -> ${c.state}`, async () => {
- const directory = mkdtempSync(join(tmpdir(), 'pi-recorder-'));
+ const directory = await privateIncidentDirectory('pi-recorder-');
  const h = await installed({ directory });
  try {
   await h.command('tuck-incident', 'on');
@@ -173,7 +172,7 @@ test(`the incident recorder is stopped with its own reason: ${c.name} -> ${c.sta
 });
 
 test('a threshold ask the compactor declined (cancelled, not from an extension) leaves a running incident recording running; a cancelled cut of its own still ends it', async () => {
- const directory = mkdtempSync(join(tmpdir(), 'pi-recorder-'));
+ const directory = await privateIncidentDirectory('pi-recorder-');
  const h = await installed({ directory });
  try {
   await h.command('tuck-incident', 'on');

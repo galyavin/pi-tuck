@@ -3,8 +3,6 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
-const SHIPPED = ['index.ts', 'scripts/eg2-runtime.py', 'scripts/provision-eg2.py', 'scripts/semantic-worker.py'];
-
 export function sourceId(root) {
 	const hash = createHash('sha256');
 	const add = path => { hash.update(relative(root, path).split(sep).join('/')); hash.update(readFileSync(path)); };
@@ -16,6 +14,6 @@ export function sourceId(root) {
 		}
 	};
 	walk(resolve(root, 'src'));
-	for (const file of SHIPPED) add(resolve(root, file));
+	add(resolve(root, 'index.ts'));
 	return hash.digest('hex');
 }

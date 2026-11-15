@@ -1,6 +1,6 @@
 import type { ExtensionContext, SessionEntry } from '@earendil-works/pi-coding-agent';
 import { buildGlobalIndexById } from './tuck/core/global-indices';
-import { parseRecords, serializeRecord, splitSummary, transcriptHeader } from './tuck/core/transcript';
+import { CLOSING_SEPARATOR, parseRecords, serializeRecord, splitSummary, transcriptHeader } from './tuck/core/transcript';
 import { textOf } from "./tuck/core/content";
 import { isDiscardedResponse } from "./protocol";
 import { createRecall, type RecallPolicy } from './recall';
@@ -15,7 +15,7 @@ export function omittedSourceIndices(entries: readonly SessionEntry[], branch: r
  const indices = buildGlobalIndexById(entries);
  return new Set([...edits].flatMap(id => indices.has(id) ? [indices.get(id)!] : []));
 }
-/** Preserve surviving record bytes/order, and the summary's format (a v1 summary stays v1). No text matching or semantic inference. */
+/** Preserve surviving record bytes/order, and the summary's format (a v1 summary stays v1). No text matching or inference about meaning. */
 export function filterOmittedSummary(summary: string, omitted: ReadonlySet<number>, sources?: readonly SessionEntry[], rangeOmitted = omitted): string {
  if (!omitted.size) return summary;
  const split = splitSummary(summary);
@@ -76,7 +76,7 @@ export function filterCustomQuotes(summary: string, entries: readonly SessionEnt
  if (!split) throw new Error('Cannot resolve custom sources in an unsupported compaction summary');
  const { body, closing, version } = split;
  const records = parseRecords(body, version);
- if (!records.some(record => record.role === "custom")) return summary;
+ if (!records.some(record => record.role === "custom")) return summary.slice(0, summary.indexOf(CLOSING_SEPARATOR)) + closing;
  const omitted = new Set(branch.flatMap(entry => entry.type === 'context_edit' && entry.replacement === null ? [entry.targetId] : []));
  const eligible = createRecall(policy).isHistorySource, indices = buildGlobalIndexById(entries);
  const globalCounts = new Map<string, number>(), branchSources = new Map<string, SessionEntry[]>();

@@ -1,12 +1,11 @@
 import { SessionManager, type ExtensionContext, type SessionEntry, type SessionBoundaryDraft } from '@earendil-works/pi-coding-agent';
 import { hasTuckCut } from './history-tools.js';
-import { viewStart } from './semantic-recall.js';
 import { textOf } from './tuck/core/content.js';
 import type { Clip } from './clip.js';
 
 export type CutEntry = { type: 'compaction'; summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown };
 type Context = Pick<ExtensionContext, 'cwd' | 'sessionManager'>;
-export interface CutView { session: ExtensionContext['sessionManager']; keptFromId: string | undefined; viewStart: number; hasTuckCut: boolean; pending: boolean }
+export interface CutView { session: ExtensionContext['sessionManager']; keptFromId: string | undefined; hasTuckCut: boolean; pending: boolean }
 
 /** The only owner of a cut that requests carry before Pi saves it. */
 export class PendingCut {
@@ -18,7 +17,7 @@ export class PendingCut {
     take() { const cut = this.cut; this.clear(); return cut; }
     view(ctx: Context, entries: readonly SessionBoundaryDraft[] = []): CutView {
         const live = ctx.sessionManager, leaf = live.getLeafId?.(), held = this.preview;
-        // Native entries are append-only; a leaf move invalidates both the saved and pending views, as in the eligibility cache.
+        // Native entries are append-only; a leaf move invalidates both the saved and pending views.
         if (!entries.length && leaf !== undefined && held && held.manager === live && held.cwd === ctx.cwd && held.leaf === leaf) return held.view;
         const branch = live.getBranch(), cut = this.cut;
         const remember = (view: CutView) => {
@@ -28,7 +27,7 @@ export class PendingCut {
         if (!cut && !entries.length) {
             const last = branch.findLast(entry => entry.type === 'compaction');
             return remember({ session: live, keptFromId: last?.type === 'compaction' ? last.firstKeptEntryId : undefined,
-                viewStart: viewStart(branch), hasTuckCut: hasTuckCut(branch), pending: false });
+                hasTuckCut: hasTuckCut(branch), pending: false });
         }
         // A compact-all plan predates the prompt. Keep from the first appended entry, skipping our capacity receipts.
         const keptFromId = cut && (cut.firstKeptEntryId || branch.slice(this.branchLength)
@@ -46,7 +45,7 @@ export class PendingCut {
         }
         const previewBranch = session.getBranch(), last = previewBranch.findLast(entry => entry.type === 'compaction');
         return remember({ session, keptFromId: last?.type === 'compaction' ? last.firstKeptEntryId : undefined,
-            viewStart: viewStart(previewBranch), hasTuckCut: hasTuckCut(previewBranch), pending: Boolean(cut) });
+            hasTuckCut: hasTuckCut(previewBranch), pending: Boolean(cut) });
     }
 }
 
@@ -124,4 +123,3 @@ export class Run {
         this.thinkingRetryPending = false; this.refusalReceipted = false; this.expiredPlan = false;
     }
 }
-export const createRun = (phase: ConstructorParameters<typeof Run>[0]): Run => new Run(phase);

@@ -12,6 +12,7 @@ import { bandOf } from '../src/budget';
 import { serializeTranscript } from '../src/tuck/core/transcript';
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { providerRequest } from './request-options';
+import { requestBytes } from './request-bytes';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
 
 // Window 272,000 and response reserve max(32,768, model.maxTokens 128,000) leave an input room of 144,000 estimated tokens.
@@ -135,7 +136,7 @@ export interface Options {
  /** With `summary`: the summary is in another format (a Pi default summary), which this compactor cannot filter. */
  foreign?: boolean;
  /** Called at every tool boundary before the compactor decides (the event and context are the compactor's own). */
- onBoundary?: (event: Parameters<Parameters<ExtensionAPI['on']>[1]> extends never ? never : any, ctx: ExtensionContext) => void;
+ onBoundary?: (event: any, ctx: ExtensionContext) => void;
  /** Called with every cut Pi asks for, before the compactor answers (the event and context are the compactor's own). */
  onBeforeCompact?: (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => void;
  /** Called at every idle prompt before the compactor decides its cut (the context is the compactor's own). */
@@ -207,7 +208,7 @@ export interface Options {
  /** The usage request N reports, overriding the density and the other usage options: a count that jumps for one reply, no input at all beside a
   * large cache read, or cached tokens counted twice. */
  usageAt?: (request: number, measured: number) => Partial<Usage>;
- /** Every tool a live session carries is active: Pi's read, bash, edit and write, and pi-tuck's own two, beside the fixture's `effect`. */
+ /** Every tool a live session carries is active: Pi's read, bash, edit and write, and pi-tuck's recall tool, beside the fixture's `effect`. */
  liveTools?: boolean;
 }
 
@@ -386,7 +387,7 @@ export async function harness(options: Options) {
   }] });
   let loader = makeLoader();
   await loader.reload(); expect(loader.getExtensions().errors).toEqual([]);
-  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.parallelReads ? ['read'] : options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall', 'tuck_search'] : ['effect'], customTools: [...(options.parallelReads ? [{
+  const newSession = async (m: SessionManager, selectedModel = model) => (await createAgentSession({ cwd: dir, modelRuntime: runtime, model: selectedModel, thinkingLevel: 'low', sessionManager: m, settingsManager: settings, resourceLoader: loader, tools: options.parallelReads ? ['read'] : options.ballast ? ['effect', 'ballast'] : options.liveTools ? ['effect', 'read', 'bash', 'edit', 'write', 'tuck_recall'] : ['effect'], customTools: [...(options.parallelReads ? [{
    name: 'read', label: 'Read', description: 'Scripted parallel read', parameters: Type.Object({ index: Type.Number() }),
    execute: async (_id: string, args: { index: number }) => {
     const body = fit(options.parallelReads![args.index]!);
@@ -512,7 +513,7 @@ export async function harness(options: Options) {
    // No provider request went out when the already-aborted signal short-circuited it. Keep request-indexed answers aligned.
    if (streamOptions?.signal?.aborted) { const m = answer([], 'aborted'); const s = createAssistantMessageEventStream(); s.push({ type: 'error', reason: 'aborted', error: m }); s.end(m); return s; }
    // Use the same normalization for every request, including Pi's native summary calls.
-   const fingerprint = options.fingerprintWire ? createHash('sha256').update(JSON.stringify(_ctx, (key, value) => key === 'timestamp' || key === 'durationMs' ? undefined : value).replaceAll(dir, '<session>')).digest('hex') : undefined;
+   const fingerprint = options.fingerprintWire ? createHash('sha256').update(requestBytes(_ctx, dir)).digest('hex') : undefined;
    if (fingerprint) providerFingerprints.push({ summary: Boolean(nativeCompaction && nativeSummarizing), wire: fingerprint });
    if (nativeCompaction && nativeSummarizing) {
     // Pi chooses the boundary, kept tail and summary prompt. The same scripted model's normal

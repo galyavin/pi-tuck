@@ -3,6 +3,51 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-15
+
+### Added
+
+- **Windows.** pi-tuck now installs and runs on Windows. Paths are compared the same way however Windows spells them (drive letter case,
+  backslashes, relative paths), and Windows shell commands that change files (`Set-Content`, `Remove-Item`, `del`, `move` and others)
+  count as changes. `/tuck-incident` creates its folder and files with private Windows permissions and refuses folders other users can read.
+  Tested on Windows 10 with Node 24 and Pi 1.5.2.
+
+### Fixed
+
+- **Kept reads no longer quote a stale or partial file as if it were whole and current.** A cut's summary now keeps only whole reads;
+  a read is dropped from it when a later shell command that is not read-only names the file, or when a git command such as `checkout`,
+  `stash`, `restore` or `reset` ran, and paths are compared after normalising their spelling.
+
+### Removed
+
+- **Semantic search and `tuck_search`.** Semantic-unique hits were 18 of 1,935 events (0.9%), against a 15% bar. The local model,
+  setup and downloads, worker, indexes and background indexing are gone. `tuck_recall` still provides exact reads and keyword search.
+
+### Changed
+
+- **Old sessions still load, cut and recall.** Historical `tuck_search` and `vcc_search` calls remain readable; old private entries are
+  ignored. A leftover `semanticRecall` setting is ignored silently, and `/tuck` no longer reports semantic state.
+- **Old search files are cleaned up once per machine.** Under `~/.pi/agent/pi-tuck/` (from the home directory, independent of Pi's agent-folder
+  setting), cleanup removes the real directories `python`, `index`,
+  `downloads`, `staging-<digits>` (exactly `staging-` followed by one or more digits), and `.pi-semantic-<six alphanumeric characters>`.
+  It removes `runtime` only when a child has a `pins.json` with pi-tuck's old pin fields, then removes the root only if empty.
+  Symlinks at the root or candidate paths and foreign files in the root are left in place; links inside removed directories are unlinked without
+  following their targets. On macOS and Linux, a directory is left alone if a live process has it open or the bounded `lsof` check fails;
+  Windows leaves all candidates alone. A notice names only removed directories, with the path and best-effort space freed, using stderr
+  without a UI. An empty `~/.pi/agent/pi-tuck-semantic-removed` marker records a completed attempt, including partial cleanup or nothing
+  to clean; an attempt that cannot start is retried. Once marked, a folder recreated later by another program is left alone.
+  `/tuck-semantic`, its stub text and the old notice are gone.
+
+### Release gates
+
+- **Live gate on NIM Nemotron (10 paired tasks at room 16,384, against 1.1.2):** solved wins minus losses +1 (bar at least -1), turn-cap
+  stops 3 against 4, doubt moments 6 against 9, 0 lost tasks. Kept-read records quoting a partial or stale read: 0 against 141. The gate
+  found one false refusal after a steering message; it was fixed (1.1.3) and pinned by tests built from that run.
+- **Replay against 1.1.3:** <filled at release>.
+- **Strict stress:** 322 cells, the resumed-session and stand-down suites and an 85 MB recall test, 0 findings. Lifecycle with 40 seeds.
+  Tests and CI on macOS and Ubuntu; the full suite also passed on Windows. The packed tarball loaded in the real installed Pi on macOS and
+  Windows.
+
 ## [1.1.3] - 2026-11-15
 
 ### Fixed

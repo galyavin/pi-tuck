@@ -1,8 +1,7 @@
 import { expect, test, vi } from 'vitest';
 import { convertToLlm, SessionManager, SettingsManager, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { installCompaction } from '../src/compaction';
-import { PendingCut, StartingPrompt, createRun } from '../src/run';
-import { createSemanticRecall } from '../src/semantic-recall';
+import { PendingCut, StartingPrompt, Run } from '../src/run';
 import { projectedMessages } from '../src/omissions';
 import { carriesPrompt } from '../src/request-capacity';
 import { scriptedModelRuntime } from './model-fixture';
@@ -33,12 +32,8 @@ async function fixture(compactAll = false) {
   const ctx = { cwd: '/virtual/pi-tuck-test/pending-view', sessionManager: manager, model, signal: new AbortController().signal,
     isIdle: () => true, getSystemPrompt: () => 'Follow the current task.', abort: () => {}, ui: { notify: (message: string) => { notices.push(message); } },
   } as unknown as ExtensionContext;
-  const semantic = createSemanticRecall();
-  const search = vi.spyOn(semantic, 'search').mockImplementation(async (_query, provider) => {
-    const snapshot = provider(); return { status: 'disabled', notice: '', coverage: { ...semantic.status(), snapshotId: snapshot.id, window: null }, groups: [] };
-  });
   const handle = await installCompaction(pi, { settings: SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: 4096, keepRecentTokens: 0 } }),
-    requestReserve: () => ({ response: 4096, responseExact: true }), semanticRecall: semantic, fail: error => faults.push(error) });
+    requestReserve: () => ({ response: 4096, responseExact: true }), fail: error => faults.push(error) });
   const emit = async (name: string, event: any = {}) => {
     let result: any;
     for (const handler of handlers.get(name) ?? []) { const value = await handler(event, ctx); if (value !== undefined) result = value; }
@@ -49,7 +44,7 @@ async function fixture(compactAll = false) {
   await commands.get('tuck').handler('', ctx);
   expect(notices.at(-1)).toContain('A cut is pending');
   expect(faults).toEqual([]);
-  return { manager, ctx, emit, pi, tools, commands, notices, faults, prompt, handle, search };
+  return { manager, ctx, emit, pi, tools, commands, notices, faults, prompt, handle };
 }
 const plain = (messages: any[]) => convertToLlm(messages).map(({ timestamp: _timestamp, ...message }) => message);
 
@@ -91,26 +86,24 @@ test.each([false, true])('an uncut length retry checks whether its pending cut w
   } finally { await h.handle.close(); }
 });
 
-test('pending request, semantic snapshot, executable tools, status and boundary save share one resolved view', async () => {
+test('pending request, executable recall, status and boundary save share one resolved view', async () => {
   const h = await fixture();
   try {
     expect(h.manager.getBranch().some(entry => entry.type === 'compaction')).toBe(false);
-    expect(h.pi.getActiveTools()).toEqual(['tuck_recall', 'tuck_search']);
+    expect(h.pi.getActiveTools()).toEqual(['tuck_recall']);
     await h.emit('before_agent_start', { messageType: 'user', prompt: h.prompt, systemPrompt: h.ctx.getSystemPrompt(), systemPromptOptions: { selectedTools: [] } });
     await h.emit('agent_start');
     const promptId = h.manager.appendMessage({ role: 'user', content: h.prompt, timestamp: 123 });
     const saved = h.manager.buildSessionProjection().messages;
     const request = await h.emit('context', { messages: saved });
     expect(carriesPrompt(request.messages, h.prompt)).toBe(true);
-    await h.tools.get('tuck_search').execute('search', { query: 'context' }, undefined, undefined, h.ctx);
-    const provider = h.search.mock.calls.at(-1)![1], snapshot = provider();
+    const recalled = await h.tools.get('tuck_recall').execute('recall', { query: 'context' }, undefined, undefined, h.ctx);
+    expect(JSON.parse(recalled.content[0].text).hits.length).toBeGreaterThan(0);
     const summary = request.messages.find((message: any) => message.role === 'compactionSummary');
     expect(summary).toBeDefined();
     const oldBandCalls = bands.length;
     const boundary = await h.emit('agent_before_settle', { entries: [], outcome: 'completed', context: { contextMessages: saved, pendingMessages: [], canContinue: false } });
     const cut = boundary.entries[0];
-    const expectedStart = h.manager.getBranch().findIndex(entry => entry.id === cut.firstKeptEntryId);
-    expect(snapshot.viewStart).toBe(expectedStart < 0 ? h.manager.getBranch().length : expectedStart);
     expect(bands.slice(oldBandCalls)).toContainEqual(expect.objectContaining({ tokensAfter: cut.details.tokensAfter }));
     expect(cut.summary).toBe(summary.summary);
     h.manager.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);
@@ -144,7 +137,7 @@ test('compact-all resolves at the plan boundary, before later steering and after
   manager.appendMessage({ role: 'user', content: 'old', timestamp: 0 });
   const length = manager.getBranch().length;
   pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: '', tokensBefore: 10, details: { compactor: 'pi-tuck' } }, length);
-  expect(pending.view(ctx)).toMatchObject({ keptFromId: '', viewStart: length, pending: true, hasTuckCut: true });
+  expect(pending.view(ctx)).toMatchObject({ keptFromId: '', pending: true, hasTuckCut: true });
   manager.appendCustomEntry('pi-tuck-capacity', {});
   const promptId = manager.appendMessage({ role: 'user', content: 'prompt', timestamp: 1 });
   manager.appendMessage({ role: 'user', content: 'steering', timestamp: 2 });
@@ -161,7 +154,7 @@ test('starting prompt binds once to its entry, including repeated text in steeri
   expect(prompt.id(manager.getBranch())).toBe(id);
   manager.appendMessage({ role: 'user', content: 'steer start', timestamp: 2 });
   expect(prompt.id(manager.getBranch())).toBe(id); expect(prompt.text(manager.getBranch())).toBe('start');
-  expect(createRun('decided')).toMatchObject({ phase: 'decided', pendingBoundaryReceipts: [] });
+  expect(new Run('decided')).toMatchObject({ phase: 'decided', pendingBoundaryReceipts: [] });
 });
 
 test('a custom starting prompt binds by role and entry id before later identical custom text', () => {
@@ -194,7 +187,7 @@ test('retry boundary drafts use the same view as their committed session', () =>
   manager.appendCustomMessageEntry('retry', 'continue', false);
   manager.appendCustomEntry('pi-tuck-capacity', { kind: 'retry' });
   expect(plain(preview.session.buildSessionProjection().messages)).toEqual(plain(manager.buildSessionProjection().messages));
-  expect(cut.view(ctx).viewStart).toBe(preview.viewStart);
+  expect(cut.view(ctx)).toMatchObject({ keptFromId: preview.keptFromId, hasTuckCut: preview.hasTuckCut, pending: preview.pending });
 });
 
 
@@ -262,12 +255,14 @@ test('the live view follows saved cuts and tree moves after a pending cut is con
   const manager = SessionManager.inMemory('/virtual/pi-tuck-test/live-view'), cut = new PendingCut();
   const ctx = { cwd: '/virtual/pi-tuck-test/live-view', sessionManager: manager };
   const first = manager.appendMessage({ role: 'user', content: 'first', timestamp: 0 });
-  expect(cut.view(ctx)).toMatchObject({ session: manager, hasTuckCut: false, viewStart: 0 });
+  expect(cut.view(ctx)).toMatchObject({ session: manager, keptFromId: undefined, hasTuckCut: false, pending: false });
   const kept = manager.appendMessage({ role: 'user', content: 'kept', timestamp: 1 });
   cut.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: kept, tokensBefore: 1, details: { compactor: 'pi-tuck' } }, 2);
   const pending = cut.view(ctx), entry = cut.take()!;
   manager.appendCompaction(entry.summary, entry.firstKeptEntryId, entry.tokensBefore, entry.details, true);
-  expect(cut.view(ctx)).toMatchObject({ keptFromId: kept, viewStart: pending.viewStart, hasTuckCut: true, pending: false });
+  const saved = cut.view(ctx);
+  expect(saved).toMatchObject({ session: manager, keptFromId: kept, hasTuckCut: true, pending: false });
+  expect(plain(saved.session.buildSessionProjection().messages)).toEqual(plain(pending.session.buildSessionProjection().messages));
   manager.branch(first);
-  expect(cut.view(ctx)).toMatchObject({ keptFromId: undefined, viewStart: 0, hasTuckCut: false });
+  expect(cut.view(ctx)).toMatchObject({ session: manager, keptFromId: undefined, hasTuckCut: false, pending: false });
 });

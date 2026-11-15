@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test, expect } from 'vitest';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { bandOf, decideCut, measurableConversationTokens, planningReserve, type Plan, type Target } from '../src/budget';
@@ -11,8 +13,8 @@ function drive(window: number, response: number, mandatory: number, turns: numbe
   const V = 'parser cache index token budget summary recall branch module schema router worker queue retry timeout config build test lint deploy migrate session window ledger anchor cursor shard vector'.split(' ');
   const words = (n: number) => Array.from({ length: n }, () => V[Math.floor(rnd() * V.length)]).join(' ');
   let clock = 1_700_000_000_000; const stamp = () => (clock += 1000);
-  const manager = SessionManager.inMemory('/tmp/p');
-  const ctx = { sessionManager: manager, cwd: '/tmp/p', model: { contextWindow: window, maxTokens: response, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
+  const manager = SessionManager.inMemory(join(tmpdir(), 'p'));
+  const ctx = { sessionManager: manager, cwd: join(tmpdir(), 'p'), model: { contextWindow: window, maxTokens: response, provider: 'p', id: 'p', api: 'openai-completions' } } as unknown as ExtensionContext;
   const measure = (m: never[]) => measurableConversationTokens(m, ctx);
   const room = window - response, band = bandOf(room, cutAt), fits = (t: number, l: number) => t < l;
   const cuts: { turn: number; before: number; after: number; mode?: string; target: Target }[] = []; const faults: string[] = [];
@@ -29,7 +31,7 @@ function drive(window: number, response: number, mandatory: number, turns: numbe
         const reserve = planningReserve(window, target === 'band' ? band : room, 1, mandatory);
         const d = tuckObservedDraft(tuck, { branchEntries: manager.getBranch(), tokensBefore: before }, ctx, reserve, measure as never, {}, true);
         if (!d.compaction) return { draft: false, capacityRejected: Boolean(d.capacityRejected), reason: d.unavailable! };
-        const preview = SessionManager.inMemory('/tmp/p', undefined, [manager.getHeader()!, ...manager.getBranch()]);
+        const preview = SessionManager.inMemory(join(tmpdir(), 'p'), undefined, [manager.getHeader()!, ...manager.getBranch()]);
         preview.appendCompaction(d.compaction.summary, d.compaction.firstKeptEntryId, before, d.compaction.details, true);
         return { draft: true, after: measure(preview.buildSessionProjection().messages as never[]), mode: d.mode, compaction: d.compaction };
       } });

@@ -1,7 +1,6 @@
+import { privateIncidentDirectory } from './incident-fixture';
 import { test, expect } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { BAND, HOST, ROOM, harness, scenario } from './budget-fixture';
 
 const GUARD = 'Complete Pi context and response reserve exceed the estimated request budget';
@@ -35,7 +34,7 @@ test('host input that grew after the prompt\'s cut was decided but still fits: t
 // cancelled or failed cut.
 for (const why of ['the planner declines it'] as const)
 test(`an opportunistic cut that cannot be made leaves the incident recorder recording: ${why}`, async () => {
-	const directory = mkdtempSync(join(tmpdir(), 'pi-incident-'));
+	const directory = await privateIncidentDirectory();
 	const diagnostics = { directory };
 	// Declined: an irreducible request inside the band, so nothing can bring it under the band.
 	const h = await harness({ at: 'tool', complete: BAND + 2000, host: HOST, history: 1500, fresh: 100, compaction: { diagnostics } });
@@ -76,6 +75,10 @@ test('a planner exception inside an opportunistic cut is still a fault: a latche
 		expect(r.faults.join(' '), r.probe).toContain('Missing native session header');
 		expect(r.requests, r.probe).toBe(0);
 		expect(r.cuts, r.probe).toBe(0);
+		// Every refusal says why. A refusal that is not about capacity used to end its attempt with no word (eval live32 t03-J task 24: 0.02 s, no
+		// token, no notice), which looked like a hang.
+		expect(h.notices.join(' '), r.probe).toContain('pi-tuck could not plan this request (Missing native session header');
+		expect(h.notices.join(' '), r.probe).not.toContain("lower Pi's compaction.reserveTokens");
 	} finally { await h.cleanup(); }
 });
 
@@ -95,19 +98,5 @@ test('an opportunistic cut the compactor proposed and Pi then fails to commit is
 		expect(ok.faults, ok.probe).toEqual([]);
 		expect(ok.cuts, ok.probe).toBe(1);
 		expect(ok.requests, ok.probe).toBe(1);
-	} finally { await h.cleanup(); }
-});
-
-// Every refusal says why. A refusal that is not about capacity used to end its attempt with no word (eval live32 t03-J task 24: 0.02 s, no
-// token, no notice), which looked like a hang.
-test('a refusal that is not about capacity tells the user its reason', async () => {
-	let manager: { getHeader: () => unknown } | undefined;
-	const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST, onPrompt: () => { const real = manager!.getHeader.bind(manager); let missing = true; manager!.getHeader = () => (missing ? (missing = false, null) : real()); } });
-	manager = h.manager as unknown as typeof manager;
-	try {
-		const r = await h.run();
-		expect(r.requests, r.probe).toBe(0);
-		expect(h.notices.join(' '), r.probe).toContain('pi-tuck could not plan this request (Missing native session header');
-		expect(h.notices.join(' '), r.probe).not.toContain("lower Pi's compaction.reserveTokens");
 	} finally { await h.cleanup(); }
 });

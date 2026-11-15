@@ -32,7 +32,7 @@ test('append-only comparison sees provider prompts, tools and whole messages whi
     expect(appendOnlyPair(a, changed).difference).toBeDefined();
   }
   const firstCut = structuredClone(b);
-  firstCut.tools!.push(...['tuck_recall', 'tuck_search'].map(name => ({ ...tool, name })));
+  firstCut.tools!.push(...['tuck_recall'].map(name => ({ ...tool, name })));
   expect(appendOnlyPair(a, firstCut)).toEqual({ exempt: 'historyTools' });
   firstCut.messages[0].content = 'Edited old input';
   expect(appendOnlyPair(a, firstCut).difference).toBeDefined();
@@ -89,7 +89,6 @@ function sequence(seed: number): Event[] {
     [{ kind: 'new' }, { kind: 'handled', tokens: 7000 + pick(2000) }, { kind: 'tree', target: 3 + pick(5) }, { kind: 'custom', tokens: 100 + pick(200), scenario: 'handled-tree-custom' }],
     [{ kind: 'new' }, { kind: 'prompt', tokens: 3500 + pick(2500) }, { kind: 'tools', tokens: 200 + pick(300), rounds: 4 + pick(3), resultTokens: 6500 + pick(1500) }],
     [{ kind: 'new' }, { kind: 'abort', tokens: 4000 + pick(1500) }, { kind: 'prompt', tokens: 200 }, { kind: 'compact' }, { kind: 'custom', tokens: 200, rounds: 2 }],
-    [{ kind: 'new' }, { kind: 'semantic', enabled: true }, { kind: 'semantic', enabled: false }, { kind: 'prompt', tokens: 2500 }],
     [{ kind: 'new' }, { kind: 'prompt', tokens: 500 }, { kind: 'handled', tokens: 8000 }, { kind: 'resume' }, { kind: 'custom', tokens: 200 }],
     [{ kind: 'new' }, { kind: 'prompt', tokens: 500 }, { kind: 'model', switched: true }, { kind: 'tools', tokens: 300, rounds: 2 },
       { kind: 'resume' }, { kind: 'model', switched: false }, { kind: 'prompt', tokens: 200 }],
@@ -126,8 +125,9 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
   const started = Date.now(), chosen = seeds(), failures: string[] = [], coverage = emptyCoverage(), appendOnly = emptyAppendOnlyCoverage();
   const scratch = mkdtempSync(join(tmpdir(), 'pi-tuck-lifecycle-'));
   const agentDir = mkdtempSync(join(scratch, 'lifecycle-agent-'));
-  const previousTmp = process.env.TMPDIR, previousAgent = process.env.PI_CODING_AGENT_DIR;
-  process.env.TMPDIR = scratch;
+  const tempVariables = ['TMPDIR', 'TMP', 'TEMP'] as const;
+  const previousTemp = tempVariables.map(name => process.env[name]), previousAgent = process.env.PI_CODING_AGENT_DIR;
+  for (const name of tempVariables) process.env[name] = scratch;
   process.env.PI_CODING_AGENT_DIR = agentDir; // no installed runtime, no user's settings
   try {
     for (const seed of chosen) {
@@ -158,13 +158,13 @@ test('seeded real-Pi lifecycle sequences preserve a single branch-local view', {
       process.stderr.write(`lifecycle seed=${seed} events=${events.length} coverage=${JSON.stringify(result.coverage)} appendOnly=${JSON.stringify(result.appendOnly)}\n`);
     }
   } finally {
-    if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
+    tempVariables.forEach((name, i) => { if (previousTemp[i] === undefined) delete process.env[name]; else process.env[name] = previousTemp[i]; });
     if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgent;
     rmSync(agentDir, { recursive: true, force: true }); rmSync(scratch, { recursive: true, force: true });
   }
   process.stderr.write(`lifecycle seeds=${chosen.join(',')} runtime=${((Date.now() - started) / 1000).toFixed(2)}s coverage=${JSON.stringify(coverage)} appendOnly=${JSON.stringify(appendOnly)}\n`);
   // No silent successes from a generator which never actually cuts or searches.
-  for (const key of ['requests', 'promptCuts', 'boundaryCuts', 'fresh', 'modelSearches', 'savedViews', 'quotedPrompts', 'aborts', 'handled', 'sessions', 'treeMoves', 'manual', 'semantic', 'semanticNotices', 'resumes', 'modelSwitches', 'stateChecks', 'failedRuns', 'pendingResets'] as const) {
+  for (const key of ['requests', 'promptCuts', 'boundaryCuts', 'fresh', 'modelSearches', 'savedViews', 'quotedPrompts', 'aborts', 'handled', 'sessions', 'treeMoves', 'manual', 'status', 'resumes', 'modelSwitches', 'stateChecks', 'failedRuns', 'pendingResets'] as const) {
     expect(coverage[key], `no lifecycle coverage: ${key}`).toBeGreaterThan(0);
   }
   expect(failures, failures.join('\n\n')).toEqual([]);

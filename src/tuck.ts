@@ -170,356 +170,350 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (latestPosition >= 0 && (!latestTextOnly || latestPosition > lastResponse)) floorBoundary = Math.min(floorBoundary, latestPosition);
     // One fill owns the summary and the contiguous native suffix. Protocol/current-input
     // floors are representation constraints; every other source competes by rank.
-    return rankedFill();
-
-    function rankedFill(): Draft {
-        const model = ctx.model;
-        if (!model) return { unavailable: "pi-tuck needs a model to measure the cut" };
-        const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
-        const header = ctx.sessionManager.getHeader();
-        if (!header) throw new Error("Missing native session header");
-        const before = measure(projected.messages), room = Math.max(0, model.contextWindow - reserveTokens - 1);
-        const minimumOpeningLength = 80, openingLength = Math.max(80, Math.floor(Math.sqrt(room * 4)));
-        const positions = new Map(entries.map((entry, at) => [entry.id, at]));
-        const originals = tuck.buildOwnCut(entries.filter(entry => entry.type !== "compaction"), 0);
-        if (!originals.ok) return { unavailable: "No eligible original prefix to compile" };
-        const byId = new Map(entries.map(entry => [entry.id, entry]));
-        const sourceIndices = originals.selectedIds.map(id => indices.get(id));
-        const rows = originals.selectedIds.map((id, at) => ({ id, position: positions.get(id)!, index: sourceIndices[at], message: originals.messages[at] as AgentMessage }));
-        const users = rows.filter(row => row.message.role === "user");
-        const userTexts = new Map(users.map(row => [row.index, textOf((row.message as Extract<AgentMessage, { role: "user" }>).content)]));
-        let replied = false;
-        const answered: SessionEntry[] = [];
-        for (let at = entries.length - 1; at >= 0; at--) {
-            const entry = entries[at]!;
-            if (entry.type !== "message") continue;
-            if (entry.message.role === "assistant" && !isDiscardedResponse(entry.message) && entry.message.content.length) { replied = true; continue; }
-            if (entry.message.role !== "user") continue;
-            if (replied && textOf(entry.message.content).length) answered.push(entry);
-            replied = false;
-        }
-        const anchors = [...new Map([...answered.slice(0, 8), ...(firstUserPosition >= 0 ? [entries[firstUserPosition]!] : [])].map(entry => [entry.id, entry])).values()];
-        const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
-        const detailsAt = (boundary: number) => ({ compactor: "pi-tuck", version: 2, adapter: "standalone",
-            keptUserTurns: users.reduce((n, row) => n + Number(row.position >= boundary), 0),
-            ...(boundary === preferredBoundary && budgetCut ? { budgetCut } : {}) });
-        const preview = (summary: string, boundary: number) => {
-            const manager = SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch]);
-            manager.appendCompaction(summary, entries[boundary]?.id ?? "", input.tokensBefore, detailsAt(boundary), true);
-            return manager.buildSessionProjection().messages;
-        };
-        // Price the native suffix once. The measure's additive offset and Pi's
-        // summary envelope are calibrated once, rather than replaying a session
-        // for each opening, ledger line or tail boundary considered by the fill.
-        const rawPositions = new Map(branch.map((entry, at) => [entry.id, at]));
-        const native = new Float64Array(branch.length + 1);
-        for (const entry of projected.entries) {
-            if (entry.sourceEntry.type === "compaction") continue;
-            const at = rawPositions.get(entry.sourceEntry.id);
-            if (at !== undefined) for (const message of entry.messages)
-                native[at] += measure.messageTokens ? measure.messageTokens(message) : conversationTokens([message]);
-        }
-        for (let at = branch.length - 1; at >= 0; at--) native[at] += native[at + 1]!;
-        const nativeAt = (boundary: number) => boundary === entries.length ? 0 : native[rawPositions.get(entries[boundary]!.id)!]!;
-        const tailTokens = carriedTailTokens(nativeAt(preferredBoundary));
-        // Move only the older end, to the newest whole protocol-safe entries
-        // within the shared tail size. Required current/fresh native sources
-        // stay whole even when their floor exceeds that preferred amount.
-        while (preferredBoundary < floorBoundary && nativeAt(preferredBoundary) > tailTokens) {
+    const model = ctx.model;
+    if (!model) return { unavailable: "pi-tuck needs a model to measure the cut" };
+    const indices = tuck.buildGlobalIndexById(ctx.sessionManager.getEntries());
+    const header = ctx.sessionManager.getHeader();
+    if (!header) throw new Error("Missing native session header");
+    const before = measure(projected.messages), room = Math.max(0, model.contextWindow - reserveTokens - 1);
+    const minimumOpeningLength = 80, openingLength = Math.max(80, Math.floor(Math.sqrt(room * 4)));
+    const positions = new Map(entries.map((entry, at) => [entry.id, at]));
+    const originals = tuck.buildOwnCut(entries.filter(entry => entry.type !== "compaction"), 0);
+    if (!originals.ok) return { unavailable: "No eligible original prefix to compile" };
+    const sourceIndices = originals.selectedIds.map(id => indices.get(id));
+    const rows = originals.selectedIds.map((id, at) => ({ id, position: positions.get(id)!, index: sourceIndices[at], message: originals.messages[at] as AgentMessage }));
+    const users = rows.filter(row => row.message.role === "user");
+    const userTexts = new Map(users.map(row => [row.index, textOf((row.message as Extract<AgentMessage, { role: "user" }>).content)]));
+    let replied = false;
+    const answered: SessionEntry[] = [];
+    for (let at = entries.length - 1; at >= 0; at--) {
+        const entry = entries[at]!;
+        if (entry.type !== "message") continue;
+        if (entry.message.role === "assistant" && !isDiscardedResponse(entry.message) && entry.message.content.length) { replied = true; continue; }
+        if (entry.message.role !== "user") continue;
+        if (replied && textOf(entry.message.content).length) answered.push(entry);
+        replied = false;
+    }
+    const anchors = [...new Map([...answered.slice(0, 8), ...(firstUserPosition >= 0 ? [entries[firstUserPosition]!] : [])].map(entry => [entry.id, entry])).values()];
+    const failedCalls = new Set(entries.flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError ? [entry.message.toolCallId] : []));
+    const detailsAt = (boundary: number) => ({ compactor: "pi-tuck", version: 2, adapter: "standalone",
+        keptUserTurns: users.reduce((n, row) => n + Number(row.position >= boundary), 0),
+        ...(boundary === preferredBoundary && budgetCut ? { budgetCut } : {}) });
+    const preview = (summary: string, boundary: number) => {
+        const manager = SessionManager.inMemory(ctx.cwd, undefined, [header, ...branch]);
+        manager.appendCompaction(summary, entries[boundary]?.id ?? "", input.tokensBefore, detailsAt(boundary), true);
+        return manager.buildSessionProjection().messages;
+    };
+    // Price the native suffix once. The measure's additive offset and Pi's
+    // summary envelope are calibrated once, rather than replaying a session
+    // for each opening, ledger line or tail boundary considered by the fill.
+    const rawPositions = new Map(branch.map((entry, at) => [entry.id, at]));
+    const native = new Float64Array(branch.length + 1);
+    for (const entry of projected.entries) {
+        if (entry.sourceEntry.type === "compaction") continue;
+        const at = rawPositions.get(entry.sourceEntry.id);
+        if (at !== undefined) for (const message of entry.messages)
+            native[at] += measure.messageTokens ? measure.messageTokens(message) : conversationTokens([message]);
+    }
+    for (let at = branch.length - 1; at >= 0; at--) native[at] += native[at + 1]!;
+    const nativeAt = (boundary: number) => boundary === entries.length ? 0 : native[rawPositions.get(entries[boundary]!.id)!]!;
+    const tailTokens = carriedTailTokens(nativeAt(preferredBoundary));
+    // Move only the older end, to the newest whole protocol-safe entries
+    // within the shared tail size. Required current/fresh native sources
+    // stay whole even when their floor exceeds that preferred amount.
+    while (preferredBoundary < floorBoundary && nativeAt(preferredBoundary) > tailTokens) {
+        preferredBoundary++;
+        while (preferredBoundary < floorBoundary) {
+            const entry = entries[preferredBoundary]!;
+            if ((entry.type === "message" && entry.message.role !== "toolResult") || entry.type === "custom_message" || entry.type === "branch_summary") break;
             preferredBoundary++;
-            while (preferredBoundary < floorBoundary) {
-                const entry = entries[preferredBoundary]!;
-                if ((entry.type === "message" && entry.message.role !== "toolResult") || entry.type === "custom_message" || entry.type === "branch_summary") break;
-                preferredBoundary++;
+        }
+    }
+    const envelope = convertToLlm([{ role: "compactionSummary", summary: "", tokensBefore: 0, timestamp: 0 }]);
+    const wrapperCharacters = envelope.reduce((n, message) => n + textOf(message.content).length, 0);
+    const summaryTokens = (characters: number) => Math.ceil((characters + wrapperCharacters) / 4);
+    const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, record) => n + serializeRecord(record).length + 1, 0);
+    const frameLength = (cost: number, count: number) => TRANSCRIPT_HEADER.length + DIALOGUE_SUFFIX.length + cost + (count ? 0 : 1);
+    const render = (records: TranscriptRecord[]) => (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + DIALOGUE_SUFFIX;
+    type Unit = { position: number; index: number; count: number };
+    const units: Record<"user" | "assistant" | "toolResult", Unit[]> = { user: [], assistant: [], toolResult: [] };
+    for (const row of rows) {
+        if (row.index === undefined) continue;
+        const message = row.message;
+        if (message.role === "user" && textOf(message.content).length) units.user.push({ position: row.position, index: row.index, count: 1 });
+        else if (message.role === "toolResult") units.toolResult.push({ position: row.position, index: row.index, count: 1 });
+        else if (message.role === "assistant" && !isDiscardedResponse(message)) {
+            const count = message.content.filter(part => part.type === "text" && part.text.trim()).length;
+            if (count) units.assistant.push({ position: row.position, index: row.index, count });
+        }
+    }
+    const prefixes = Object.fromEntries(Object.entries(units).map(([role, list]) => {
+        const end = new Int32Array(entries.length + 1), count = new Int32Array(list.length + 1);
+        let seen = 0;
+        for (let at = 0; at <= entries.length; at++) {
+            while (seen < list.length && list[seen]!.position < at) seen++;
+            end[at] = seen;
+        }
+        list.forEach((unit, at) => count[at + 1] = count[at]! + unit.count);
+        return [role, { end, count }];
+    })) as Record<keyof typeof units, { end: Int32Array; count: Int32Array }>;
+    const quoteCache = new Map<string, { records: TranscriptRecord[]; cost: number; whole: boolean }>();
+    const quote = (entry: SessionEntry, take: number) => {
+        const key = `${entry.id}:${take}`;
+        let cached = quoteCache.get(key);
+        if (cached) return cached;
+        const index = indices.get(entry.id);
+        const text = entry.type === "custom_message" ? textOf(entry.content) : entry.type === "message" && entry.message.role === "user" ? textOf(entry.message.content) : "";
+        const sourceTimes = index === undefined ? undefined : [{ sourceIndex: index, ...resolveSourceTime(entry) }];
+        // Custom entries have a native identity but no global message index.
+        const records: TranscriptRecord[] = index === undefined && entry.type !== "custom_message" ? [] : take === Infinity
+            ? [{ kind: "excerpt", role: entry.type === "custom_message" ? "custom" : "user", ...(index === undefined ? {} : { sourceIndex: index }), text, sourceTimes,
+                ...(entry.type === "custom_message" ? { sourceEntryId: entry.id } : {}) }]
+            : userPrefixRecords({ kind: "user", text, originalText: text, startsSource: true, sourceIndex: index }, undefined, take).map(record => ({ ...record, sourceTimes }));
+        cached = { records, cost: lineCost(records), whole: take >= text.length };
+        quoteCache.set(key, cached);
+        return cached;
+    };
+    const highAt = (boundary: number, length: number) => {
+        const kept: TranscriptRecord[] = [], selected = new Set<number>(), whole = new Set<number>();
+        let cost = 0;
+        const add = (entry: SessionEntry, take: number) => {
+            const quoted = quote(entry, take), index = indices.get(entry.id);
+            kept.push(...quoted.records); cost += quoted.cost;
+            if (index !== undefined && quoted.records.length) { selected.add(index); if (quoted.whole) whole.add(index); }
+        };
+        if (latestPosition >= 0 && latestPosition < boundary && latestTextOnly) add(latest!, Infinity);
+        if (currentPosition >= 0 && currentPosition < boundary && current?.id !== latest?.id) add(current!, Infinity);
+        for (const entry of anchors) if (entry.id !== latest?.id && entry.id !== current?.id && positions.get(entry.id)! < boundary) add(entry, length);
+        const omissions: TranscriptRecord[] = [];
+        for (const role of ["user", "assistant", "toolResult"] as const) {
+            const list = units[role], prefix = prefixes[role];
+            let first = 0, last = prefix.end[boundary]! - 1;
+            if (role === "user") {
+                while (first <= last && selected.has(list[first]!.index)) first++;
+                while (last >= first && selected.has(list[last]!.index)) last--;
+            }
+            if (last < first) continue;
+            const a = list[first]!, b = list[last]!;
+            let count = prefix.count[last + 1]! - prefix.count[first]!;
+            if (role === "user") for (const index of whole) if (index >= a.index && index <= b.index) count--;
+            if (count) omissions.push(omissionRecord(role, count, [a.index, b.index], false));
+        }
+        const rows = [...kept, ...omissions], totalCost = cost + lineCost(omissions);
+        return { kept, whole, omissions, rows, cost: totalCost, length: frameLength(totalCost, rows.length) };
+    };
+    const calibrationHigh = highAt(floorBoundary, minimumOpeningLength);
+    const floorSummary = render(calibrationHigh.rows), floorProjection = preview(floorSummary, floorBoundary);
+    // The last admission attempt and thinking-only retry share this exact floor: whole protected prompts, the smallest
+    // existing summary representation, and the required fresh/native suffix. No historical fill or room target spends reply space.
+    if (input.deepest) {
+        assertNativeToolRounds(floorProjection);
+        const after = measure(floorProjection);
+        return { compaction: { summary: floorSummary, firstKeptEntryId: entries[floorBoundary]?.id ?? "", tokensBefore: input.tokensBefore,
+            details: { ...detailsAt(floorBoundary), tokensAfter: after, carriedTarget: after, view: "shrunk-dialogue", mode: "shrunk", deepest: true } }, after, mode: "shrunk" };
+    }
+    const offset = measure(floorProjection) - nativeAt(floorBoundary) - summaryTokens(floorSummary.length);
+    const price = (characters: number, boundary: number) => offset + nativeAt(boundary) + summaryTokens(characters);
+    const listCache = new Map<number, { files: ReturnType<typeof ledgerItems>; actions: ReturnType<typeof actionItems>; records: TranscriptRecord[] }>();
+    const listsAt = (boundary: number) => {
+        const cached = listCache.get(boundary);
+        if (cached) return cached;
+        const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
+        const files = ledgerItems(compacted, indices, resolves, failedCalls, header.cwd), actions = actionItems(compacted, indices, resolves, failedCalls);
+        const lists = { files, actions, records: [...actionRecords(actions), ...ledgerRecords(files)] };
+        listCache.set(boundary, lists);
+        return lists;
+    };
+    const preferredHigh = highAt(preferredBoundary, openingLength), preferredLists = listsAt(preferredBoundary);
+    const fixedRowsCost = preferredHigh.cost + lineCost(preferredLists.records);
+    const baseCharacters = frameLength(fixedRowsCost, preferredHigh.rows.length + preferredLists.records.length);
+    const base = price(baseCharacters, preferredBoundary);
+    const target = carriedTarget(model.contextWindow, reserveTokens, base, before);
+    // The old tail rule supplies an ordering boundary only. Its recent
+    // suffix follows the openings, and is charged to the same total grant.
+    const boundaries = [floorBoundary];
+    for (let at = floorBoundary - 1; at >= preferredBoundary; at--) {
+        const entry = entries[at]!;
+        if ((entry.type === "message" && entry.message.role !== "toolResult") || entry.type === "custom_message" || entry.type === "branch_summary") boundaries.push(at);
+    }
+    boundaries.reverse();
+    const tailFor = (length: number) => {
+        // Longest suffix first: the first fit is the preferred rank. Most
+        // cuts keep that entire suffix, so no other boundaries need pricing.
+        for (const boundary of boundaries) {
+            const high = highAt(boundary, length);
+            if (price(high.length, boundary) <= target) return { boundary, high };
+        }
+        return undefined;
+    };
+    let selected = tailFor(minimumOpeningLength);
+    if (!selected) return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget",
+        capacityRejected: price(calibrationHigh.length, floorBoundary) + reserveTokens >= model.contextWindow,
+        floorMessages: floorProjection };
+    let low = minimumOpeningLength, high = openingLength;
+    while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (tailFor(middle)) low = middle; else high = middle - 1;
+    }
+    selected = tailFor(low)!;
+    let { boundary, high: protectedView } = selected;
+    const sourceRows = rows.filter(row => row.position < boundary);
+    const lists = listsAt(boundary);
+    const maxSummaryCharactersAt = (at: number) => Math.floor((target - offset - nativeAt(at)) * 4) - wrapperCharacters;
+    const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
+    let allowance = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
+    const keptReads: TranscriptRecord[] = [];
+    for (const record of keptReadCandidates([header, ...entries.slice(0, boundary)], indices, entry => readable(entry) !== undefined)) {
+        const cost = lineCost([record]);
+        if (cost > allowance) continue;
+        keptReads.push(record); allowance -= cost;
+        if (keptReads.length === 4) break;
+    }
+    let ledger: TranscriptRecord[] = [...lists.records, ...keptReads];
+    // List caps are existing ranking policy; only the carried target is a
+    // spending limit. Candidate list sizes have fixed, cached line prices.
+    while (keptReads.length && price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
+        keptReads.pop();
+        ledger = [...lists.records, ...keptReads];
+    }
+    if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
+      ledger = [];
+      for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
+        const candidate = [...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)];
+        if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) ledger = candidate;
+    }
+    }
+    const mandatory = new Set([...protectedView.whole].filter(index => {
+        const row = users.find(row => row.index === index);
+        return row?.message.role === "user" && isTextOnly(row.message.content);
+    }));
+    const fixed = [...protectedView.kept, ...ledger], fixedCost = lineCost(fixed);
+    const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost);
+    const compileInput = { messages: sourceRows.map(row => row.message), sourceIndices: sourceRows.map(row => row.index),
+        sourceEntryIds: sourceRows.map(row => row.id), sourceTimes: sourceRows.map(row => resolveSourceTime(entries[row.position]!)),
+        ranking: { maxBriefChars, mandatorySourceIndices: mandatory } };
+    const imageLabels = new Map<number | undefined, Set<string>>();
+    for (const row of sourceRows) if (row.message.role === "user" && Array.isArray(row.message.content))
+        imageLabels.set(row.index, new Set(row.message.content.flatMap(part => part.type === "image" ? [`[image: ${part.mimeType}]`] : [])));
+    const compiledBoundary = boundary;
+    // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
+    const sourceKey = (record: TranscriptRecord) => current?.type === "custom_message" && record.sourceEntryId === current.id ? current.id : record.sourceIndex;
+    const assemble = (compiled: string, at = compiledBoundary) => {
+        const split = compiled ? splitSummary(compiled) : undefined;
+        if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
+        const inputRecords = split ? parseRecords(split.body, split.version) : protectedView.omissions;
+        const expanded = new Set(protectedView.kept.filter(record => record.kind === "excerpt" && inputRecords.some(row =>
+            row.kind === "excerpt" && row.role === record.role && sourceKey(row) === sourceKey(record) && row.text.startsWith(record.text!) && row.text.length >= record.text!.length)).map(sourceKey));
+        const anchored = new Set(protectedView.kept.map(sourceKey));
+        const moved = new Set(rows.filter(row => row.position >= at && row.position < compiledBoundary).map(row =>
+            current?.type === "custom_message" && row.id === current.id ? row.id : row.index));
+        const records = [...inputRecords.filter(record => {
+            const key = sourceKey(record);
+            if (key !== undefined && moved.has(key)) return false;
+            if (record.kind === "excerpt" && record.role === "user" && imageLabels.get(record.sourceIndex)?.has(record.text)) return true;
+            return record.role !== "user" && record.role !== "custom" || key === undefined || !anchored.has(key) || expanded.has(key);
+        }), ...protectedView.kept.filter(record => !expanded.has(sourceKey(record)) && !moved.has(sourceKey(record)))];
+        // Mixed user turns keep their text opening, while their image
+        // metadata remains in the ordinary lower-ranked dialogue lane.
+        const wholeUser = new Set(records.filter(record => record.kind === "excerpt" && record.role === "user" && record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
+        const wholeAssistant = new Map<number, number>();
+        for (const record of records) if (record.kind === "excerpt" && record.role === "assistant" && !record.span && record.sourceIndex !== undefined)
+            wholeAssistant.set(record.sourceIndex, (wholeAssistant.get(record.sourceIndex) ?? 0) + 1);
+        for (let pos = records.length - 1; pos >= 0; pos--) {
+            const record = records[pos]!;
+            if (record.kind !== "omission" || !record.sourceRange) continue;
+            if (record.role === "user") {
+                const missing = units.user.filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end && !wholeUser.has(unit.index));
+                if (!missing.length) records.splice(pos, 1);
+                else records[pos] = omissionRecord("user", missing.length, [missing[0]!.index, missing.at(-1)!.index], false);
+            } else if (at !== compiledBoundary) {
+                const role = record.role;
+                if (role === "assistant" || role === "toolResult") {
+                    const missing = units[role].filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end &&
+                        (role === "toolResult" || unit.count > (wholeAssistant.get(unit.index) ?? 0)));
+                    const count = missing.reduce((n, unit) => n + unit.count - (role === "assistant" ? wholeAssistant.get(unit.index) ?? 0 : 0), 0);
+                    if (!count) records.splice(pos, 1);
+                    else records[pos] = omissionRecord(role, count, [missing[0]!.index, missing.at(-1)!.index], false);
+                }
             }
         }
-        const envelope = convertToLlm([{ role: "compactionSummary", summary: "", tokensBefore: 0, timestamp: 0 }]);
-        const wrapperCharacters = envelope.reduce((n, message) => n + textOf(message.content).length, 0);
-        const summaryTokens = (characters: number) => Math.ceil((characters + wrapperCharacters) / 4);
-        const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, record) => n + serializeRecord(record).length + 1, 0);
-        const frameLength = (cost: number, count: number) => TRANSCRIPT_HEADER.length + DIALOGUE_SUFFIX.length + cost + (count ? 0 : 1);
-        const render = (records: TranscriptRecord[]) => (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + DIALOGUE_SUFFIX;
-        type Unit = { position: number; index: number; count: number };
-        const units: Record<"user" | "assistant" | "toolResult", Unit[]> = { user: [], assistant: [], toolResult: [] };
-        for (const row of rows) {
-            if (row.index === undefined) continue;
-            const message = row.message;
-            if (message.role === "user" && textOf(message.content).length) units.user.push({ position: row.position, index: row.index, count: 1 });
-            else if (message.role === "toolResult") units.toolResult.push({ position: row.position, index: row.index, count: 1 });
-            else if (message.role === "assistant" && !isDiscardedResponse(message)) {
-                const count = message.content.filter(part => part.type === "text" && part.text.trim()).length;
-                if (count) units.assistant.push({ position: row.position, index: row.index, count });
-            }
+        orderByOriginalSource(records, sourceIndices, originals.selectedIds);
+        const summary = render([...records, ...ledger]);
+        return { summary, records };
+    };
+    const compiled = tuck.compileDialogue(compileInput);
+    let offer = assemble(compiled.text);
+    // Only capacity left after all higher ranks can extend the native tail
+    // beyond its preferred rank boundary. No old allocator is consulted.
+    const liveStartId = calibration.ok ? calibration.selectedIds[0] : undefined;
+    const liveStart = liveStartId === undefined ? preferredBoundary : positions.get(liveStartId)!;
+    if (boundary > liveStart) {
+        const recordCosts = new Float64Array(entries.length + 1), recordCounts = new Int32Array(entries.length + 1);
+        const sourcePositions = new Map(rows.map(row => [row.index, row.position]));
+        const wholeUsers = new Set(offer.records.filter(record => record.kind === "excerpt" && record.role === "user" &&
+            record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
+        const wholeAssistants = new Map<number, number>();
+        for (const record of offer.records) {
+            const at = record.sourceIndex === undefined ? undefined : sourcePositions.get(record.sourceIndex);
+            if (at !== undefined) { recordCosts[at + 1] += lineCost([record]); recordCounts[at + 1]++; }
+            if (record.kind === "excerpt" && record.role === "assistant" && !record.span && record.sourceIndex !== undefined)
+                wholeAssistants.set(record.sourceIndex, (wholeAssistants.get(record.sourceIndex) ?? 0) + 1);
         }
-        const prefixes = Object.fromEntries(Object.entries(units).map(([role, list]) => {
-            const end = new Int32Array(entries.length + 1), count = new Int32Array(list.length + 1);
+        for (let at = 1; at <= entries.length; at++) {
+            recordCosts[at] += recordCosts[at - 1]!; recordCounts[at] += recordCounts[at - 1]!;
+        }
+        // A tail extension removes source records and shortens at most three
+        // counted ranges. Price those changes from prefix sums; render only the
+        // winning suffix, rather than parsing/serializing the dialogue per step.
+        const ranges = offer.records.flatMap(record => {
+            if (record.kind !== "omission" || !record.sourceRange || !["user", "assistant", "toolResult"].includes(record.role ?? "")) return [];
+            const role = record.role as keyof typeof units;
+            const missing = units[role].flatMap(unit => {
+                const count = role === "user" ? Number(!wholeUsers.has(unit.index)) : unit.count - (role === "assistant" ? wholeAssistants.get(unit.index) ?? 0 : 0);
+                return count && unit.position < compiledBoundary && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end ? [{ ...unit, count }] : [];
+            });
+            const ends = new Int32Array(entries.length + 1), counts = new Int32Array(missing.length + 1);
             let seen = 0;
             for (let at = 0; at <= entries.length; at++) {
-                while (seen < list.length && list[seen]!.position < at) seen++;
-                end[at] = seen;
+                while (seen < missing.length && missing[seen]!.position < at) seen++;
+                ends[at] = seen;
             }
-            list.forEach((unit, at) => count[at + 1] = count[at]! + unit.count);
-            return [role, { end, count }];
-        })) as Record<keyof typeof units, { end: Int32Array; count: Int32Array }>;
-        const quoteCache = new Map<string, { records: TranscriptRecord[]; cost: number; whole: boolean }>();
-        const quote = (entry: SessionEntry, take: number) => {
-            const key = `${entry.id}:${take}`;
-            let cached = quoteCache.get(key);
-            if (cached) return cached;
-            const index = indices.get(entry.id);
-            const text = entry.type === "custom_message" ? textOf(entry.content) : entry.type === "message" && entry.message.role === "user" ? textOf(entry.message.content) : "";
-            const sourceTimes = index === undefined ? undefined : [{ sourceIndex: index, ...resolveSourceTime(entry) }];
-            // Custom entries have a native identity but no global message index.
-            const records: TranscriptRecord[] = index === undefined && entry.type !== "custom_message" ? [] : take === Infinity
-                ? [{ kind: "excerpt", role: entry.type === "custom_message" ? "custom" : "user", ...(index === undefined ? {} : { sourceIndex: index }), text, sourceTimes,
-                    ...(entry.type === "custom_message" ? { sourceEntryId: entry.id } : {}) }]
-                : userPrefixRecords({ kind: "user", text, originalText: text, startsSource: true, sourceIndex: index }, undefined, take).map(record => ({ ...record, sourceTimes }));
-            cached = { records, cost: lineCost(records), whole: take >= text.length };
-            quoteCache.set(key, cached);
-            return cached;
-        };
-        const highAt = (boundary: number, length: number) => {
-            const kept: TranscriptRecord[] = [], selected = new Set<number>(), whole = new Set<number>();
-            let cost = 0;
-            const add = (entry: SessionEntry, take: number) => {
-                const quoted = quote(entry, take), index = indices.get(entry.id);
-                kept.push(...quoted.records); cost += quoted.cost;
-                if (index !== undefined && quoted.records.length) { selected.add(index); if (quoted.whole) whole.add(index); }
-            };
-            if (latestPosition >= 0 && latestPosition < boundary && latestTextOnly) add(latest!, Infinity);
-            if (currentPosition >= 0 && currentPosition < boundary && current?.id !== latest?.id) add(current!, Infinity);
-            for (const entry of anchors) if (entry.id !== latest?.id && entry.id !== current?.id && positions.get(entry.id)! < boundary) add(entry, length);
-            const omissions: TranscriptRecord[] = [];
-            for (const role of ["user", "assistant", "toolResult"] as const) {
-                const list = units[role], prefix = prefixes[role];
-                let first = 0, last = prefix.end[boundary]! - 1;
-                if (role === "user") {
-                    while (first <= last && selected.has(list[first]!.index)) first++;
-                    while (last >= first && selected.has(list[last]!.index)) last--;
-                }
-                if (last < first) continue;
-                const a = list[first]!, b = list[last]!;
-                let count = prefix.count[last + 1]! - prefix.count[first]!;
-                if (role === "user") for (const index of whole) if (index >= a.index && index <= b.index) count--;
-                if (count) omissions.push(omissionRecord(role, count, [a.index, b.index], false));
+            missing.forEach((unit, at) => counts[at + 1] = counts[at]! + unit.count);
+            return [{ role, missing, ends, counts, cost: lineCost([record]) }];
+        });
+        const baseCost = lineCost(offer.records) + lineCost(ledger), baseCount = offer.records.length + ledger.length;
+        const keptReadCost = lineCost(keptReads), keptReadIndices = new Set(keptReads.map(record => record.sourceIndex));
+        const lastKeptReadPosition = entries.findLastIndex(entry => keptReadIndices.has(indices.get(entry.id)));
+        const extensionPrice = (at: number) => {
+            // Fixed kept reads outrank this optional tail extension: it cannot move one out of the prefix or spend its allowance.
+            if (keptReads.length && (at <= lastKeptReadPosition || keptReadCost > Math.min(Math.floor(0.20 * maxSummaryCharactersAt(at)), 24000))) return Infinity;
+            let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
+            let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
+            for (const range of ranges) {
+                const end = range.ends[at]!;
+                cost -= range.cost;
+                if (end) cost += lineCost([omissionRecord(range.role, range.counts[end]!, [range.missing[0]!.index, range.missing[end - 1]!.index], false)]);
+                else count--;
             }
-            const rows = [...kept, ...omissions], totalCost = cost + lineCost(omissions);
-            return { kept, whole, omissions, rows, cost: totalCost, length: frameLength(totalCost, rows.length) };
+            return price(frameLength(cost, count), at);
         };
-        const calibrationHigh = highAt(floorBoundary, minimumOpeningLength);
-        const floorSummary = render(calibrationHigh.rows), floorProjection = preview(floorSummary, floorBoundary);
-        // The last admission attempt and thinking-only retry share this exact floor: whole protected prompts, the smallest
-        // existing summary representation, and the required fresh/native suffix. No historical fill or room target spends reply space.
-        if (input.deepest) {
-            assertNativeToolRounds(floorProjection);
-            const after = measure(floorProjection);
-            return { compaction: { summary: floorSummary, firstKeptEntryId: entries[floorBoundary]?.id ?? "", tokensBefore: input.tokensBefore,
-                details: { ...detailsAt(floorBoundary), tokensAfter: after, carriedTarget: after, view: "shrunk-dialogue", mode: "shrunk", deepest: true } }, after, mode: "shrunk" };
-        }
-        const offset = measure(floorProjection) - nativeAt(floorBoundary) - summaryTokens(floorSummary.length);
-        const price = (characters: number, boundary: number) => offset + nativeAt(boundary) + summaryTokens(characters);
-        const listCache = new Map<number, { files: ReturnType<typeof ledgerItems>; actions: ReturnType<typeof actionItems>; records: TranscriptRecord[] }>();
-        const listsAt = (boundary: number) => {
-            const cached = listCache.get(boundary);
-            if (cached) return cached;
-            const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
-            const files = ledgerItems(compacted, indices, resolves, failedCalls), actions = actionItems(compacted, indices, resolves, failedCalls);
-            const lists = { files, actions, records: [...actionRecords(actions), ...ledgerRecords(files)] };
-            listCache.set(boundary, lists);
-            return lists;
-        };
-        const preferredHigh = highAt(preferredBoundary, openingLength), preferredLists = listsAt(preferredBoundary);
-        const fixedRowsCost = preferredHigh.cost + lineCost(preferredLists.records);
-        const baseCharacters = frameLength(fixedRowsCost, preferredHigh.rows.length + preferredLists.records.length);
-        const base = price(baseCharacters, preferredBoundary);
-        const target = carriedTarget(model.contextWindow, reserveTokens, base, before);
-        // The old tail rule supplies an ordering boundary only. Its recent
-        // suffix follows the openings, and is charged to the same total grant.
-        const boundaries = [floorBoundary];
-        for (let at = floorBoundary - 1; at >= preferredBoundary; at--) {
+        for (let at = boundary - 1; at >= liveStart; at--) {
             const entry = entries[at]!;
-            if ((entry.type === "message" && entry.message.role !== "toolResult") || entry.type === "custom_message" || entry.type === "branch_summary") boundaries.push(at);
+            if (entry.type !== "message" && entry.type !== "custom_message" && entry.type !== "branch_summary") continue;
+            if (entry.type === "message" && entry.message.role === "toolResult") continue;
+            if (extensionPrice(at) <= target) boundary = at;
+            else break;
         }
-        boundaries.reverse();
-        const tailFor = (length: number) => {
-            // Longest suffix first: the first fit is the preferred rank. Most
-            // cuts keep that entire suffix, so no other boundaries need pricing.
-            for (const boundary of boundaries) {
-                const high = highAt(boundary, length);
-                if (price(high.length, boundary) <= target) return { boundary, high };
-            }
-            return undefined;
-        };
-        let selected = tailFor(minimumOpeningLength);
-        if (!selected) return { unavailable: "pi-tuck's mandatory context cannot fit or reduce the request budget",
-            capacityRejected: price(calibrationHigh.length, floorBoundary) + reserveTokens >= model.contextWindow,
-            floorMessages: floorProjection };
-        let low = minimumOpeningLength, high = openingLength;
-        while (low < high) {
-            const middle = Math.ceil((low + high) / 2);
-            if (tailFor(middle)) low = middle; else high = middle - 1;
-        }
-        selected = tailFor(low)!;
-        let { boundary, high: protectedView } = selected;
-        const sourceRows = rows.filter(row => row.position < boundary);
-        const lists = listsAt(boundary);
-        const maxSummaryCharactersAt = (at: number) => Math.floor((target - offset - nativeAt(at)) * 4) - wrapperCharacters;
-        const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
-        let allowance = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
-        const keptReads: TranscriptRecord[] = [];
-        for (const record of keptReadCandidates(entries.slice(0, boundary), indices, entry => readable(entry) !== undefined)) {
-            const cost = lineCost([record]);
-            if (cost > allowance) continue;
-            keptReads.push(record); allowance -= cost;
-            if (keptReads.length === 4) break;
-        }
-        let ledger: TranscriptRecord[] = [...lists.records, ...keptReads];
-        // List caps are existing ranking policy; only the carried target is a
-        // spending limit. Candidate list sizes have fixed, cached line prices.
-        while (keptReads.length && price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
-            keptReads.pop();
-            ledger = [...lists.records, ...keptReads];
-        }
-        if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
-          ledger = [];
-          for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
-            const candidate = [...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)];
-            if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) ledger = candidate;
-        }
-        }
-        const mandatory = new Set([...protectedView.whole].filter(index => {
-            const row = users.find(row => row.index === index);
-            return row?.message.role === "user" && isTextOnly(row.message.content);
-        }));
-        const fixed = [...protectedView.kept, ...ledger], fixedCost = lineCost(fixed);
-        const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost);
-        const compileInput = { messages: sourceRows.map(row => row.message), sourceIndices: sourceRows.map(row => row.index),
-            sourceEntryIds: sourceRows.map(row => row.id), sourceTimes: sourceRows.map(row => resolveSourceTime(byId.get(row.id)!)),
-            ranking: { maxBriefChars, mandatorySourceIndices: mandatory } };
-        const imageLabels = new Map<number | undefined, Set<string>>();
-        for (const row of sourceRows) if (row.message.role === "user" && Array.isArray(row.message.content))
-            imageLabels.set(row.index, new Set(row.message.content.flatMap(part => part.type === "image" ? [`[image: ${part.mimeType}]`] : [])));
-        const compiledBoundary = boundary;
-        // A protected custom prompt uses its native entry ID in the same anchoring/movement path as indexed user prompts.
-        const sourceKey = (record: TranscriptRecord) => current?.type === "custom_message" && record.sourceEntryId === current.id ? current.id : record.sourceIndex;
-        const assemble = (compiled: string, at = compiledBoundary) => {
-            const split = compiled ? splitSummary(compiled) : undefined;
-            if (compiled && !split) throw new Error("pi-tuck returned an invalid summary");
-            const inputRecords = split ? parseRecords(split.body, split.version) : protectedView.omissions;
-            const expanded = new Set(protectedView.kept.filter(record => record.kind === "excerpt" && inputRecords.some(row =>
-                row.kind === "excerpt" && row.role === record.role && sourceKey(row) === sourceKey(record) && row.text.startsWith(record.text!) && row.text.length >= record.text!.length)).map(sourceKey));
-            const anchored = new Set(protectedView.kept.map(sourceKey));
-            const moved = new Set(rows.filter(row => row.position >= at && row.position < compiledBoundary).map(row =>
-                current?.type === "custom_message" && row.id === current.id ? row.id : row.index));
-            const records = [...inputRecords.filter(record => {
-                const key = sourceKey(record);
-                if (key !== undefined && moved.has(key)) return false;
-                if (record.kind === "excerpt" && record.role === "user" && imageLabels.get(record.sourceIndex)?.has(record.text)) return true;
-                return record.role !== "user" && record.role !== "custom" || key === undefined || !anchored.has(key) || expanded.has(key);
-            }), ...protectedView.kept.filter(record => !expanded.has(sourceKey(record)) && !moved.has(sourceKey(record)))];
-            // Mixed user turns keep their text opening, while their image
-            // metadata remains in the ordinary lower-ranked dialogue lane.
-            const wholeUser = new Set(records.filter(record => record.kind === "excerpt" && record.role === "user" && record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
-            const wholeAssistant = new Map<number, number>();
-            for (const record of records) if (record.kind === "excerpt" && record.role === "assistant" && !record.span && record.sourceIndex !== undefined)
-                wholeAssistant.set(record.sourceIndex, (wholeAssistant.get(record.sourceIndex) ?? 0) + 1);
-            for (let pos = records.length - 1; pos >= 0; pos--) {
-                const record = records[pos]!;
-                if (record.kind !== "omission" || !record.sourceRange) continue;
-                if (record.role === "user") {
-                    const missing = units.user.filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end && !wholeUser.has(unit.index));
-                    if (!missing.length) records.splice(pos, 1);
-                    else records[pos] = omissionRecord("user", missing.length, [missing[0]!.index, missing.at(-1)!.index], false);
-                } else if (at !== compiledBoundary) {
-                    const role = record.role;
-                    if (role === "assistant" || role === "toolResult") {
-                        const missing = units[role].filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end &&
-                            (role === "toolResult" || unit.count > (wholeAssistant.get(unit.index) ?? 0)));
-                        const count = missing.reduce((n, unit) => n + unit.count - (role === "assistant" ? wholeAssistant.get(unit.index) ?? 0 : 0), 0);
-                        if (!count) records.splice(pos, 1);
-                        else records[pos] = omissionRecord(role, count, [missing[0]!.index, missing.at(-1)!.index], false);
-                    }
-                }
-            }
-            orderByOriginalSource(records, sourceIndices, originals.selectedIds);
-            const summary = render([...records, ...ledger]);
-            return { summary, after: price(summary.length, at), records };
-        };
-        const compiled = tuck.compileDialogue(compileInput);
-        let offer = assemble(compiled.text);
-        // Only capacity left after all higher ranks can extend the native tail
-        // beyond its preferred rank boundary. No old allocator is consulted.
-        const liveStartId = calibration.ok ? calibration.selectedIds[0] : undefined;
-        const liveStart = liveStartId === undefined ? preferredBoundary : positions.get(liveStartId)!;
-        if (boundary > liveStart) {
-            const recordCosts = new Float64Array(entries.length + 1), recordCounts = new Int32Array(entries.length + 1);
-            const sourcePositions = new Map(rows.map(row => [row.index, row.position]));
-            const wholeUsers = new Set(offer.records.filter(record => record.kind === "excerpt" && record.role === "user" &&
-                record.text === userTexts.get(record.sourceIndex)).map(record => record.sourceIndex));
-            const wholeAssistants = new Map<number, number>();
-            for (const record of offer.records) {
-                const at = record.sourceIndex === undefined ? undefined : sourcePositions.get(record.sourceIndex);
-                if (at !== undefined) { recordCosts[at + 1] += lineCost([record]); recordCounts[at + 1]++; }
-                if (record.kind === "excerpt" && record.role === "assistant" && !record.span && record.sourceIndex !== undefined)
-                    wholeAssistants.set(record.sourceIndex, (wholeAssistants.get(record.sourceIndex) ?? 0) + 1);
-            }
-            for (let at = 1; at <= entries.length; at++) {
-                recordCosts[at] += recordCosts[at - 1]!; recordCounts[at] += recordCounts[at - 1]!;
-            }
-            // A tail extension removes source records and shortens at most three
-            // counted ranges. Price those changes from prefix sums; render only the
-            // winning suffix, rather than parsing/serializing the dialogue per step.
-            const ranges = offer.records.flatMap(record => {
-                if (record.kind !== "omission" || !record.sourceRange || !["user", "assistant", "toolResult"].includes(record.role ?? "")) return [];
-                const role = record.role as keyof typeof units;
-                const missing = units[role].flatMap(unit => {
-                    const count = role === "user" ? Number(!wholeUsers.has(unit.index)) : unit.count - (role === "assistant" ? wholeAssistants.get(unit.index) ?? 0 : 0);
-                    return count && unit.position < compiledBoundary && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end ? [{ ...unit, count }] : [];
-                });
-                const ends = new Int32Array(entries.length + 1), counts = new Int32Array(missing.length + 1);
-                let seen = 0;
-                for (let at = 0; at <= entries.length; at++) {
-                    while (seen < missing.length && missing[seen]!.position < at) seen++;
-                    ends[at] = seen;
-                }
-                missing.forEach((unit, at) => counts[at + 1] = counts[at]! + unit.count);
-                return [{ role, missing, ends, counts, cost: lineCost([record]) }];
-            });
-            const baseCost = lineCost(offer.records) + lineCost(ledger), baseCount = offer.records.length + ledger.length;
-            const keptReadCost = lineCost(keptReads), keptReadIndices = new Set(keptReads.map(record => record.sourceIndex));
-            const lastKeptReadPosition = entries.findLastIndex(entry => keptReadIndices.has(indices.get(entry.id)));
-            const extensionPrice = (at: number) => {
-                // Fixed kept reads outrank this optional tail extension: it cannot move one out of the prefix or spend its allowance.
-                if (keptReads.length && (at <= lastKeptReadPosition || keptReadCost > Math.min(Math.floor(0.20 * maxSummaryCharactersAt(at)), 24000))) return Infinity;
-                let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
-                let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
-                for (const range of ranges) {
-                    const end = range.ends[at]!;
-                    cost -= range.cost;
-                    if (end) cost += lineCost([omissionRecord(range.role, range.counts[end]!, [range.missing[0]!.index, range.missing[end - 1]!.index], false)]);
-                    else count--;
-                }
-                return price(frameLength(cost, count), at);
-            };
-            for (let at = boundary - 1; at >= liveStart; at--) {
-                const entry = entries[at]!;
-                if (entry.type !== "message" && entry.type !== "custom_message" && entry.type !== "branch_summary") continue;
-                if (entry.type === "message" && entry.message.role === "toolResult") continue;
-                if (extensionPrice(at) <= target) boundary = at;
-                else break;
-            }
-            if (boundary !== compiledBoundary) offer = assemble(compiled.text, boundary);
-        }
-        const projection = preview(offer.summary, boundary);
-        assertNativeToolRounds(projection);
-        const after = measure(projection);
-        if (after + reserveTokens >= model.contextWindow || after >= before)
-            return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floorProjection };
-        const mode: DraftMode = compiled.step === "whole" ? "dialogue" : "shrunk";
-        return { compaction: { summary: offer.summary, firstKeptEntryId: entries[boundary]?.id ?? "", tokensBefore: input.tokensBefore,
-            details: { ...detailsAt(boundary), tokensAfter: after, carriedTarget: target, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
+        if (boundary !== compiledBoundary) offer = assemble(compiled.text, boundary);
     }
-
+    const projection = preview(offer.summary, boundary);
+    assertNativeToolRounds(projection);
+    const after = measure(projection);
+    if (after + reserveTokens >= model.contextWindow || after >= before)
+        return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floorProjection };
+    const mode: DraftMode = compiled.step === "whole" ? "dialogue" : "shrunk";
+    return { compaction: { summary: offer.summary, firstKeptEntryId: entries[boundary]?.id ?? "", tokensBefore: input.tokensBefore,
+        details: { ...detailsAt(boundary), tokensAfter: after, carriedTarget: target, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
 }
 
 /** Numeric references use the original session index, then intersect with readable current-branch entries. */
