@@ -378,12 +378,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const hardLine = Math.min(Math.max(room, contextWindow(ctx) - piMargin - floor), calibration.lastCeiling ?? Infinity);
         return { response, room, hardLine, replyFloor: floor };
     };
-    const decisionBand = (ctx: ExtensionContext, room: number, system: number, current = view(ctx)) => {
-        const last = current.session.getBranch().findLast(entry => entry.type === "compaction");
-        const after = last?.type === "compaction" ? (last.details as { tokensAfter?: unknown } | undefined)?.tokensAfter : undefined;
-        return bandOf(room, cutAt, options.cutAt === undefined && typeof after === "number" && Number.isFinite(after) && after >= 0
-            ? { system, tokensAfter: after, factor: calibration.factor } : undefined);
-    };
+    const decisionBand = (room: number) => bandOf(room, cutAt);
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).
     const measureFor = (ctx: ExtensionContext) => (messages: Messages) => projectedConversationTokens(applyClips(messages, clips()), ctx, options.recallPolicy);
@@ -550,7 +545,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const saved = ctx.sessionManager.buildSessionProjection().messages;
             const hostInput = hostMessages(ctx), host = conversationTokens(hostInput);
             const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
-            const mandatory = system + host, band = decisionBand(ctx, room, system, view(ctx, event.reason === "threshold"));
+            const mandatory = system + host, band = decisionBand(room);
             const before = plannerMeasureFor(ctx)(saved);
             observeBudget(before + mandatory, ctx);
             // Pi's own usage threshold (reason "threshold") counts the last reply's output tokens, reasoning included, plus the messages after
@@ -572,7 +567,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
                     // Every cut asked while no run is admitted (an operator's cut) is planned for a run that has not begun: the session has moved on
                     // from any run that ended. A retry is inside its run.
-                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || run?.phase !== "admitted", run?.phase === "admitted" ? protectedPrompt(ctx) : undefined);
+                    const draft = tuckDraft(tuck, event, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, retain, operatorManual, operatorManual || run?.phase !== "admitted", run?.phase === "admitted" ? protectedPrompt(ctx) : undefined, settingsFor().getCompactionSettings(ctx.model).keepRecentTokens);
                     return draft.compaction ? { draft: true, after: draft.after, compaction: draft.compaction, reserve,
                         messages: plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages }
                         : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
@@ -639,7 +634,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             }
         }
         const before = measureFor(ctx)(saved);
-        const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before,
+        const draft = tuckObservedDraft(tuck, { keepRecentTokens: settingsFor().getCompactionSettings(ctx.model).keepRecentTokens, branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before,
             previousSummary: saved.find(message => message.role === "compactionSummary")?.summary, newPrompt, reRenderSummary: true,
             protectedPromptEntryId: newPrompt ? undefined : protectedPrompt(ctx), deepest: true }, ctx, 0, plannerMeasureFor(ctx), options.recallPolicy, retain);
         if (!draft.compaction) return { kind: "fault", capacity: Boolean(draft.capacityRejected), message: draft.unavailable };
@@ -679,7 +674,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // Public early view only: later handlers, image normalization and tool-loop growth remain the complete-context guard's responsibility.
         const saved = ctx.sessionManager.buildSessionProjection().messages;
         const system = requestSystemPart(observedPrompt, tools, saved, ctx.getSystemPrompt());
-        const band = decisionBand(ctx, room, system);
+        const band = decisionBand(room);
         const hostInput = hostSnapshot ?? hostMessages(ctx), host = conversationTokens(hostInput), measure = measureFor(ctx), before = measure(saved);
         const incoming = incomingPart + system, mandatory = incoming + host;
         observeBudget(before + mandatory, ctx);
@@ -699,7 +694,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 // Only a due cut re-renders a summary that sits alone in the session: inside the band a cut is opportunistic, and a smaller summary
                 // there buys nothing the request needed and costs history the next recall would have found.
                 // A steer joins the admitted run: keep its starting prompt and the unexposed tool round, just as at a tool boundary.
-                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary,
+                const draft = tuckObservedDraft(tuck, { keepRecentTokens: settingsFor().getCompactionSettings(ctx.model).keepRecentTokens, branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary,
                     newPrompt: !protectedId, protectedPromptEntryId: protectedId, reRenderSummary: !opportunistic }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, Boolean(protectedId));
                 if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 const candidate = new PendingCut();
@@ -795,7 +790,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // saved conversation. Pi's peek returns the steering queue, else the follow-up queue; a follow-up is not in the very next
         // request while tools still run, so it can be counted early: conservative, and nothing else would cut at that later boundary.
         const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
-        const band = decisionBand(ctx, room, system);
+        const band = decisionBand(room);
         const hostInput = hostMessages(ctx), host = conversationTokens(hostInput);
         const queued = event.context.pendingMessages.length ? conversationTokens(event.context.pendingMessages as Messages) : 0;
         const mandatory = system + host + queued;
@@ -833,7 +828,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<CutPlan> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
-                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: densityTokens ?? before, previousSummary, protectedPromptEntryId: protectedId }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
+                const draft = tuckObservedDraft(tuck, { keepRecentTokens: settingsFor().getCompactionSettings(ctx.model).keepRecentTokens, branchEntries: ctx.sessionManager.getBranch(), tokensBefore: densityTokens ?? before, previousSummary, protectedPromptEntryId: protectedId }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
                 if (!draft.compaction) {
                     // The planner's own floor, so a clip's second budget is measured against what the smallest cut really keeps.
                     if (draft.floorMessages && event.toolResults) {
@@ -971,7 +966,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const needsClampFloor = !serverClipped.has(event.message) || corrected(tokens, view) > room;
         if (!fits(tokens, hardLine, view) || check.cap === undefined || needsClampFloor && !check.leavesFloor) throw new CapacityError(clampMessage);
         const compaction = captureDraft(decision.plan.compaction, view, decision.plan.reserve, "length-retry", tokens, true, false, undefined,
-            { response, host, mandatory: system + host + conversationTokens(event.context.pendingMessages), target: decision.target, margin: room - decisionBand(view, room, system) });
+            { response, host, mandatory: system + host + conversationTokens(event.context.pendingMessages), target: decision.target, margin: room - decisionBand(room) });
         run!.thinkingRetryPending = true;
         const drafts = [...entries, { type: "compaction" as const, summary: compaction.summary, firstKeptEntryId: compaction.firstKeptEntryId || null, details: compaction.details },
             { type: "custom" as const, customType: "pi-tuck-capacity", data: { kind: "retry", stoppedReplyEntryId: event.messageEntryId,
@@ -1026,7 +1021,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const guardCut = (messages: Messages, tokens: number, system: number, ctx: ExtensionContext): { messages: Messages; native?: boolean } => {
         const saved = ctx.sessionManager.buildSessionProjection().messages, source = projectContext(saved, ctx);
         const before = conversationTokens(source), mandatory = tokens - before;
-        const { response, room, hardLine } = limits(ctx), band = decisionBand(ctx, room, system);
+        const { response, room, hardLine } = limits(ctx), band = decisionBand(room);
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
         const previousClips = new Map(clips());
         const measure = measureFor(ctx);
@@ -1035,7 +1030,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<CutPlan> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
-                const draft = tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary,
+                const draft = tuckObservedDraft(tuck, { keepRecentTokens: settingsFor().getCompactionSettings(ctx.model).keepRecentTokens, branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, previousSummary,
                     protectedPromptEntryId: protectedPrompt(ctx) }, ctx, reserve, plannerMeasureFor(ctx), options.recallPolicy, true);
                 if (!draft.compaction) return { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
                 const kept = plannedView(ctx, { type: "compaction", ...draft.compaction, tokensBefore: before }).session.buildSessionProjection().messages;

@@ -23,7 +23,7 @@ test(`the Windows writer persists ${how} proposals and their arithmetic after a 
  const start = vi.spyOn(IncidentRecorder.prototype, 'start');
  let h: Awaited<ReturnType<typeof harness>> | undefined;
  try {
-  h = await harness({ at: how === 'operator cut' ? 'prompt' : 'tool', complete: how === 'operator cut' ? 60000 : BAND + 100, host: HOST, compaction: { diagnostics: { directory, maxContentCharacters: 1500000, maxQueueCharacters: 3000000, maxFileBytes: 10000000 } } });
+  h = await harness({ at: how === 'operator cut' ? 'prompt' : 'tool', complete: how === 'operator cut' ? 60000 : BAND + 100, host: HOST, keepRecent: how === 'operator cut' ? 40000 : 0, compaction: { diagnostics: { directory, maxContentCharacters: 1500000, maxQueueCharacters: 3000000, maxFileBytes: 10000000 } } });
   await h.session.prompt('/tuck-incident on');
   if (how === 'operator cut') await h.session.compact(); else await h.run();
   const recorder = start.mock.contexts[0] as IncidentRecorder;

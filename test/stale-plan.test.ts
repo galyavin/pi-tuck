@@ -17,8 +17,8 @@ async function lifecycle(handled: boolean, treeTo?: number, aboveThreshold = fal
   const manager = SessionManager.inMemory(dir);
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   for (let i = 0; i < 12; i++) {
-    manager.appendMessage({ role: 'user', content: `Task ${i}: ` + 'context '.repeat(400), timestamp: i });
-    manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: `Done ${i}. ` + 'answer '.repeat(400) }], api: model.api, provider: model.provider,
+    manager.appendMessage({ role: 'user', content: `Task ${i}: ` + 'context '.repeat(aboveThreshold ? 625 : 400), timestamp: i });
+    manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: `Done ${i}. ` + 'answer '.repeat(aboveThreshold ? 625 : 400) }], api: model.api, provider: model.provider,
       model: model.id, stopReason: 'stop', timestamp: i, usage } as AssistantMessage);
   }
   if (aboveThreshold) {

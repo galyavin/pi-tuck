@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import { convertToLlm, estimateTokens } from '@earendil-works/pi-coding-agent';
 import { getCurrentSystemMessage } from '@earendil-works/pi-ai';
-import { TRIGGER_MARGIN_FRACTION, bandOf, chooseCut, conversationTokens, decideCut, gateCut, guardSystemTokens, incomingTokens, observedSystemTokens,
+import { DEFAULT_CUT_AT, TRIGGER_MARGIN_FRACTION, bandOf, chooseCut, conversationTokens, decideCut, gateCut, guardSystemTokens, incomingTokens, observedSystemTokens,
 	planningReserve, requestTokens, systemPart, type Plan } from '../src/budget';
 
 type Messages = Parameters<typeof convertToLlm>[0];
@@ -25,6 +25,7 @@ const mix = (n: number): Messages => [
 ] as Messages;
 
 test('the margin is one named constant, 2% of the room, rounded up, and never negative', () => {
+	expect(DEFAULT_CUT_AT).toBe(1);
 	expect(TRIGGER_MARGIN_FRACTION).toBe(0.02);
 	expect(bandOf(144000)).toBe(141120);
 	expect(bandOf(100)).toBe(98);

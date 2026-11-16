@@ -6,10 +6,10 @@ import { projectedMessages } from '../src/omissions';
 import { carriesPrompt } from '../src/request-capacity';
 import { scriptedModelRuntime } from './model-fixture';
 
-const bands = vi.hoisted(() => [] as { tokensAfter: number }[]);
+const bands = vi.hoisted(() => [] as number[]);
 vi.mock('../src/budget', async original => {
   const real = await original<typeof import('../src/budget')>();
-  return { ...real, bandOf: (...args: Parameters<typeof real.bandOf>) => { if (args[2]) bands.push(args[2]); return real.bandOf(...args); } };
+  return { ...real, bandOf: (...args: Parameters<typeof real.bandOf>) => { const band = real.bandOf(...args); bands.push(band); return band; } };
 });
 
 async function fixture(compactAll = false) {
@@ -18,8 +18,8 @@ async function fixture(compactAll = false) {
   const model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   for (let i = 0; i < 12; i++) {
-    manager.appendMessage({ role: 'user', content: `task ${i}: ` + 'context '.repeat(400), timestamp: i });
-    manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: compactAll && i === 11 ? 'word '.repeat(53000) : `done ${i}: ` + 'answer '.repeat(400) }],
+    manager.appendMessage({ role: 'user', content: `task ${i}: ` + 'context '.repeat(600), timestamp: i });
+    manager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: compactAll && i === 11 ? 'word '.repeat(53000) : `done ${i}: ` + 'answer '.repeat(600) }],
       api: model.api, provider: model.provider, model: model.id, stopReason: 'stop', timestamp: i, usage });
   }
   const handlers = new Map<string, ((event: any, ctx: ExtensionContext) => any)[]>(), tools = new Map<string, any>(), commands = new Map<string, any>();
@@ -39,7 +39,7 @@ async function fixture(compactAll = false) {
     for (const handler of handlers.get(name) ?? []) { const value = await handler(event, ctx); if (value !== undefined) result = value; }
     return result;
   };
-  const prompt = 'STARTING-PROMPT ' + 'prompt text '.repeat(50);
+  const prompt = 'STARTING-PROMPT ' + 'prompt text '.repeat(500);
   await emit('input', { text: prompt });
   await commands.get('tuck').handler('', ctx);
   expect(notices.at(-1)).toContain('A cut is pending');
@@ -104,7 +104,7 @@ test('pending request, executable recall, status and boundary save share one res
     const oldBandCalls = bands.length;
     const boundary = await h.emit('agent_before_settle', { entries: [], outcome: 'completed', context: { contextMessages: saved, pendingMessages: [], canContinue: false } });
     const cut = boundary.entries[0];
-    expect(bands.slice(oldBandCalls)).toContainEqual(expect.objectContaining({ tokensAfter: cut.details.tokensAfter }));
+    expect(bands.slice(oldBandCalls)).toContain(28672 - Math.ceil(28672 * 0.02));
     expect(cut.summary).toBe(summary.summary);
     h.manager.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);
     expect(plain(projectedMessages(h.manager.buildSessionProjection().messages, h.ctx))).toEqual(plain(request.messages));

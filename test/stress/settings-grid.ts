@@ -1139,7 +1139,7 @@ export function namedCells(): Cell[] {
   const which = model ? `${model.provider}/${model.id}` : 'openai-codex/gpt-6.1-sol';
   return base(`36000 characters of thinking replayed at a 32k window (${api})`, {
    window: 32_768, reserve: 16_384, maxTokens: 8_192, system: 1_200, host: 300, api: `${api} (${which})`,
-   prompts: [4_000, 3_000, 400, 300], rounds: [1, 1, 0, 0], results: [2_000, 800],
+   prompts: [4_000, 6_000, 400, 300], rounds: [1, 1, 0, 0], results: [2_000, 800],
    extra: { stableHost: true, thinkingChars: request => (request === 1 || request === 2 ? 36_000 : 0), ...(model ? { model } : {}) },
    reached: { state: 'the request after a 9000-token thinking reply above the room of 16384', check: e => e.probes.some(p => p.after >= 1 && p.complete > e.room) },
   });
@@ -1200,7 +1200,8 @@ export function namedCells(): Cell[] {
   // the room at that rate is too slow at the very largest windows, so those keep a step that scales: they are there for the floor, not the rhythm.
   if (window <= 200_000) return { prompts: [5_000], rounds: [200], results: [2_000, 1_000] };
   const step = Math.max(200, Math.min(20_000, Math.round(Math.max(0, window - SETUP_RESERVE) * 0.08)));
-  return { prompts: [11_000], rounds: [60], results: [step, Math.round(step / 2)] };
+  const rounds = Math.ceil(Math.max(0, window - SETUP_RESERVE) / (step * 0.75)) + 2;
+  return { prompts: [11_000], rounds: [rounds], results: [step, Math.round(step / 2)] };
  };
  const setupReached = (setup: number, band: number, hardLine: number): Reached => ({
   state: `at least one cut with the setup of ${setup} below the band of ${band}, or a noticed refusal where the setup leaves no capacity below ${hardLine}`,
@@ -1330,6 +1331,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
  // without knowing, and what the session does next is the finding.
  const providerCell = (label: string, extra: Partial<Options>, over: Partial<Cell> = {}): Cell => base(`provider: ${label}`, {
   window: 16_384, reserve: 2_048, maxTokens: 2_048, system: 600, host: 400, usageRatio: 1.9,
+  keepRecent: 4_000,
   prompts: [9_000, 300, 300], rounds: [0, 0, 0], results: [], reached: { state: 'a request the scripted provider rejected for its own window, in wording pi-ai classes as an overflow', check: e => e.overflows >= 1 && e.piOverflow >= 1 }, ...over,
   extra: { rejectWith: 'the request exceeds the available context size, try increasing it', ...extra },
  });
@@ -1480,6 +1482,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   // knowingly, and 1.9 times its measure is over the window.
   usage('first request above the provider window', 1.9, {
    window: 16_384, reserve: 2_048, maxTokens: 2_048, system: 600, host: 400,
+   keepRecent: 4_000,
    prompts: [9_000, 300], rounds: [0, 0], results: [],
    reached: { state: 'a first request the provider refused for its own count', check: e => e.overflows >= 1 },
   }),

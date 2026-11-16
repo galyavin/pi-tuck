@@ -55,19 +55,15 @@ test('the band: a lower F puts it at floor(F * room), and the margin still caps 
 	}
 });
 
-test('the adaptive band uses the last cut and current system, bounded by the margin', () => {
-	expect(bandOf(65536, DEFAULT_CUT_AT)).toBe(39321);
-	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 1000, factor: 1 })).toBe(39321);
-	expect(bandOf(65536, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 30000, factor: 1 })).toBe(64225);
-	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 1000, tokensAfter: 1000, factor: 1 })).toBe(78643);
-	// Both sizes are estimates; the room is in the provider's tokens.
-	expect(bandOf(131072, DEFAULT_CUT_AT, { system: 24000, tokensAfter: 26000, factor: 1.2 })).toBe(78643);
+test('the default band is the room less the margin on small and large windows', () => {
+	expect(bandOf(65536, DEFAULT_CUT_AT)).toBe(64225);
+	expect(bandOf(131072, DEFAULT_CUT_AT)).toBe(128450);
 });
 
-test('a saved cut raises the default band after reopening, while an explicit cutAt keeps its fixed band', async () => {
-	const run = async (adaptive: boolean, after?: number) => {
-		const h = await harness({ at: 'prompt', complete: 100_000, host: HOST, summary: true,
-			...(adaptive ? { cutAtDefault: true } : { compaction: { cutAt: DEFAULT_CUT_AT } }) });
+test('saved cut estimates leave the default and explicit bands fixed after reopening', async () => {
+	const run = async (useDefault: boolean, after?: number) => {
+		const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST, summary: true,
+			...(useDefault ? { cutAtDefault: true } : { compaction: { cutAt: DEFAULT_CUT_AT } }) });
 		try {
 			const prior = h.manager.getBranch().findLast(entry => entry.type === 'compaction');
 			if (!prior || prior.type !== 'compaction') throw new Error('missing prior cut');
@@ -75,9 +71,9 @@ test('a saved cut raises the default band after reopening, while an explicit cut
 			return await h.run();
 		} finally { await h.cleanup(); }
 	};
-	const noField = await run(true), adaptive = await run(true, 100_000), explicit = await run(false, 100_000);
+	const noField = await run(true), saved = await run(true, 100_000), explicit = await run(false, 100_000);
 	expect(noField.cuts, noField.probe).toBe(1);
-	expect(adaptive.cuts, adaptive.probe).toBe(0);
+	expect(saved.cuts, saved.probe).toBe(1);
 	expect(explicit.cuts, explicit.probe).toBe(1);
 });
 
@@ -298,7 +294,7 @@ test('a request that fits the room is never rejected, however low the cut point;
 
 // A long prose history exercises the different amounts selected by lean and default bands.
 async function proseSession(cutAt: number | undefined, total: number) {
-	const h = await harness({ at: 'prompt', complete: 20000, host: HOST, compaction: { cutAt } });
+	const h = await harness({ at: 'prompt', complete: 20000, host: HOST, keepRecent: ROOM, compaction: { cutAt } });
 	try {
 		let n = 0;
 		const prose = (words: number) => Array.from({ length: words }, () => `word${(++n).toString(36)}`).join(' ');
@@ -346,15 +342,15 @@ test('receipts: cutAt is recorded when it is not 1, and a default receipt is as 
 	expect(receiptOf(standard.entries[0]!).triggerMarginTokens).toBe(2880);
 });
 
-test('the default cut point is 0.6: with no cutAt a request past 60% of the room is cut, and its receipt records the cut point', async () => {
-	expect(DEFAULT_CUT_AT).toBe(0.6);
+test('the default cut point is 1: with no cutAt a request past the room less margin is cut, with the default receipt', async () => {
+	expect(DEFAULT_CUT_AT).toBe(1);
 	for (const at of ['prompt', 'tool'] as const) {
 		const lean = bandOf(ROOM, DEFAULT_CUT_AT);
 		const below = await scenario({ at, complete: lean - 1, host: HOST, cutAtDefault: true });
 		expect(below.cuts, below.probe).toBe(0);
-		const inside = await scenario({ at, complete: Math.floor((lean + BAND) / 2), host: HOST, cutAtDefault: true });
+		const inside = await scenario({ at, complete: Math.floor((lean + ROOM) / 2), host: HOST, cutAtDefault: true });
 		expect(inside.cuts, inside.probe).toBe(1);
-		expect(inside.entries.map(receiptOf)[0]?.cutAt, inside.probe).toBe(DEFAULT_CUT_AT);
+		expect(inside.entries.map(receiptOf)[0]?.cutAt, inside.probe).toBeUndefined();
 		expect(inside.faults, inside.probe).toEqual([]);
 	}
 });

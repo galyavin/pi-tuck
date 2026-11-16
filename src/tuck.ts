@@ -52,14 +52,15 @@ import { rankRecallRows } from "./tuck/core/search-entries";
 export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileDialogue, prepareKeywordQuery, rankRecallRows };
 /** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation.
  * `_operatorManual` retains the exported positional slot for existing callers. */
-export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, _operatorManual = false, newPrompt = false, protectedPromptEntryId?: string) {
- return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, newPrompt, protectedPromptEntryId }, ctx, reserveTokens, measure, policy, retainCurrentInput);
+export function tuckDraft(tuck: Tuck, event: SessionBeforeCompactEvent, ctx: ExtensionContext, reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true, _operatorManual = false, newPrompt = false, protectedPromptEntryId?: string, keepRecentTokens?: number) {
+ return tuckObservedDraft(tuck, { branchEntries: event.branchEntries, tokensBefore: event.preparation.tokensBefore, previousSummary: event.preparation.previousSummary, newPrompt, protectedPromptEntryId,
+    keepRecentTokens: event.preparation.settings?.keepRecentTokens ?? keepRecentTokens }, ctx, reserveTokens, measure, policy, retainCurrentInput);
 }
 /** Shared compiler observes canonical branch and current token estimate; no native preparation utility. */
 /** `newPrompt`: the cut is planned for a run that has not begun (a prompt Pi has not appended yet, an operator's manual cut, Pi's own cut before
  * a run a custom message starts); the session has moved on from an ended run.
  * `reRenderSummary`: the cut is due, so its summary may be re-rendered smaller (see the `no_live_messages` branch below). */
-export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string; deepest?: boolean }, ctx: ExtensionContext,
+export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEntry[]; tokensBefore: number; previousSummary?: string; newPrompt?: boolean; reRenderSummary?: boolean; protectedPromptEntryId?: string; deepest?: boolean; keepRecentTokens?: number }, ctx: ExtensionContext,
  reserveTokens: number, measure: Measure, policy: RecallPolicy = {}, retainCurrentInput = true): Draft {
  const { isHistorySource, readable } = createRecall(policy);
 	const projected = ctx.sessionManager.buildSessionProjection();
@@ -327,7 +328,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const fixedRowsCost = preferredHigh.cost + lineCost(preferredLists.records);
     const baseCharacters = frameLength(fixedRowsCost, preferredHigh.rows.length + preferredLists.records.length);
     const base = price(baseCharacters, preferredBoundary);
-    const target = carriedTarget(model.contextWindow, reserveTokens, base, before);
+    // Cap historical fill at native keep-recent for post-cut headroom parity, preserving the floor and preferred tail.
+    const target = Math.min(carriedTarget(model.contextWindow, reserveTokens, base, before), Math.max(base, offset + (input.keepRecentTokens ?? Infinity)));
     // The old tail rule supplies an ordering boundary only. Its recent
     // suffix follows the openings, and is charged to the same total grant.
     const boundaries = [floorBoundary];
