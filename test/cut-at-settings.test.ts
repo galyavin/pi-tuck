@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { DEFAULT_CUT_AT } from '../src/budget';
 
 // `"cutAt"` in pi-tuck.json in Pi's agent folder is read by index.ts and handed to installCompaction; any value that is not a number above
 // 0 and at most 1 is a settings error, reported at the next session start with the other settings errors, and the default applies.
@@ -39,6 +40,7 @@ async function load(file: string | undefined) {
 test('without a settings file the cut point is not set and nothing is reported', async () => {
 	const r = await load(undefined);
 	expect(r.cutAt).toBeUndefined();
+	expect(r.cutAt ?? DEFAULT_CUT_AT).toBe(1);
 	expect(r.notices.filter(n => n.level === 'warning')).toEqual([]);
 });
 

@@ -122,7 +122,7 @@ test('real cuts record a mode that matches their view and content', async () => 
 	const seen = new Set<string>();
 	// Walk a protected latest input up to the room: the planner has to choose ever poorer views of the old history to make a cut.
 	for (let latest = 100000; latest <= 125500; latest += 500) {
-		const h = await harness({ at: 'prompt', complete: 60000, host: HOST });
+		const h = await harness({ at: 'prompt', complete: 60000, host: HOST, keepRecent: ROOM });
 		try {
 			h.manager.appendMessage({ role: 'user', content: 'q'.repeat(4 * latest), timestamp: 0 });
 			try { await h.session.compact(); } catch { /* refused near the room */ }

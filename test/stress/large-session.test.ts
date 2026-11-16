@@ -61,7 +61,8 @@ test.skipIf(!RUN)(`recall on a ~${TARGET_MB} MB session that grows by ~5 MB betw
  expect(sessionBytes).toBeGreaterThanOrEqual(TARGET_MB * 1e6);
  expect(m.getBranch().filter(e => e.type === 'compaction')).toHaveLength(Math.floor(i / 400));
 
- // Independent fixture oracle: readable message text plus serialized calls, without hidden thinking or saved summaries.
+ // Independent fixture oracle: public text and calls, then the fixture's plain
+ // reasoning_content thinking. F makes that field readable; saved summaries stay excluded.
  const originalText = (entryId: string) => {
   const entry = m.getEntry(entryId);
   if (entry?.type !== 'message') throw new Error('Expected an original fixture message: ' + entryId);
@@ -70,8 +71,11 @@ test.skipIf(!RUN)(`recall on a ~${TARGET_MB} MB session that grows by ~5 MB betw
    throw new Error('Unexpected fixture message role: ' + message.role);
   const content = message.content;
   if (typeof content === 'string') return content;
-  return content.flatMap(block => block.type === 'text' ? [block.text] : block.type === 'toolCall'
-   ? [JSON.stringify({ toolCall: { name: block.name, id: block.id, arguments: block.arguments } })] : []).join('\n');
+  const parts = content.flatMap(block => block.type === 'text' ? [block.text] : block.type === 'toolCall'
+   ? [JSON.stringify({ toolCall: { name: block.name, id: block.id, arguments: block.arguments } })] : []);
+  if (message.role === 'assistant') for (const block of content)
+   if (block.type === 'thinking' && block.thinkingSignature === 'reasoning_content') parts.push(block.thinking);
+  return parts.join('\n');
  };
  const matchingIds = () => new Set(m.getEntries().flatMap(entry => {
   if (entry.type !== 'message') return [];

@@ -29,7 +29,7 @@ for (const mutation of ['none', 'write', 'bash'] as const) {
     const result = call(seed, 'search', 'bash', { command: 'cd /work/repo && rg -n implementation src | head -20' }, output);
     padding(seed, 'before');
     const h = await harness({ at: 'prompt', complete: 0, host: 0, branch: seed.getBranch(), noHistory: true, noOpening: true,
-      systemTokens: 256, reserveTokens: 8192, keepRecent: 0, cutAtDefault: true,
+      systemTokens: 256, reserveTokens: 8192, keepRecent: 20000, cutAtDefault: true,
       limits: { contextWindow: 32768, maxTokens: 8192 }, usageRatio: 1, rejectOverWindow: true });
     const summaries = () => h.compactions().map(entry => entry.summary);
     try {

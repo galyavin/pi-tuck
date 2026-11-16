@@ -65,7 +65,7 @@ test('a 16k room, a live system part and a slow tokenizer: the boundary 1.0.1 re
 			return draft.compaction ? { draft: true, after: draft.after, mode: draft.mode, compaction: draft.compaction } : { draft: false, capacityRejected: Boolean(draft.capacityRejected), reason: draft.unavailable };
 		} });
 	if (decision.kind !== 'cut') throw new Error(JSON.stringify(decision));
-	expect(decision.target).toBe('room');
+	expect(decision.target).toBe('band');
 	// The cut keeps the fresh round native and lands the request under the room, by the same arithmetic.
 	const kept = manager.getBranch().findIndex(e => e.id === decision.plan.compaction.firstKeptEntryId);
 	// The pinned tail may also keep the current user native when it fits. The

@@ -18,7 +18,7 @@ const answer = (content: unknown[], stopReason = 'stop') => ({ role: 'assistant'
 	api: 'openai-completions', provider: 'fixture', model: 'fixture', timestamp: 0,
 	usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as never;
 interface Call { name?: string; command?: string; path?: string; text?: string; content?: ToolResultMessage['content']; isError?: boolean; noResult?: boolean; args?: object }
-function fixture(calls: Call[], cwd = '/kept-searches') {
+function fixture(calls: Call[], cwd = '/kept-searches', dialogueCharacters = 0) {
 	const manager = SessionManager.inMemory(cwd);
 	manager.getHeader()!.cwd = cwd;
 	manager.appendMessage({ role: 'user', content: 'Inspect the recorded files.', timestamp: 0 });
@@ -31,7 +31,7 @@ function fixture(calls: Call[], cwd = '/kept-searches') {
 	const results = calls.map((call, i) => append(call, `c${i}`));
 	for (let i = 0; i < 8; i++) {
 		append({ command: `cat log-${i}`, text: 'recorded output\n'.repeat(1500) }, `b${i}`);
-		manager.appendMessage(answer([{ type: 'text', text: `Finished step ${i}.` }]));
+		manager.appendMessage(answer([{ type: 'text', text: `Finished step ${i}.` + 'x'.repeat(dialogueCharacters) }]));
 	}
 	manager.appendMessage({ role: 'user', content: 'Continue the task.', timestamp: 0 });
 	const ctx = { cwd, sessionManager: manager, model: { contextWindow: 131072, maxTokens: 8192 } } as unknown as ExtensionContext;
@@ -176,7 +176,9 @@ function pricedDraft(s: ReturnType<typeof fixture>, reserve = 8192) {
 		return tuck.compileDialogue(input);
 	} });
 	const records = recordsOf(draft.compaction.summary), kept = keptOf(draft.compaction.summary);
-	const fixed = records.filter(r => r.kind === 'section' || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!));
+	// Price only the bare ledger and protected dialogue; additions share the room left by that compiler input.
+	const fixed = records.filter(r => r.kind === 'section' && ['Actions', 'Files'].includes(r.title!) || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!))
+		.map(r => r.kind === 'section' ? { ...r, text: r.text!.replace(/ \((?:output tail|definitions as of #\d+)\):\n[\s\S]*$/u, '') } : r);
 	return { draft, kept, maxSummaryCharacters: maxBriefChars + lineCost(fixed) };
 }
 
@@ -187,12 +189,12 @@ test('reads and searches merge newest first, with independent caps of four', () 
 	expect(kept.map(r => r.sourceIndex)).toEqual(kept.map(r => r.sourceIndex).sort((a, b) => b! - a!));
 });
 
-test('at equal recency reads spend the allowance first and searches are popped first', () => {
+test('at equal recency reads spend the content room before an equally sized search', () => {
 	// A real result belongs to one tool; force equal locators to exercise the explicit tie policy.
 	const s = fixture([...Array.from({ length: 56 }, (_, i) => ({ name: 'write', path: `written-${i}-` + 'p'.repeat(500) })),
 		{ name: 'read', path: 'a', text: 'whole read '.repeat(20) }]);
 	const sourceIndex = buildGlobalIndexById(s.manager.getEntries()).get(s.results.at(-1)!)!;
-	const search: TranscriptRecord = { kind: 'section', title: 'Kept-search', sourceIndex, text: 'whole search '.repeat(20) };
+	const search: TranscriptRecord = { ...keptReadCandidates([s.manager.getHeader()!, ...s.manager.getBranch()], buildGlobalIndexById(s.manager.getEntries()), () => true)[0]!, title: 'Kept-search', sourceIndex };
 	const mock = vi.spyOn(keptSearchModule, 'keptSearchCandidates').mockReturnValue([search]);
 	try {
 		const seen = new Set<number>();
@@ -219,23 +221,37 @@ test.each([32768, 262144])('reads and searches share the whole serialized allowa
 	for (const record of kept.filter(r => r.title === 'Kept-search')) expect(candidatesOf(s)).toContainEqual(record);
 });
 
-test('over target pops the last added result across the merged list before shrinking ledgers', () => {
-	const s = fixture([...Array.from({ length: 56 }, (_, i) => ({ name: 'write', path: `written-${i}-` + 'p'.repeat(500) })),
-		...Array.from({ length: 4 }, (_, i) => [{ name: 'read', path: `read-${i}`, text: 'whole read '.repeat(20) }, { command: `rg pattern${i} src`, text: 'whole search '.repeat(20) }]).flat()]);
+test('reads and searches lead the content lane together before output tails and definitions spend room', () => {
+	const s = fixture([
+		...Array.from({ length: 4 }, (_, i) => ({ name: 'write', path: `written-${i}.py`, args: { path: `written-${i}.py`, content: 'def written():' } })),
+		...Array.from({ length: 4 }, (_, i) => [{ name: 'read', path: `read-${i}`, text: 'whole read '.repeat(20) }, { command: `rg pattern${i} src`, text: 'whole search '.repeat(20) }]).flat(),
+	], '/kept-searches', 1000);
 	const expected = keptOf(draftOf(s).compaction.summary), seen = new Set<number>();
-	let shrunk = false;
-	for (let reserve = 118000; reserve < 125000; reserve += 10) {
-		const { compaction } = draftOf(s, reserve), records = recordsOf(compaction.summary), kept = keptOf(compaction.summary);
-		if (records.some(r => r.title === 'Files' && r.text!.includes('older files:'))) { expect(kept).toEqual([]); shrunk = true; break; }
+	let tailsGaveWay = false, definitionsGaveWay = false;
+	for (let reserve = 119000; reserve < 130500; reserve += 10) {
+		const { compaction, after } = draftOf(s, reserve), records = recordsOf(compaction.summary), kept = keptOf(compaction.summary);
 		seen.add(kept.length);
-		expect(kept).toEqual(expected.slice(0, kept.length));
+		// Costs differ between reads and searches. Whole-item admission may skip
+		// a search and still fit a smaller older read; neither kind is truncated.
+		for (const title of ['Kept-read', 'Kept-search']) {
+			const kind = kept.filter(r => r.title === title);
+			expect(kind).toEqual(expected.filter(r => r.title === title).slice(0, kind.length));
+		}
+		expect(kept.map(r => r.sourceIndex)).toEqual(kept.map(r => r.sourceIndex).sort((a, b) => b! - a!));
+		if (kept.length === 8) expect(records.filter(r => r.title === 'Files')).toHaveLength(9);
+		const tails = records.filter(r => r.title === 'Actions' && r.text!.includes('(output tail):')).length;
+		const definitions = records.filter(r => r.title === 'Files' && r.text!.includes('(definitions as of #')).length;
+		tailsGaveWay ||= kept.length === 8 && tails < records.filter(r => r.title === 'Actions' && r.sourceIndex !== undefined).length;
+		definitionsGaveWay ||= kept.length === 8 && definitions === 0;
+		expect(after).toBeLessThanOrEqual((compaction.details as { carriedTarget: number }).carriedTarget);
 	}
 	expect(expected).toHaveLength(8);
 	expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-	expect(shrunk).toBe(true);
-});
+	expect(tailsGaveWay).toBe(true);
+	expect(definitionsGaveWay).toBe(true);
+}, 60000);
 
-test('only prefix searches are kept, and native tail extension preserves their allowance and provenance', () => {
+test('only prefix searches are kept, and native tail extension prices them and preserves provenance', () => {
 	const s = fixture([{ command: 'rg old a' }]);
 	s.append({ command: 'rg tail b', text: 'tail result' }, 'tail');
 	s.manager.appendMessage(answer([{ type: 'text', text: 'Read the tail.' }]));
@@ -246,7 +262,7 @@ test('only prefix searches are kept, and native tail extension preserves their a
 	expect(kept).toHaveLength(2);
 	for (const record of kept) expect(prefixIndices.has(record.sourceIndex)).toBe(true);
 	const target = (compaction.details as { carriedTarget: number }).carriedTarget;
-	expect(lineCost(kept)).toBeLessThanOrEqual(Math.min(Math.floor(0.20 * (compaction.summary.length + 4 * (target - draft.after))), 24000));
+	expect(draft.after).toBeLessThanOrEqual(target);
 });
 
 test('a mutation in the native suffix does not void a search from the prefix', () => {
@@ -267,11 +283,11 @@ test('native omission excludes the search result both before drafting and from a
 	expect(keptOf(draftOf(omitted).compaction.summary)).toEqual([]);
 });
 
-test('without a qualifying search the summary including kept reads is byte-identical to ba8de1e', () => {
+test('without a qualifying search the summary including kept reads matches the F content fixture', () => {
 	const s = fixture([{ command: 'npm test', text: 'passed' }, { name: 'read', path: 'a', text: 'whole read' }]);
 	const summary = draftOf(s).compaction.summary;
 	expect(keptOf(summary).map(r => r.title)).toEqual(['Kept-read']);
-	expect(createHash('sha256').update(summary).digest('hex')).toBe('6fb4af0750b51528554c49b6e087278c8d42a1f147fb1123e94b524aecbc9d1f');
+	expect(createHash('sha256').update(summary).digest('hex')).toBe('af94752de630d7cadb21225c2763faa5b86d808ff81f1df0d3e7fd3026914789');
 });
 
 
