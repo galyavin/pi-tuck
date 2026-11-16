@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { SessionManager, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { definitionLines, fileObservations, outputTail } from '../src/content-observations';
-import { actionItems, actionRecords, ledgerItems, ledgerRecords } from '../src/ledger';
+import { definitionLines, fileObservations } from '../src/content-observations';
+import { ledgerItems, ledgerRecords } from '../src/ledger';
 import { conversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft } from '../src/tuck';
 import { buildGlobalIndexById } from '../src/tuck/core/global-indices';
@@ -31,24 +31,6 @@ function fixture() {
   };
   return { manager, call, result, run, observations };
 }
-
-test('command tails retain the last three nonempty lines, cut at the start within 200 characters, and keep the result pointer', () => {
-  const f = fixture();
-  const output = 'old log\n'.repeat(1000) + 'x'.repeat(250) + '\n\nTests: 128 passed\n  \nErrors: 0\n';
-  f.run('bash', { command: 'npm test' }, output);
-  const entries = f.manager.getBranch(), indices = buildGlobalIndexById(entries);
-  const items = actionItems(entries, indices, () => true, new Set());
-  expect(items[0]!.outputTail).toBe('…' + 'x'.repeat(171) + '\nTests: 128 passed\nErrors: 0');
-  expect(items[0]!.outputTail!.length).toBe(200);
-  expect(items[0]!.outputTail!.split('\n')).toHaveLength(3);
-  const rows = actionRecords(items, items.length, new Set(items));
-  expect(rows[1]!.text).toContain('(output: tuck_recall {"index":1}) (output tail):\n…');
-  expect(parseRecords(serializeRecords(rows))).toEqual(rows);
-  expect(outputTail('\n \n')).toBeUndefined();
-  expect(outputTail('one\n\ntwo\n')).toBe('one\ntwo');
-  expect(outputTail('old\na\nb\nc')).toBe('…a\nb\nc');
-  expect(outputTail('😊'.repeat(200))).not.toMatch(/…[\uDC00-\uDFFF]/u);
-});
 
 test('Go writes and Python reads supply exact numbered definition lines with their content source', () => {
   const f = fixture();
@@ -122,7 +104,7 @@ function rankedFixture(laterEdit = false, olderItems = false) {
 test('observations use room after dialogue and disappear before protected openings or the pinned native tail', () => {
   const f = rankedFixture(), large = f.draft(1200);
   if (!large.compaction) throw new Error(large.unavailable);
-  expect(large.compaction.summary).toContain('(output tail):');
+  expect(large.compaction.summary).not.toContain('(output tail):');
   expect(large.compaction.summary).toContain('(definitions as of #1):');
   let tight: ReturnType<typeof f.draft> | undefined;
   for (let room = 1150; room >= 350; room -= 5) {
@@ -136,7 +118,7 @@ test('observations use room after dialogue and disappear before protected openin
   expect(records.some(r => r.role === 'user' && r.text?.startsWith(f.opening.slice(0, 80)))).toBe(true);
   // The current native turn is the eighth answered turn; the other seven are quoted.
   for (let i = 1; i < 8; i++) expect(records.some(r => r.role === 'user' && r.text?.startsWith((`OPENING_${i}: ` + 'Task context. '.repeat(10)).slice(0, 80)))).toBe(true);
-  expect(tight.compaction.summary).toContain('- bash: npm test (output: tuck_recall');
+  expect(tight.compaction.summary).not.toContain('- bash: npm test');
   expect(tight.compaction.summary).toContain('- wrote/edited engine.go (tuck_recall');
   for (const d of [large, tight]) {
     if (!d.compaction) throw new Error(d.unavailable);
@@ -156,31 +138,25 @@ test('an edit in the kept tail invalidates a file map from the compacted prefix'
   expect(draft.compaction.summary).not.toContain('(definitions as of #');
 });
 
-test('room pressure removes older observations per item while their pointer lines remain', () => {
+test('room pressure removes older file maps per item while their pointer lines remain', () => {
   const f = rankedFixture(false, true);
-  let actionGaveWay = false, fileGaveWay = false;
-  for (let room = 2400; room >= 600 && !(actionGaveWay && fileGaveWay); room -= 10) {
+  let fileGaveWay = false;
+  for (let room = 2400; room >= 600 && !fileGaveWay; room -= 10) {
     const draft = f.draft(room);
     if (!draft.compaction) continue;
     const records = parseRecords(splitSummary(draft.compaction.summary)!.body);
     const line = (needle: string) => records.find(r => r.kind === 'section' && r.text?.startsWith(needle))?.text;
-    const newAction = line('- bash: npm test'), oldAction = line('- bash: older-command');
     const newFile = line('- wrote/edited engine.go'), oldFile = line('- wrote/edited older.py');
-    if (newAction && oldAction) {
-      const newer = newAction.includes('(output tail):'), older = oldAction.includes('(output tail):');
-      expect(!older || newer).toBe(true);
-      actionGaveWay ||= newer && !older;
-    }
+    expect(records.filter(r => r.title === 'Actions' || r.title === 'Output')).toEqual([]);
     if (newFile && oldFile) {
       const newer = newFile.includes('(definitions as of #'), older = oldFile.includes('(definitions as of #');
       expect(!older || newer).toBe(true);
       fileGaveWay ||= newer && !older;
     }
   }
-  expect(actionGaveWay).toBe(true);
   expect(fileGaveWay).toBe(true);
 });
 
-test('the closing instruction directs command recall and preserves the file reread instruction', () => {
-  expect(CLOSING_INSTRUCTION).toBe('Only the dialogue and the actions and files listed above carry over. Files created by commands are not listed: Before re-running a command listed above, read its output with tuck_recall instead. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.');
+test('the closing instruction carries only dialogue and files and preserves the file reread instruction', () => {
+  expect(CLOSING_INSTRUCTION).toBe('Only the dialogue and the files listed above carry over. Re-read a file before editing it or importing from it. Use tuck_recall for anything else. Treat anything not shown here as unknown.');
 });

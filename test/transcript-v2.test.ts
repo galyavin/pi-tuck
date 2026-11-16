@@ -4,7 +4,7 @@ import { escapedLength, LEGACY_TRANSCRIPT_HEADER, parseRecords, serializeRecord,
 import { DIALOGUE_SUFFIX } from '../src/tuck/core/format';
 import { filterOmittedSummary, projectedMessages } from '../src/omissions';
 import { blockRecords, decorateRecord, isDialogue, omissionRecord } from '../src/tuck/core/brief';
-import { actionRecords, ledgerRecords } from '../src/ledger';
+import { ledgerRecords } from '../src/ledger';
 import { shrinkDialogue, wholeDialogue } from '../src/tuck/core/shrink';
 import { measurableConversationTokens } from '../src/budget';
 import { tuck, tuckObservedDraft } from '../src/tuck';
@@ -187,7 +187,7 @@ test('the version a summary was written in decides how its records are read', ()
 });
 
 // ── Every record this build emits ──
-test('records the dialogue, the ledger and the action trail emit round trip exactly, field order included', () => {
+test('dialogue, Files and legacy Actions records round trip exactly, field order included', () => {
 	const seen = new Set<string>();
 	let omissions = 0, clipped = 0, timed = 0;
 	for (let seed = 1; seed <= 60; seed++) {
@@ -206,7 +206,7 @@ test('records the dialogue, the ledger and the action trail emit round trip exac
 		records.push({ kind: 'omission', role: 'user', count: 1, sourceIndices: [3], reason: 'Earlier omission.', sourceTimes: [at(3, { basis: 'unknown' })] });
 		records.push({ kind: 'omission', reason: 'Historical tool actions and observations omitted; read original sources with tuck_recall' });
 		records.push(...ledgerRecords([{ path: 'src/a.ts', operation: 'read', sourceIndex: 4, resolvable: true }, { path: 'b c\\d.ts', operation: 'wrote/edited', resolvable: false }, { path: 'e.ts', operation: 'read', sourceIndex: 1, resolvable: false }], 2));
-		records.push(...ledgerRecords([]), ...actionRecords([{ text: 'bash: npm test', failed: true, sourceIndex: 9, resolvable: true }, { text: 'x: y', failed: false, resolvable: false }], 1));
+		records.push(...ledgerRecords([]), { kind: 'section', title: 'Actions', text: '- bash: npm test (failed) (output: tuck_recall {\"index\":9})', sourceIndex: 9 });
 		for (const r of records) {
 			seen.add(`${r.kind}${r.span ? ':span' : ''}${r.count !== undefined ? ':count' : ''}${r.sourceTimes ? ':time' : ''}${r.sourceEntryId !== undefined ? ':id' : ''}`);
 			if (r.kind === 'omission') omissions++;

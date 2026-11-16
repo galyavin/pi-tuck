@@ -93,16 +93,17 @@ test('plain thinking is newest first, including multiple blocks in one source, a
   expect((tuckRecall(tuck, entries, manager.getBranch(), { query: 'SIGNED_SECRET' }) as { hits: unknown[] }).hits).toEqual([]);
 });
 
-test('thinking gives way before output tails or definition maps, with the native tail unchanged', () => {
+test('thinking gives way before definition maps, with no output lane and the native tail unchanged', () => {
   const f = fixture(), large = f.draft(2400);
   if (!large.compaction) throw new Error(large.unavailable);
   expect(large.compaction.summary).toContain('Thinking:');
   let tight: ReturnType<typeof f.draft> | undefined;
-  for (let room = 2390; room >= 500; room -= 10) {
+  for (let room = 2395; room >= 150; room -= 5) {
     const draft = f.draft(room);
     if (!draft.compaction || draft.compaction.firstKeptEntryId !== large.compaction.firstKeptEntryId) continue;
     const summary = draft.compaction.summary;
-    if (!summary.includes('Thinking:') && summary.includes('(output tail):') && summary.includes('(definitions as of #')) { tight = draft; break; }
+    expect(rowsOf(summary).filter(r => r.title === 'Actions' || r.title === 'Output')).toEqual([]);
+    if (!summary.includes('Thinking:') && summary.includes('(definitions as of #')) { tight = draft; break; }
   }
   expect(tight?.compaction).toBeDefined();
   for (const draft of [large, tight!]) {

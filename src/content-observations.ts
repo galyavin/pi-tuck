@@ -6,8 +6,6 @@ import { readableContentParts } from "./tuck/core/readable-content";
 import type { TranscriptRecord } from "./tuck/core/transcript";
 import { MAX_RECALL_CHARACTERS } from "./recall";
 
-export const MAX_OUTPUT_TAIL_LINES = 3;
-export const MAX_OUTPUT_TAIL_CHARACTERS = 200;
 export const MAX_DEFINITION_LINES = 40;
 export const MAX_DEFINITION_CHARACTERS = 800;
 
@@ -18,21 +16,6 @@ export const DEFINITION_PATTERNS: readonly RegExp[] = [
   /^\s*export\s+(?:const|let)\b/u,
   /^\s*var\s*\(/u,
 ];
-
-/** The last nonempty physical lines, with a leading marker whenever earlier text was cut.
- * The marker and embedded newlines spend the same 200-character allowance. */
-export function outputTail(output: string): string | undefined {
-  const lines = output.split(/\r\n|\n|\r/u).filter(line => line.trim());
-  if (!lines.length) return undefined;
-  let text = lines.slice(-MAX_OUTPUT_TAIL_LINES).join("\n");
-  const cut = lines.length > MAX_OUTPUT_TAIL_LINES || text.length > MAX_OUTPUT_TAIL_CHARACTERS;
-  if (text.length > MAX_OUTPUT_TAIL_CHARACTERS - Number(cut)) {
-    let start = text.length - (MAX_OUTPUT_TAIL_CHARACTERS - 1);
-    if (/[\uDC00-\uDFFF]/u.test(text[start]!)) start++;
-    text = text.slice(start);
-  }
-  return (cut ? "…" : "") + text;
-}
 
 /** Whole matching source lines, numbered in the file. Both caps include numbers and newlines. */
 export function definitionLines(content: string, firstLine = 1): string | undefined {

@@ -191,8 +191,8 @@ function pricedDraft(s: ReturnType<typeof fixture>, reserve = 8192) {
 	const records = recordsOf(draft.compaction.summary), kept = keptOf(draft.compaction.summary);
 	// The compiler receives room after the bare ledger and protected dialogue;
 	// content additions must not inflate the allowance they are checked against.
-	const fixed = records.filter(r => r.kind === 'section' && ['Actions', 'Files'].includes(r.title!) || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!))
-		.map(r => r.kind === 'section' ? { ...r, text: r.text!.replace(/ \((?:output tail|definitions as of #\d+)\):\n[\s\S]*$/u, '') } : r);
+	const fixed = records.filter(r => r.kind === 'section' && r.title === 'Files' || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!))
+		.map(r => r.kind === 'section' ? { ...r, text: r.text!.replace(/ \(definitions as of #\d+\):\n[\s\S]*$/u, '') } : r);
 	return { draft, kept, maxSummaryCharacters: maxBriefChars + lineCost(fixed) };
 }
 
@@ -259,22 +259,20 @@ test('only reads before the final cut boundary can be kept, including when spare
 	expect(draft.after).toBeLessThanOrEqual(target);
 });
 
-test('kept reads give way as whole items, newest kept, before output tails and definition maps are spent', () => {
+test('kept reads give way as whole items, newest kept, before definition maps are spent', () => {
 	const s = fixture([
 		...Array.from({ length: 4 }, (_, i) => ({ name: 'write', path: `written-${i}.py`, args: { path: `written-${i}.py`, content: 'def written():\n    pass' } })),
 		...Array.from({ length: 4 }, (_, i) => ({ path: `read-${i}`, text: `whole output ${i}: ` + 'x'.repeat(80) })),
 	], '/kept-reads', 1000);
 	const expected = candidatesOf(s), seen = new Set<number>();
-	let tailsGaveWay = false, definitionsGaveWay = false;
+	let definitionsGaveWay = false;
 	for (let reserve = 119000; reserve < 130500; reserve += 10) {
 		const { compaction } = draftOf(s, reserve), records = recordsOf(compaction.summary), kept = keptOf(compaction.summary);
 		seen.add(kept.length);
 		expect(kept).toEqual(expected.slice(0, kept.length));
-		expect(records.filter(r => r.title === 'Actions')).toHaveLength(9);
+		expect(records.filter(r => r.title === 'Actions' || r.title === 'Output')).toEqual([]);
 		expect(records.filter(r => r.title === 'Files')).toHaveLength(9);
-		const tails = records.filter(r => r.title === 'Actions' && r.text!.includes('(output tail):')).length;
 		const definitions = records.filter(r => r.title === 'Files' && r.text!.includes('(definitions as of #')).length;
-		tailsGaveWay ||= kept.length === 4 && tails < 8;
 		definitionsGaveWay ||= kept.length === 4 && definitions === 0;
 		expect(records.some(r => r.role === 'user' && r.text === 'Inspect the recorded files.')).toBe(true);
 		const branch = s.manager.getBranch(), boundary = branch.findIndex(e => e.id === compaction.firstKeptEntryId);
@@ -282,7 +280,6 @@ test('kept reads give way as whole items, newest kept, before output tails and d
 		expect(branch.slice(boundary).some(e => e.type === 'message' && e.message.role === 'toolResult')).toBe(false);
 	}
 	expect([...seen].sort()).toEqual([0, 1, 2, 3, 4]);
-	expect(tailsGaveWay).toBe(true);
 	expect(definitionsGaveWay).toBe(true);
 }, 60_000);
 
@@ -311,11 +308,11 @@ test('a kept whole read suppresses a definition map for a Windows alias last rea
 	expect(files[0]!.text).not.toContain('(definitions as of #');
 });
 
-test('without read candidates the summary is byte-identical to the arm F (41bf248) fixture', () => {
+test('without read candidates the summary is byte-identical to the k11a fixture', () => {
 	const s = fixture([{ name: 'write', path: 'out.txt', text: 'written' }]);
 	const summary = draftOf(s).compaction.summary;
 	expect(keptOf(summary)).toEqual([]);
-	expect(createHash('sha256').update(summary).digest('hex')).toBe('209ac35348e109e3d57a84d1b844e78d89a1528ca4a82ea0fa83faebe9c61ce4');
+	expect(createHash('sha256').update(summary).digest('hex')).toBe('eed0c877408a3d5c36017377f789ad236270197ae17524d57849bd2cbb63face');
 });
 
 test('native omission of a kept result removes its own record and preserves the other kept read', () => {

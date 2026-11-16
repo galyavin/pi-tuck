@@ -177,8 +177,8 @@ function pricedDraft(s: ReturnType<typeof fixture>, reserve = 8192) {
 	} });
 	const records = recordsOf(draft.compaction.summary), kept = keptOf(draft.compaction.summary);
 	// Price only the bare ledger and protected dialogue; additions share the room left by that compiler input.
-	const fixed = records.filter(r => r.kind === 'section' && ['Actions', 'Files'].includes(r.title!) || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!))
-		.map(r => r.kind === 'section' ? { ...r, text: r.text!.replace(/ \((?:output tail|definitions as of #\d+)\):\n[\s\S]*$/u, '') } : r);
+	const fixed = records.filter(r => r.kind === 'section' && r.title === 'Files' || r.kind === 'excerpt' && r.role === 'user' && mandatory.has(r.sourceIndex!))
+		.map(r => r.kind === 'section' ? { ...r, text: r.text!.replace(/ \(definitions as of #\d+\):\n[\s\S]*$/u, '') } : r);
 	return { draft, kept, maxSummaryCharacters: maxBriefChars + lineCost(fixed) };
 }
 
@@ -221,14 +221,14 @@ test.each([32768, 262144])('reads and searches share the whole serialized allowa
 	for (const record of kept.filter(r => r.title === 'Kept-search')) expect(candidatesOf(s)).toContainEqual(record);
 });
 
-test('reads and searches lead the content lane together before output tails and definitions spend room', () => {
+test('reads and searches lead the content lane together before definitions spend room', () => {
 	const s = fixture([
-		...Array.from({ length: 4 }, (_, i) => ({ name: 'write', path: `written-${i}.py`, args: { path: `written-${i}.py`, content: 'def written():' } })),
-		...Array.from({ length: 4 }, (_, i) => [{ name: 'read', path: `read-${i}`, text: 'whole read '.repeat(20) }, { command: `rg pattern${i} src`, text: 'whole search '.repeat(20) }]).flat(),
+		...Array.from({ length: 4 }, (_, i) => ({ name: 'write', path: `written-${i}.py`, args: { path: `written-${i}.py`, content: 'def written_with_long_name():\n'.repeat(40) } })),
+		...Array.from({ length: 4 }, (_, i) => [{ name: 'read', path: `read-${i}`, text: 'whole read '.repeat(10) }, { command: `rg pattern${i} src`, text: 'whole search '.repeat(10) }]).flat(),
 	], '/kept-searches', 1000);
 	const expected = keptOf(draftOf(s).compaction.summary), seen = new Set<number>();
-	let tailsGaveWay = false, definitionsGaveWay = false;
-	for (let reserve = 119000; reserve < 130500; reserve += 10) {
+	let definitionsGaveWay = false;
+	for (let reserve = 117000; reserve < 130500; reserve += 10) {
 		const { compaction, after } = draftOf(s, reserve), records = recordsOf(compaction.summary), kept = keptOf(compaction.summary);
 		seen.add(kept.length);
 		// Costs differ between reads and searches. Whole-item admission may skip
@@ -239,15 +239,13 @@ test('reads and searches lead the content lane together before output tails and 
 		}
 		expect(kept.map(r => r.sourceIndex)).toEqual(kept.map(r => r.sourceIndex).sort((a, b) => b! - a!));
 		if (kept.length === 8) expect(records.filter(r => r.title === 'Files')).toHaveLength(9);
-		const tails = records.filter(r => r.title === 'Actions' && r.text!.includes('(output tail):')).length;
+		expect(records.filter(r => r.title === 'Actions' || r.title === 'Output')).toEqual([]);
 		const definitions = records.filter(r => r.title === 'Files' && r.text!.includes('(definitions as of #')).length;
-		tailsGaveWay ||= kept.length === 8 && tails < records.filter(r => r.title === 'Actions' && r.sourceIndex !== undefined).length;
 		definitionsGaveWay ||= kept.length === 8 && definitions === 0;
 		expect(after).toBeLessThanOrEqual((compaction.details as { carriedTarget: number }).carriedTarget);
 	}
 	expect(expected).toHaveLength(8);
 	expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-	expect(tailsGaveWay).toBe(true);
 	expect(definitionsGaveWay).toBe(true);
 }, 60000);
 
@@ -283,11 +281,11 @@ test('native omission excludes the search result both before drafting and from a
 	expect(keptOf(draftOf(omitted).compaction.summary)).toEqual([]);
 });
 
-test('without a qualifying search the summary including kept reads matches the F content fixture', () => {
+test('without a qualifying search the summary including kept reads matches the k11a content fixture', () => {
 	const s = fixture([{ command: 'npm test', text: 'passed' }, { name: 'read', path: 'a', text: 'whole read' }]);
 	const summary = draftOf(s).compaction.summary;
 	expect(keptOf(summary).map(r => r.title)).toEqual(['Kept-read']);
-	expect(createHash('sha256').update(summary).digest('hex')).toBe('af94752de630d7cadb21225c2763faa5b86d808ff81f1df0d3e7fd3026914789');
+	expect(createHash('sha256').update(summary).digest('hex')).toBe('8cf499f8c3de98d1eaebe2f044fb89a9f896dd077f9c57a3a2299ef380ce197a');
 });
 
 

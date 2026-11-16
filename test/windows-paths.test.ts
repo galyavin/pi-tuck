@@ -3,7 +3,7 @@ import { win32 } from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { pathKey } from '../src/path-key';
 import { keptReadCandidates } from '../src/kept-reads';
-import { actionItems, ledgerItems, ledgerRecords } from '../src/ledger';
+import { ledgerItems, ledgerRecords } from '../src/ledger';
 import { tuck, tuckRecall } from '../src/tuck';
 import { buildGlobalIndexById } from '../src/tuck/core/global-indices';
 
@@ -124,11 +124,12 @@ test.each(['Get-Content $(Remove-Item .\\src\\a.ts)', 'type %MUTATING% .\\src\\a
   expect(f.candidates()).toEqual([]);
 });
 
-test('Windows actions retain the exact recorded command and their result locator', () => {
+test('Windows command recall retains the exact recorded command and result', () => {
   const f = fixture([]), command = 'Copy-Item C:\\repo\\src\\a.ts .\\backup\\a.ts';
   const result = f.call('bash', { command }, 'copied');
   const indices = buildGlobalIndexById(f.manager.getEntries());
-  expect(actionItems(f.manager.getBranch(), indices, () => true, new Set())).toEqual([
-    { text: `bash: ${command}`, failed: false, sourceIndex: indices.get(result!), resolvable: true, outputTail: 'copied' },
-  ]);
+  const page = tuckRecall(tuck, f.manager.getEntries(), f.manager.getBranch(), { index: indices.get(result!)! }) as { entries: { text: string }[] };
+  expect(page.entries[0]!.text).toBe('copied');
+  const call = tuckRecall(tuck, f.manager.getEntries(), f.manager.getBranch(), { index: indices.get(result!)! - 1 }) as { entries: { text: string }[] };
+  expect(JSON.parse(call.entries[0]!.text).toolCall.arguments.command).toBe(command);
 });

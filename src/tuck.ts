@@ -6,7 +6,7 @@ import { DIALOGUE_SUFFIX } from "./tuck/core/format";
 import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
-import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
+import { MAX_LEDGER_LINES, ledgerItems, ledgerRecords } from "./ledger.js";
 import { keptReadCandidates } from "./kept-reads.js";
 import { keptSearchCandidates } from "./kept-searches.js";
 import { fileObservations, thinkingRecords } from "./content-observations";
@@ -314,13 +314,13 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     }
     const offset = measure(floorProjection) - nativeAt(floorBoundary) - summaryTokens(floorSummary.length);
     const price = (characters: number, boundary: number) => offset + nativeAt(boundary) + summaryTokens(characters);
-    const listCache = new Map<number, { files: ReturnType<typeof ledgerItems>; actions: ReturnType<typeof actionItems>; records: TranscriptRecord[] }>();
+    const listCache = new Map<number, { files: ReturnType<typeof ledgerItems>; records: TranscriptRecord[] }>();
     const listsAt = (boundary: number) => {
         const cached = listCache.get(boundary);
         if (cached) return cached;
         const compacted = entries.slice(0, boundary), resolves = (entry: SessionEntry) => readable(entry) !== undefined;
-        const files = ledgerItems(compacted, indices, resolves, failedCalls, header.cwd), actions = actionItems(compacted, indices, resolves, failedCalls);
-        const lists = { files, actions, records: [...actionRecords(actions), ...ledgerRecords(files)] };
+        const files = ledgerItems(compacted, indices, resolves, failedCalls, header.cwd);
+        const lists = { files, records: ledgerRecords(files) };
         listCache.set(boundary, lists);
         return lists;
     };
@@ -363,14 +363,14 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const maxSummaryCharactersAt = (at: number) => Math.floor((target - offset - nativeAt(at)) * 4) - wrapperCharacters;
     const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
     let ledger: TranscriptRecord[] = lists.records;
-    let listedKeep = Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES);
+    let listedKeep = MAX_LEDGER_LINES;
     // List caps are existing ranking policy; only the carried target is a
     // spending limit. Candidate list sizes have fixed, cached line prices.
     if (price(frameLength(protectedView.cost + lineCost(ledger), protectedView.rows.length + ledger.length), boundary) > target) {
       ledger = [];
       listedKeep = 0;
-      for (let keep = 0; keep <= Math.min(Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES), Math.max(lists.files.length, lists.actions.length)); keep++) {
-        const candidate = [...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)];
+      for (let keep = 0; keep <= Math.min(MAX_LEDGER_LINES, lists.files.length); keep++) {
+        const candidate = ledgerRecords(lists.files, keep);
         if (price(frameLength(protectedView.cost + lineCost(candidate), protectedView.rows.length + candidate.length), boundary) <= target) {
             ledger = candidate; listedKeep = keep;
         }
@@ -456,7 +456,6 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         counts.set(record.title!, (counts.get(record.title!) ?? 0) + 1);
     }
     if (keptResults.length) offer = assemble(compiled.text, boundary);
-    const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
     const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
     const keptReadPaths = new Set(keptResults.filter(record => record.title === "Kept-read").map(record => {
         const heading = record.text!.slice(0, record.text!.indexOf("\n"));
@@ -465,28 +464,22 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const filesWithoutKeptReads = shownFiles.filter(item => !keptReadPaths.has(pathKey(item.path, header.cwd)));
     const observations = fileObservations(new Set(filesWithoutKeptReads.map(item => item.path)), entries, indices, failedCalls);
     for (const item of shownFiles) item.definitions = observations.get(item.path);
-    const outputs = new Set<(typeof lists.actions)[number]>(), definitions = new Set<(typeof lists.files)[number]>();
+    const definitions = new Set<(typeof lists.files)[number]>();
     let observationCost = 0;
     const fitsObservation = (extra: number) => price(offer.summary.length + observationCost + extra, boundary) <= target;
     // Each kind gives way as whole items, oldest first; an oversized newest
     // item cannot promote an older one. Pointer lines need no extra omission.
-    for (const item of shownActions) {
-        if (!item.outputTail) continue;
-        const extra = lineCost(actionRecords([item], 1, new Set([item]))) - lineCost(actionRecords([item], 1));
-        if (!fitsObservation(extra)) break;
-        outputs.add(item); observationCost += extra;
-    }
     for (const item of shownFiles) {
         if (!item.definitions) continue;
         const extra = lineCost(ledgerRecords([item], 1, new Set([item]))) - lineCost(ledgerRecords([item], 1));
         if (!fitsObservation(extra)) break;
         definitions.add(item); observationCost += extra;
     }
-    if (outputs.size || definitions.size) {
-        ledger = [...actionRecords(lists.actions, listedKeep, outputs), ...ledgerRecords(lists.files, listedKeep, definitions)];
+    if (definitions.size) {
+        ledger = ledgerRecords(lists.files, listedKeep, definitions);
         offer = assemble(compiled.text, boundary);
     }
-    // Plain thinking follows kept reads/searches, output tails and definition maps.
+    // Plain thinking follows kept reads/searches and definition maps.
     let thinkingCost = 0;
     for (const record of thinkingRecords(entries.slice(0, boundary), indices, openingLength)) {
         const extra = lineCost([record]);

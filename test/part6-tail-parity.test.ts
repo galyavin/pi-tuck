@@ -61,8 +61,25 @@ beforeAll(async () => {
   // Read the owner's pinned reference; never check out, stage, build in, or
   // modify another worktree. The exported compiler exists only for this test.
   directory = mkdtempSync(join(tmpdir(), 'pi-part6-tail-'));
-  const archive = execFileSync('git', ['archive', '5934daf', 'src'], { cwd: root });
+  const archive = process.env.PART6_REFERENCE_ARCHIVE
+    ? readFileSync(process.env.PART6_REFERENCE_ARCHIVE)
+    : execFileSync('git', ['archive', '5934daf', 'src'], { cwd: root });
   execFileSync('tar', ['-x', '-C', directory], { input: archive });
+  // Compare the unchanged thinking/tail rank under K11a's Files-only list cost.
+  // Otherwise deleting Actions frees room relative to the historical reference.
+  const reference = join(directory, 'src/tuck.ts');
+  let source = readFileSync(reference, 'utf8');
+  for (const [before, after] of [
+    ['records: [...actionRecords(actions), ...ledgerRecords(files)]', 'records: ledgerRecords(files)'],
+    ['Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES)', 'MAX_LEDGER_LINES'],
+    ['Math.max(lists.files.length, lists.actions.length)', 'lists.files.length'],
+    ['[...actionRecords(lists.actions, keep), ...ledgerRecords(lists.files, keep)]', 'ledgerRecords(lists.files, keep)'],
+  ]) {
+    expect(source).toContain(before);
+    source = source.replaceAll(before!, after!);
+  }
+  writeFileSync(reference, source);
+  writeFileSync(join(directory, 'src/tuck/core/format.ts'), readFileSync(new URL('../src/tuck/core/format.ts', import.meta.url)));
   writeFileSync(join(directory, 'package.json'), '{"type":"module"}');
   symlinkSync(join(root, 'node_modules'), join(directory, 'node_modules'));
   const compile = (dir: string) => {
