@@ -62,8 +62,8 @@ pi install npm:pi-tuck
 Then start a new Pi session. That is all. pi-tuck takes over Pi's compaction, both automatic and `/compact`. You change no setting.
 
 - Needs Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS, Linux or Windows (Windows since 1.2.0, tested on Windows 10 with Node 24 and Pi 1.5.2). On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once.
-- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.3.3`.
-- To pin a version, add it: `pi install npm:pi-tuck@1.3.3`.
+- Prefer GitHub? `pi install git:github.com/galyavin/pi-tuck@v1.3.4`.
+- To pin a version, add it: `pi install npm:pi-tuck@1.3.4`.
 - A Pi session that is already open keeps the pi-tuck build it started with. Restart it after an update.
 
 ## Uninstall
@@ -120,7 +120,6 @@ The plan: [`benchmark/PREREG.md`](benchmark/PREREG.md), [`benchmark/PREREG-32K.m
 Known limits today (each one is in the released code; fixed problems are listed in [`CHANGELOG.md`](CHANGELOG.md)):
 
 - pi-tuck's summary does not explain why things happened. It holds the words that were said, not a model's reading of them. The agent must look things up, and each look-up costs a tool call.
-- A session whose history already holds a summary written by Pi's own compaction can fail at every prompt while pi-tuck plans the request, with "pi-tuck could not plan this request (Cannot apply native source omission to an unsupported compaction summary)" or "(Cannot resolve custom sources in an unsupported compaction summary)". A new session does not have the problem. This was reported as issue 1 and is not fixed in 1.3.3.
 - A very large fixed setup in a small window, such as 40k of system prompt and tools at a 65,536 window, leaves too little free room for a good rhythm: every request is over the cut point, so cuts stay frequent and each frees little.
 - Between the room and the window, the reply reserve does not cushion a wrong token count. At a cold start an undercount can reach the provider. A provider that errors is caught and learned from. A server that truncates silently truncates, as it does for native Pi.
 - pi-tuck learns from a provider's refusal only when Pi classes it as a context overflow. If a provider keeps rejecting requests in a wording Pi does not class that way, or with a bare HTTP 413, pi-tuck does not recover on its own: the session stays intact, and every prompt can fail until the request shrinks. Try `/compact`.
