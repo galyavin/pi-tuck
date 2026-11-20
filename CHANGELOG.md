@@ -3,6 +3,17 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] - 2026-11-20
+
+### Fixed
+
+- **A learned server window no longer outlives a larger configured window.** When a server clips replies below the configured window,
+  pi-tuck learns the smaller window and keeps it in the session. It now also records the configured window it learned under, and
+  drops the learned value once the model's configured window differs, for example after a server and its models.json grew from
+  68,000 to 131,072 tokens. Before, every reopened session stayed capped at the old window and compacted far too often. Learned
+  windows saved by earlier versions carry no configured window and are not reused; if the server still clips, the next clipped
+  reply learns it again.
+
 ## [1.3.2] - 2026-11-15
 
 ### Fixed

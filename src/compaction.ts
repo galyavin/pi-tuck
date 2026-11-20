@@ -109,7 +109,9 @@ class Calibration {
     factor = 1;
     ratios: number[] = [];
     learnedContextWindow: number | undefined;
-    windowObservation: { message: AgentMessage; identity: string; window: number } | undefined;
+    /** The configured window the learned window was learned under; the learned window applies only while the model still has it. */
+    learnedCatalogue: number | undefined;
+    windowObservation: { message: AgentMessage; identity: string; window: number; catalogue: number } | undefined;
     pending: { identity: string; tokens: number; messages: Parameters<typeof convertToLlm>[0]; snapshot: ReturnType<typeof convertToLlm>; requestedMaxTokens?: () => number | undefined } | undefined;
     lastCeiling: number | null = null;
     estimatedTokens = 0;
@@ -123,7 +125,7 @@ class Calibration {
         this.pending = undefined;
         if (reason !== 'identity') this.windowObservation = undefined;
         if (reason === 'session') {
-            this.factor = 1; this.learnedContextWindow = undefined; this.estimatedTokens = 0;
+            this.factor = 1; this.learnedContextWindow = undefined; this.learnedCatalogue = undefined; this.estimatedTokens = 0;
             // Keep the old ratios/ceiling until their existing readers replace them, as in 1.1.1.
             this.seededIdentity = '';
             return;
@@ -133,7 +135,8 @@ class Calibration {
         const branch = ctx.sessionManager.getBranch();
         this.ratios = seedWindow(branch, this.identity);
         this.factor = Math.max(1, ...this.ratios);
-        this.learnedContextWindow = seedContextWindow(branch, this.identity);
+        this.learnedCatalogue = ctx.model?.contextWindow;
+        this.learnedContextWindow = seedContextWindow(branch, this.identity, this.learnedCatalogue);
     }
     learn(value: number, ctx: ExtensionContext, append: (kind: string, data: unknown) => void) {
         this.ratios.push(value); if (this.ratios.length > CALIBRATION_WINDOW) this.ratios.shift(); this.factor = Math.max(1, ...this.ratios);
@@ -203,7 +206,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (found) { recorder.capture("observed-entry", "current-native-branch-memory-not-durable", { entryId: found.id, diagnosticReceiptId: proposalId, details: found.type === "compaction" ? found.details : undefined }); recorder.cut(); proposalId = undefined; }
     });
     const captureDraft = (draft: NonNullable<ReturnType<typeof tuckDraft>["compaction"]>, ctx: ExtensionContext, reserve: number, reason: string, tokensBefore: number, retainCurrentInput: boolean, operatorManual: boolean, previousSummary?: string, budget?: { response: number; host: number; mandatory: number; target: Target; margin: number }) => recorder.measureInline(() => {
-        const attached = attachReceipt(draft, reason, reserve, contextWindow(ctx), { responseReserveTokens: budget?.response, hostInputTokens: budget?.host, mandatoryInputTokens: budget?.mandatory, target: budget?.target, triggerMarginTokens: budget?.margin, ...(cutAt === 1 ? {} : { cutAt }), calibrationFactor: calibration.factor, calibrationWindow: [...calibration.ratios], calibrationIdentity: calibration.identity, learnedContextWindow: calibration.learnedContextWindow, activeInputCeilingTokens: calibration.lastCeiling });
+        const attached = attachReceipt(draft, reason, reserve, contextWindow(ctx), { responseReserveTokens: budget?.response, hostInputTokens: budget?.host, mandatoryInputTokens: budget?.mandatory, target: budget?.target, triggerMarginTokens: budget?.margin, ...(cutAt === 1 ? {} : { cutAt }), calibrationFactor: calibration.factor, calibrationWindow: [...calibration.ratios], calibrationIdentity: calibration.identity, learnedContextWindow: calibration.learnedContextWindow, ...(calibration.learnedContextWindow !== undefined && calibration.learnedCatalogue !== undefined ? { catalogueContextWindow: calibration.learnedCatalogue } : {}), activeInputCeilingTokens: calibration.lastCeiling });
         proposalId = receiptId(attached);
         if (recorder.enabled) { try {
             const filtered = permittedEntries(ctx.sessionManager.getEntries(), options.recallPolicy);
@@ -258,7 +261,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("model_select", (_event, ctx) => { calibration.select(ctx); });
     const contextWindow = (ctx: ExtensionContext) => {
         identityFor(ctx);
-        return Math.min(ctx.model?.contextWindow ?? 0, calibration.learnedContextWindow ?? Infinity);
+        const model = ctx.model?.contextWindow ?? 0;
+        const learned = calibration.learnedCatalogue === ctx.model?.contextWindow ? calibration.learnedContextWindow : undefined;
+        return Math.min(model, learned ?? Infinity);
     };
     // This is the cap in Pi's built provider payload, including its context clamp and thinking adjustments.
     // An API with no explicit cap supplies no clipping evidence; never substitute the catalogue maximum.
@@ -319,9 +324,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (message.stopReason === "length" && requested !== undefined &&
             Number.isSafeInteger(output) && output >= 0 && output < requested &&
             Number.isSafeInteger(bound) && bound > 0 && bound <= ctx.model.contextWindow) {
+            // A learned window from another configured window no longer bounds this one.
+            if (calibration.learnedCatalogue !== ctx.model.contextWindow) calibration.learnedContextWindow = undefined;
+            calibration.learnedCatalogue = ctx.model.contextWindow;
             calibration.learnedContextWindow = Math.min(calibration.learnedContextWindow ?? Infinity, bound);
             serverClipped.add(message);
-            calibration.windowObservation = { message, identity: key, window: calibration.learnedContextWindow };
+            calibration.windowObservation = { message, identity: key, window: calibration.learnedContextWindow, catalogue: ctx.model.contextWindow };
         }
         // A request that was answered cannot have held more than the model's window, so a report above it describes something that never happened.
         // Learning from one sets the factor for the requests after it: a 60,000-token cache read reported in a 32,768-token window made a
@@ -332,7 +340,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (standDown(ctx)) return;
         if (calibration.windowObservation?.message !== event.message) return;
         const observation = calibration.windowObservation; calibration.windowObservation = undefined;
-        pi.appendEntry(WINDOW_RECEIPT, { calibrationIdentity: observation.identity, learnedContextWindow: observation.window,
+        pi.appendEntry(WINDOW_RECEIPT, { calibrationIdentity: observation.identity, learnedContextWindow: observation.window, catalogueContextWindow: observation.catalogue,
             serverClippedReplyId: event.messageEntryId } satisfies WindowReceipt);
     });
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
