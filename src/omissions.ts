@@ -95,8 +95,10 @@ export function filterCustomQuotes(summary: string, entries: readonly SessionEnt
  return transcriptHeader(version) + '\n' + retained.join('\n') + closing;
 }
 type ProjectedMessages = ReturnType<ExtensionContext['sessionManager']['buildSessionProjection']>['messages'];
-/** The saved conversation as this compactor delivers it: native omissions and ineligible custom quotes removed from summaries. */
-function projectMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy: RecallPolicy | undefined, allowForeign: boolean): ProjectedMessages {
+/** The saved conversation as this compactor delivers it: native omissions and ineligible custom quotes removed from its own summaries. A
+ * summary of another format (Pi's own /compact before pi-tuck was loaded, an empty draft) cannot be filtered and goes out as it is, as
+ * native Pi sends it; the next pi-tuck cut replaces it. Failing closed on it left such a session unable to send any prompt (issue #1). */
+function projectMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy: RecallPolicy | undefined): ProjectedMessages {
  const entries = ctx.sessionManager.getEntries(), branch = ctx.sessionManager.getBranch();
  const omitted = omittedSourceIndices(entries, branch);
  const lastCut = branch.findLastIndex(entry => entry.type === 'compaction');
@@ -108,18 +110,14 @@ function projectMessages(messages: ProjectedMessages, ctx: ExtensionContext, pol
    const index = indices.get(entry.targetId); if (index !== undefined) afterCut.add(index);
   }
  }
- return messages.map(message => message.role === 'compactionSummary' && (!allowForeign || splitSummary(message.summary) !== undefined)
+ return messages.map(message => message.role === 'compactionSummary' && splitSummary(message.summary) !== undefined
   ? { ...message, summary: filterCustomQuotes(filterOmittedSummary(message.summary, omitted, entries,
       cut?.type === 'compaction' && cut.summary === message.summary ? afterCut : new Set()), entries, branch, policy) } : message);
 }
 export function projectedMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy?: RecallPolicy): ProjectedMessages {
- return projectMessages(messages, ctx, policy, false);
+ return projectMessages(messages, ctx, policy);
 }
-/**
- * The same as `projectedMessages` for every summary in this compactor's format, and it never throws for any other: a summary of another
- * format (a Pi default summary, an empty draft) cannot be filtered and is left as it is. For counting a conversation that a cut is about
- * to replace, such as an operator's /compact on a session whose saved summary is foreign. The context hook and the triggers stay strict.
- */
+/** The planner's name for the same projection (kept for its callers). */
 export function measurableMessages(messages: ProjectedMessages, ctx: ExtensionContext, policy?: RecallPolicy): ProjectedMessages {
- return projectMessages(messages, ctx, policy, true);
+ return projectMessages(messages, ctx, policy);
 }
