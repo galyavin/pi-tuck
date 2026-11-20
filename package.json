@@ -46,7 +46,8 @@
     "index.ts",
     "src",
     "dist",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "NOTICE"
   ],
   "scripts": {
     "check": "tsc -p tsconfig.tests.json",
