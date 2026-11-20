@@ -20,6 +20,10 @@ on:
         description: 'Optional line appended to the release notes.'
         required: false
         default: ''
+      latest:
+        description: 'Mark this release Latest (false for backfilling older tags).'
+        required: false
+        default: 'true'
 
 permissions:
   contents: read
@@ -57,6 +61,7 @@ jobs:
     env:
       TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
       APPEND_NOTE: ${{ inputs.append_note }}
+      LATEST: ${{ github.event_name == 'push' && 'true' || inputs.latest }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -70,13 +75,13 @@ jobs:
           grep -q '[^[:space:]]' notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
           if [ -n "$APPEND_NOTE" ]; then printf '\n%s\n' "$APPEND_NOTE" >> notes.md; fi
           cat notes.md
-      - name: Create or update the GitHub Release, marked Latest
+      - name: Create or update the GitHub Release (Latest unless backfilling)
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TAG" --notes-file notes.md --latest
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md --latest="$LATEST"
           else
-            gh release create "$TAG" --title "$TAG" --notes-file notes.md --latest --verify-tag
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --latest="$LATEST" --verify-tag
           fi
 
   exchange-check:
