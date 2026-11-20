@@ -3,6 +3,16 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - 2026-11-20
+
+### Fixed
+
+- **A session that already holds a summary from Pi's own `/compact` works with pi-tuck.** Loading pi-tuck into a session whose history
+  already contained a summary written by Pi's built-in compaction, not by pi-tuck, made every prompt fail before it was sent ("pi-tuck could
+  not plan this request (Cannot resolve custom sources in an unsupported compaction summary)"), so the session could neither continue nor
+  reach a cut. Such a summary is now sent as it is, as Pi sends it, and pi-tuck's next cut replaces it. Thanks to basileaw for the detailed
+  report and root cause (#1).
+
 ## [1.3.3] - 2026-11-20
 
 ### Fixed
