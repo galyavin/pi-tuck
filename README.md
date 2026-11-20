@@ -34,7 +34,7 @@ Pi's built-in compaction asks a model to write the summary. pi-tuck builds it fr
 What these numbers cover:
 
 - **Time, context and 128k tasks.** One live run of pi-tuck 1.0.1: 10 chains of 30 SWE-bench Verified tasks, window 128,000. A local model wrote the built-in summaries. The medians come from 46 pi-tuck cuts and 48 built-in cuts. The pi-tuck time is an upper bound, read from the session file.
-- **Retention.** The claim, as [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) words it: **pi-tuck, answering with its recall tools, retains probed facts at a rate not more than 3 points below that of "Pi's compaction prompts on mac-studio/main:xhigh" (20 recordings) or of "Pi's compaction prompts on GPT-6.1 Terra" (19 of 20 recordings, s09-A missing), each answering from its summary alone, on these probes.** The test compares pi-tuck with its recall tool against Pi's summary alone. It does not compare summary with summary. Every probe was a mechanical fact: files changed, test result, required tag, error class or the session's result-line rule. The numbers cover cuts 1 to 4 only, because 52 of pi-tuck's 95 answer sets in the replay ended in an abort.
+- **Retention.** The claim, as [`benchmark/RESULTS-MAIN.md`](benchmark/RESULTS-MAIN.md) words it: **pi-tuck, answering with its recall tools, retains probed facts at a rate not more than 3 points below that of "Pi's compaction prompts on mac-studio/main:xhigh" (20 recordings) or of "Pi's compaction prompts on GPT-6.1 Terra" (19 of 20 recordings, s09-A missing), each answering from its summary alone, on these probes.** The test compares pi-tuck with its recall tool against Pi's summary alone. It does not compare summary with summary. Every probe was a mechanical fact: files changed, test result, required tag, error class or the session's result-line rule. The numbers cover cuts 1 to 4 only, because 52 of pi-tuck's 95 answer sets in the replay ended in an abort. This README makes no retention claim past cut 4.
 - **128k tasks.** The claim is only "no loss larger than 0.4 points". Chain s09 decides it: Pi's compaction failed 44 times there. Without s09 the lower bound is −0.4 points. With it, the bound is +0.3.
 - **32k tasks.** One model (DeepSeek V4.1 Flash), one window, pi-tuck 1.0.5. Only pi-tuck was held to the 16,384-token room: Pi's built-in compaction sent a request over it in 97 of 150 tasks. Observation masking, a third approach, resolved 117 (pi-tuck +2.0 points, lower bound −2.7: no difference shown). The pi-tuck arm had 1 dead task, so it missed its pre-registered bar of zero by one task.
 - **All results.** They come from SWE-bench-style tasks and may not carry to your work.
@@ -45,7 +45,7 @@ This README does not say that pi-tuck is as good as or better than any compactor
 
 The install command is at the top. Then start a new Pi session. pi-tuck takes over automatic compaction and `/compact`. You change no setting. pi-tuck downloads nothing.
 
-- Use Pi 1.2.0 or later, on macOS, Linux or Windows. Windows works since 1.2.0 (tested on Windows 10 with Node 24 and Pi 1.5.2).
+- Use Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS, Linux or Windows. Windows works since 1.2.0 (tested on Windows 10 with Node 24 and Pi 1.5.2).
 - On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once.
 - To install from GitHub, run `pi install git:github.com/galyavin/pi-tuck@v1.3.3`.
 - To pin a version, run `pi install npm:pi-tuck@1.3.3`.
