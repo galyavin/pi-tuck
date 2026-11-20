@@ -448,7 +448,7 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
    name: cell.name, plainPi, configuredWindow: cell.window, providerWindow, usageFactor: cell.usageRatio,
    answered: prompts.filter(p => p.answered).length, refused: prompts.filter(p => !p.answered && !p.hung).length,
    completedTurns: prompts.filter(p => p.completed).length,
-   learnedWindow: seedContextWindow(h.manager.getBranch(), JSON.stringify([h.session.model!.provider, h.session.model!.api, h.session.model!.id])) ?? null,
+   learnedWindow: seedContextWindow(h.manager.getBranch(), JSON.stringify([h.session.model!.provider, h.session.model!.api, h.session.model!.id]), h.session.model!.contextWindow) ?? null,
    lostTasks: lostTasks.size, lostTaskPrompts: [...lostTasks], stuckSessions: recovery.some(r => r.requests === 0 || r.hung) ? 1 : 0,
    hungPrompts: prompts.filter(p => p.hung).length,
    lengthStops: h.state.stops.filter(s => s === 'length').length, providerOverflows: h.state.overflows,

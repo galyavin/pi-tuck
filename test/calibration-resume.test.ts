@@ -72,7 +72,7 @@ test('a private calibration entry never enters the model projection or replaces 
  manager.appendCustomEntry(TYPE, { calibrationIdentity: KEY, calibrationWindow: [1.25] });
  expect(manager.buildSessionProjection().messages).toEqual(before);
  const { seedContextWindow, WINDOW_RECEIPT } = await import('../src/request-capacity');
- manager.appendCustomEntry(WINDOW_RECEIPT, { calibrationIdentity: KEY, learnedContextWindow: 15000, serverClippedReplyId: 'reply' });
+ manager.appendCustomEntry(WINDOW_RECEIPT, { calibrationIdentity: KEY, learnedContextWindow: 15000, catalogueContextWindow: 20000, serverClippedReplyId: 'reply' });
  manager.appendCustomEntry(TYPE, { calibrationIdentity: KEY, calibrationWindow: [1.3] });
- expect(seedContextWindow(manager.getBranch(), KEY)).toBe(15000);
+ expect(seedContextWindow(manager.getBranch(), KEY, 20000)).toBe(15000);
 });
