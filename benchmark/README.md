@@ -32,6 +32,8 @@ This folder holds the plans, the results and the code behind the numbers in the 
 | [`RESULTS-PILOT.md`](RESULTS-PILOT.md) | A thinking-level pilot, `medium` against `xhigh` | a 1.0.11 candidate (`22043bb`) | A coarse screen; the file says it is not a gate of any build |
 | [`RESULTS-REMEASURE.md`](RESULTS-REMEASURE.md) | A re-measure of retention that was stopped early | pi-tuck 1.0.11 | Closed with no result. The file says why |
 
+One result file lives outside this folder: [`rnd/replay32/RESULT-lean.md`](../rnd/replay32/RESULT-lean.md), a replay of cutting at 60% of the room instead of 100% and of the 1.0.2 changes. The README quotes it too.
+
 The README quotes numbers from `RESULTS-MAIN.md`, `RESULTS-32K-ACCEPT.md`, `RESULTS-DEFAULTS.md`, `RESULTS-DEFAULTS-1010.md`, `RESULTS-V108.md`, `RESULTS-V110.md`, `RESULTS-ADAPTIVE.md`, `RESULTS-V1016.md` and `RESULTS-V1018.md`.
 
 ## Plans
