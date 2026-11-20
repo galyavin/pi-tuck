@@ -47,8 +47,8 @@ Run the command at the top, then start a new Pi session. pi-tuck takes over auto
 
 - Use Pi 1.2.0 or later (tested on 1.2.0 and 1.4.0), on macOS, Linux or Windows. Windows works since 1.2.0 (tested on Windows 10 with Node 24 and Pi 1.5.2).
 - On an older Pi, pi-tuck stays off, Pi's own compaction runs, and pi-tuck says so once.
-- To install from GitHub, run `pi install git:github.com/galyavin/pi-tuck@v1.3.3`.
-- To pin a version, run `pi install npm:pi-tuck@1.3.3`.
+- To install from GitHub, run `pi install git:github.com/galyavin/pi-tuck@v1.3.4`.
+- To pin a version, run `pi install npm:pi-tuck@1.3.4`.
 - Restart an open Pi session after an update. It keeps the build it started with.
 
 ## Ask your history
@@ -131,7 +131,6 @@ The details are in [`docs/small-windows.md`](docs/small-windows.md).
 ## Known limits
 
 - The summary holds the words that were said, not why. The agent must look things up, and each look-up costs a tool call.
-- A session whose history already holds a summary from Pi's own compaction can fail at every prompt. The error is "pi-tuck could not plan this request (Cannot apply native source omission to an unsupported compaction summary)" or "(Cannot resolve custom sources in an unsupported compaction summary)". A new session does not have the problem. This is [issue 1](https://github.com/galyavin/pi-tuck/issues/1). It is not fixed in 1.3.3.
 - A very large fixed setup in a small window keeps cuts frequent, and each frees little. Example: 40k of system prompt and tools at a 65,536 window.
 - Between the room and the window, the reply reserve does not cushion a wrong token count. At a cold start, an undercount can reach the provider. A provider that errors is learned from. A server that truncates silently truncates, as it does for native Pi.
 - pi-tuck learns from a provider refusal only when Pi classes it as a context overflow. After a refusal in another wording, or a bare HTTP 413, pi-tuck does not recover. The session stays intact. Every prompt can fail until the request shrinks. Try `/compact`.
