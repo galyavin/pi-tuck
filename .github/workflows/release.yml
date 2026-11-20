@@ -2,12 +2,24 @@ name: Release
 
 # Publishes the tagged version to npm with trusted publishing (OIDC): no token, no interactive 2FA, provenance attached.
 # npmjs.com must list this repository and this file name (release.yml) as the package's trusted publisher.
-# Run it by hand (workflow_dispatch) to check the trusted-publisher exchange alone: it requests the OIDC token, shows the claims npm
-# matches, and asks npm for a publish token, which it never prints or uses. Nothing is published.
+# After a successful publish it creates the tag's GitHub Release, with that version's CHANGELOG section word for word, marked Latest.
+# Run it by hand (workflow_dispatch):
+# - with release_tag set, it does only the GitHub Release step for that tag (creates or updates it); it never publishes to npm;
+# - with release_tag empty, it checks the trusted-publisher exchange alone: it requests the OIDC token, shows the claims npm matches, and
+#   asks npm for a publish token, which it never prints or uses. Nothing is published.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag to create or update the GitHub Release for (e.g. v1.3.3). Empty: run the npm exchange check instead. Never publishes to npm.'
+        required: false
+        default: ''
+      append_note:
+        description: 'Optional line appended to the release notes.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -35,8 +47,40 @@ jobs:
       # Verbose logging shows the trusted-publisher exchange's outcome (npm logs it only at verbose).
       - run: npm --version && npm publish --loglevel verbose
 
+  github-release:
+    needs: publish
+    # On a tag push, only after npm publish succeeded; by hand, only when a tag is given (the publish job never runs by hand).
+    if: always() && ((github.event_name == 'push' && needs.publish.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+      APPEND_NOTE: ${{ inputs.append_note }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
+      - name: Release notes from the tag's CHANGELOG section, word for word
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          awk -v head="## [$version]" 'index($0, head) == 1 { found = 1; next } found && /^## \[/ { exit } found { print }' CHANGELOG.md > notes.md
+          grep -q '[^[:space:]]' notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          if [ -n "$APPEND_NOTE" ]; then printf '\n%s\n' "$APPEND_NOTE" >> notes.md; fi
+          cat notes.md
+      - name: Create or update the GitHub Release, marked Latest
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md --latest
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --latest --verify-tag
+          fi
+
   exchange-check:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag == ''
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
