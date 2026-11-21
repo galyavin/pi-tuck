@@ -92,7 +92,7 @@ jobs:
           HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
         run: |
           [ -n "$HOOK" ] || { echo "PAGES_DEPLOY_HOOK not set; skipped"; exit 0; }
-          curl -fsS -X POST "$HOOK" >/dev/null || echo "::warning::galyavin.com deploy hook failed; the row updates at the next site deploy"
+          curl -fsS --max-time 20 -X POST "$HOOK" >/dev/null || echo "::warning::galyavin.com deploy hook failed; the row updates at the next site deploy"
 
   exchange-check:
     if: github.event_name == 'workflow_dispatch' && inputs.release_tag == ''
