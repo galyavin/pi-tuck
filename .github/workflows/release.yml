@@ -83,6 +83,16 @@ jobs:
           else
             gh release create "$TAG" --title "$TAG" --notes-file notes.md --latest="$LATEST" --verify-tag
           fi
+      # Last and non-blocking: asks Cloudflare Pages to rebuild galyavin.com, whose build step writes this
+      # release's npm version and date into the pi-tuck row. A failure here never marks the release red.
+      - name: Refresh the pi-tuck row on galyavin.com
+        if: github.event_name == 'push' && env.LATEST == 'true'
+        continue-on-error: true
+        env:
+          HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
+        run: |
+          [ -n "$HOOK" ] || { echo "PAGES_DEPLOY_HOOK not set; skipped"; exit 0; }
+          curl -fsS -X POST "$HOOK" >/dev/null || echo "::warning::galyavin.com deploy hook failed; the row updates at the next site deploy"
 
   exchange-check:
     if: github.event_name == 'workflow_dispatch' && inputs.release_tag == ''
