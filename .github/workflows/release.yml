@@ -83,6 +83,16 @@ jobs:
           else
             gh release create "$TAG" --title "$TAG" --notes-file notes.md --latest="$LATEST" --verify-tag
           fi
+      - name: Refresh the pi-tuck row on galyavin.com
+        # Last step, tag releases only; it can never fail or block the release.
+        if: github.event_name == 'push' && env.LATEST == 'true'
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
+        run: |
+          [ -n "$HOOK" ] || { echo "PAGES_DEPLOY_HOOK not set; skipped"; exit 0; }
+          curl -fsS --max-time 20 -X POST "$HOOK" >/dev/null || echo "::warning::galyavin.com deploy hook failed; the row updates at the next site deploy"
 
   exchange-check:
     if: github.event_name == 'workflow_dispatch' && inputs.release_tag == ''
