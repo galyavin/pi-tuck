@@ -13,7 +13,7 @@ const profile = { model: "test-llama/local", extraTokens: 32, deadlineMs: 5000 }
 const thought = { type: "thinking" as const, thinking: "Six times" };
 const tool = { type: "toolCall" as const, name: "record_answer", id: "call_1", arguments: { answer: 42 } };
 
-function fixture(secondInput: number, secondStop: "toolUse" | "length" | "cancel" = "toolUse") {
+function fixture(secondInput: number, secondStop: "toolUse" | "length" | "cancel" = "toolUse", cached = 119) {
     const payloads: unknown[] = [];
     const controller = new AbortController();
     const native: ApiStreamSimpleFunction = (model, _context, options) => {
@@ -22,6 +22,8 @@ function fixture(secondInput: number, secondStop: "toolUse" | "length" | "cancel
             const payload = await options?.onPayload?.({ messages: context.messages, max_completion_tokens: model.maxTokens }, model);
             payloads.push(payload);
             const first = payloads.length === 1;
+            if (!first)
+                await options?.onProviderStreamEvent?.({ prompt_progress: { total: 120, cache: cached, processed: cached } }, model);
             const input = first ? 112 : secondInput;
             const output = first ? 8 : 16;
             const reason = first ? "length" : secondStop === "cancel" ? "aborted" : secondStop;
@@ -82,6 +84,16 @@ describe("bounded llama.cpp continuation", () => {
         expect(await stream.result()).toMatchObject({
             stopReason: "length", content: [{ type: "thinking", thinking: "Six times seven equals 42." }],
             usage: { output: 24 },
+        });
+    });
+
+    test("abandons a cold replay and preserves the first response without executing its tool", async () => {
+        const f = fixture(120, "toolUse", 0);
+        const result = await f.run(model, context).result();
+        expect(f.payloads).toHaveLength(2);
+        expect(result).toMatchObject({
+            stopReason: "length", content: [thought], usage: { output: 8 },
+            errorMessage: expect.stringContaining("without rebuilding context"),
         });
     });
 

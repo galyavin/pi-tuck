@@ -61,26 +61,52 @@ export function llamaContinuationStream(profile: LlamaContinuation, native: NonN
                     Number.isSafeInteger(remainder) && remainder > 0 && promptTokens(first) > 0 &&
                     request.n_predict === undefined && request.continue_final_message === undefined) {
                     const messages = [...request.messages, { role: "assistant", content: "", reasoning_content: thought }];
-                    const payload = { ...request, messages, max_completion_tokens: remainder, add_generation_prompt: false, continue_final_message: "reasoning_content" } as Wire;
+                    const payload = { ...request, messages, max_completion_tokens: remainder, add_generation_prompt: false,
+                        continue_final_message: "reasoning_content", return_progress: true } as Wire;
                     delete payload.max_tokens;
+                    const expectedPrompt = promptTokens(first) + first.usage.output;
+                    const admission = new AbortController();
+                    const continuationSignal = AbortSignal.any([signal, admission.signal]);
+                    let cacheVerified = false;
+                    // Expect an initial report, before prompt evaluation. A server that cannot
+                    // show reuse must not silently spend the deadline rebuilding the prompt.
+                    const admissionTimer = setTimeout(() => admission.abort(), 15_000);
+                    admissionTimer.unref();
                     // The native parser keeps streaming, handles cancellation and validates tool
                     // arguments. Only the completed combined response is returned to the agent loop.
-                    const continuation = native(model, context, {
-                        ...options, signal, maxTokens: remainder, maxRetries: 0,
-                        onPayload: async (_value, actualModel) => {
-                            const expected = JSON.stringify(payload);
-                            const next = (await options?.onPayload?.(payload, actualModel)) ?? payload;
-                            if (JSON.stringify(next) !== expected) throw new Error("Continuation request changed by a provider hook");
-                            return next;
-                        },
-                    });
-                    // The continuation is bounded. Keep only its final result until its
-                    // usage proves that it followed the expected prompt and reasoning.
-                    const second = await continuation.result();
+                    let second: AssistantMessage;
+                    try {
+                        const continuation = native(model, context, {
+                            ...options, signal: continuationSignal, maxTokens: remainder, maxRetries: 0,
+                            onPayload: async (_value, actualModel) => {
+                                const expected = JSON.stringify(payload);
+                                const next = (await options?.onPayload?.(payload, actualModel)) ?? payload;
+                                if (JSON.stringify(next) !== expected) throw new Error("Continuation request changed by a provider hook");
+                                return next;
+                            },
+                            onProviderStreamEvent: async (event, actualModel) => {
+                                if (!cacheVerified && event && typeof event === "object" && "prompt_progress" in event) {
+                                    const progress = wire(event.prompt_progress);
+                                    cacheVerified = progress.total === expectedPrompt &&
+                                        (progress.cache === expectedPrompt - 1 || progress.cache === expectedPrompt);
+                                    if (!cacheVerified) admission.abort();
+                                    clearTimeout(admissionTimer);
+                                }
+                                await options?.onProviderStreamEvent?.(event, actualModel);
+                            },
+                        });
+                        // Release no tool actions until the terminal response confirms the prefix
+                        // length and that the shared allowance still holds.
+                        second = await continuation.result();
+                    } finally {
+                        clearTimeout(admissionTimer);
+                    }
                     if (signal.aborted) {
                         first = { ...first, stopReason: "aborted", errorMessage: "Continuation cancelled or deadline reached" };
+                    } else if (!cacheVerified) {
+                        first = { ...first, errorMessage: "Native continuation stopped because the server could not reuse the unfinished response without rebuilding context." };
                     } else if (second.stopReason !== "error" && second.stopReason !== "aborted" &&
-                        promptTokens(second) === promptTokens(first) + first.usage.output &&
+                        promptTokens(second) === expectedPrompt &&
                         Number.isSafeInteger(second.usage.output) && second.usage.output > 0 && second.usage.output <= remainder) {
                         // A length stop cannot certify complete arguments. Keep the
                         // reasoning and any text, but do not offer a tool call to Pi.

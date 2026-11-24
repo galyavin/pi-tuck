@@ -348,8 +348,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
     let lengthStop: false | "thinking" | "output" = false;
+    let continuationNotice: string | undefined;
     pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = false; calibration.pending = undefined; });
-    pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason !== "length" ? false : event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output"; });
+    pi.on("message_end", event => {
+        if (event.message.role !== "assistant") return;
+        lengthStop = event.message.stopReason !== "length" ? false : event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output";
+        continuationNotice = lengthStop === "thinking" && event.message.errorMessage?.startsWith("Native continuation stopped because ")
+            ? event.message.errorMessage : undefined;
+    });
     pi.on("agent_settled", (_event, ctx) => {
         try {
             if (standDown(ctx) || !lengthStop || !active()) return;
@@ -357,7 +363,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 ? "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session."
                 : "pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
             lengthStop = false;
-            notify(ctx, message, "warning");
+            notify(ctx, continuationNotice ? `${message} ${continuationNotice}` : message, "warning");
         } finally { resetRun(); }
     });
 	const active = () => options.active?.() ?? true;

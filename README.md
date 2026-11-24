@@ -114,7 +114,7 @@ pi-tuck needs no setting. Put optional settings in `pi-tuck.json` in Pi's agent 
 
 For a local runtime that loses expensive prompt state when history changes, list its model under `cacheSensitiveModels`. This skips early cuts while the configured reply reserve fits.
 
-The optional `llamaContinuation` setting gives one **verified** llama.cpp Chat Completions model a single continuation after a thinking-only response exhausts its full output allowance. Configure the provider in Pi's `models.json`. The extra allowance is bounded by remaining context and `extraTokens`. The deadline covers both requests. Enable this only on a runtime and template tested with `continue_final_message`. For example:
+The optional `llamaContinuation` setting gives one **verified** llama.cpp Chat Completions model a single continuation after a thinking-only response exhausts its full output allowance. Configure the provider in Pi's `models.json`. The extra allowance is bounded by remaining context and `extraTokens`. The deadline covers both requests. Pi-tuck continues only when the server confirms that it can reuse the unfinished response without rebuilding the prompt. Enable this only on a runtime and template tested with `continue_final_message`. For example:
 
 ```json
 {
