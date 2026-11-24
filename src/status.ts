@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+export const CONTINUATION_CACHE_MISS = "Native continuation stopped because the server could not reuse the unfinished response without rebuilding context.";
+
 /** The version of the package this code was loaded from: the open session keeps it until Pi restarts, whatever is installed since. */
 export const LOADED_VERSION: string = (() => {
     try {

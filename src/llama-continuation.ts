@@ -1,5 +1,6 @@
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Model, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
-import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import type { ApiStreamSimpleFunction } from "@earendil-works/pi-ai/compat";
+import { CONTINUATION_CACHE_MISS } from "./status.js";
 
 export interface LlamaContinuation {
     model: string;
@@ -8,21 +9,19 @@ export interface LlamaContinuation {
 }
 
 type Wire = Record<string, unknown>;
-const completions = "openai-completions";
 const wire = (value: unknown): Wire => {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a Chat Completions request");
     return value as Wire;
 };
 const promptTokens = (message: AssistantMessage) => message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
 
-export function llamaContinuationStream(profile: LlamaContinuation, native: NonNullable<ReturnType<typeof getApiProvider>>["streamSimple"]) {
+export function llamaContinuationStream(profile: LlamaContinuation, native: ApiStreamSimpleFunction) {
     return (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => {
         if (`${model.provider}/${model.id}` !== profile.model || (options && "disableContinuation" in options && options.disableContinuation) || !model.reasoning)
             return native(model, context, options);
         const output = createAssistantMessageEventStream();
-        const signal = options?.signal
-            ? AbortSignal.any([options.signal, AbortSignal.timeout(profile.deadlineMs)])
-            : AbortSignal.timeout(profile.deadlineMs);
+        const deadline = AbortSignal.timeout(profile.deadlineMs);
+        const signal = options?.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
 
         void (async () => {
             let first: AssistantMessage | undefined;
@@ -50,21 +49,23 @@ export function llamaContinuationStream(profile: LlamaContinuation, native: NonN
                     }
                 }
                 first = await stream.result();
-                const thought = first.content.length === 1 && first.content[0]?.type === "thinking" && first.content[0].thinking;
+                const thought = first.content.length === 1 ? first.content[0] : undefined;
+                const initialPrompt = promptTokens(first);
+                const expectedPrompt = initialPrompt + first.usage.output;
                 const request = firstRequest;
                 const originalCap = request?.max_completion_tokens ?? request?.max_tokens;
                 // Only exhaustions at the full configured cap qualify. An input-clamped or
                 // server-clipped reply is Pi's capacity recovery case.
-                const remainder = Math.min(profile.extraTokens, model.contextWindow - promptTokens(first) - first.usage.output - 4096);
-                if (!signal.aborted && first.stopReason === "length" && thought && thinkingEnd && request && Array.isArray(request.messages) &&
+                const remainder = Math.min(profile.extraTokens, model.contextWindow - expectedPrompt - 4096);
+                if (!signal.aborted && first.stopReason === "length" && thought?.type === "thinking" && thought.thinking &&
+                    thinkingEnd && request && Array.isArray(request.messages) &&
                     originalCap === model.maxTokens && first.usage.output === model.maxTokens &&
-                    Number.isSafeInteger(remainder) && remainder > 0 && promptTokens(first) > 0 &&
+                    Number.isSafeInteger(remainder) && remainder > 0 && initialPrompt > 0 &&
                     request.n_predict === undefined && request.continue_final_message === undefined) {
-                    const messages = [...request.messages, { role: "assistant", content: "", reasoning_content: thought }];
+                    const messages = [...request.messages, { role: "assistant", content: "", reasoning_content: thought.thinking }];
                     const payload = { ...request, messages, max_completion_tokens: remainder, add_generation_prompt: false,
                         continue_final_message: "reasoning_content", return_progress: true } as Wire;
                     delete payload.max_tokens;
-                    const expectedPrompt = promptTokens(first) + first.usage.output;
                     const admission = new AbortController();
                     const continuationSignal = AbortSignal.any([signal, admission.signal]);
                     let cacheVerified = false;
@@ -85,7 +86,7 @@ export function llamaContinuationStream(profile: LlamaContinuation, native: NonN
                                 return next;
                             },
                             onProviderStreamEvent: async (event, actualModel) => {
-                                if (!cacheVerified && event && typeof event === "object" && "prompt_progress" in event) {
+                                if (!cacheVerified && !admission.signal.aborted && event && typeof event === "object" && "prompt_progress" in event) {
                                     const progress = wire(event.prompt_progress);
                                     cacheVerified = progress.total === expectedPrompt &&
                                         (progress.cache === expectedPrompt - 1 || progress.cache === expectedPrompt);
@@ -103,30 +104,29 @@ export function llamaContinuationStream(profile: LlamaContinuation, native: NonN
                     }
                     if (signal.aborted) {
                         first = { ...first, stopReason: "aborted", errorMessage: "Continuation cancelled or deadline reached" };
-                    } else if (!cacheVerified) {
-                        first = { ...first, errorMessage: "Native continuation stopped because the server could not reuse the unfinished response without rebuilding context." };
+                    } else if (!cacheVerified || admission.signal.aborted) {
+                        first = { ...first, errorMessage: CONTINUATION_CACHE_MISS };
                     } else if (second.stopReason !== "error" && second.stopReason !== "aborted" &&
                         promptTokens(second) === expectedPrompt &&
                         Number.isSafeInteger(second.usage.output) && second.usage.output > 0 && second.usage.output <= remainder) {
                         // A length stop cannot certify complete arguments. Keep the
                         // reasoning and any text, but do not offer a tool call to Pi.
-                        const blocks = second.stopReason === "length"
-                            ? second.content.filter(block => block.type !== "toolCall")
-                            : [...second.content];
-                        const suffix = blocks[0]?.type === "thinking" ? blocks.shift() : undefined;
-                        const initialThought = first.content[0];
-                        if (initialThought?.type !== "thinking") throw new Error("Expected unfinished reasoning");
-                        const combined = { ...initialThought, thinking: thought + (suffix?.type === "thinking" ? suffix.thinking : "") };
+                        const leading = second.content[0];
+                        const suffix = leading?.type === "thinking" ? leading : undefined;
+                        const rest = suffix ? second.content.slice(1) : second.content;
+                        const blocks = second.stopReason === "length" ? rest.filter(block => block.type !== "toolCall") : rest;
+                        const combined = { ...thought, thinking: thought.thinking + (suffix?.thinking ?? "") };
                         const outputTokens = first.usage.output + second.usage.output;
                         // Pi uses this as the size of one logical transcript prefix.
                         // The native stream hooks observe actual usage for each HTTP request.
-                        const usage = { ...first.usage, output: outputTokens, totalTokens: promptTokens(first) + outputTokens };
+                        const usage = { ...first.usage, output: outputTokens, totalTokens: initialPrompt + outputTokens };
                         first = { ...second, timestamp: first.timestamp, content: [combined, ...blocks], usage };
-                        if (first.stopReason === "stop" && !blocks.some(block => block.type === "text" && block.text.trim()))
+                        if (first.stopReason === "stop" && !blocks.some(block =>
+                            block.type === "toolCall" || block.type === "text" && block.text.trim()))
                             first.stopReason = "length";
 
                         const partial = { ...first, content: [combined] };
-                        if (suffix?.type === "thinking")
+                        if (suffix)
                             output.push({ type: "thinking_delta", contentIndex: 0, delta: suffix.thinking, partial });
                         output.push({ type: "thinking_end", contentIndex: 0, content: combined.thinking, partial });
                         thinkingEnd = undefined;

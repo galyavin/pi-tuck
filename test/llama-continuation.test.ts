@@ -13,7 +13,7 @@ const profile = { model: "test-llama/local", extraTokens: 32, deadlineMs: 5000 }
 const thought = { type: "thinking" as const, thinking: "Six times" };
 const tool = { type: "toolCall" as const, name: "record_answer", id: "call_1", arguments: { answer: 42 } };
 
-function fixture(secondInput: number, secondStop: "toolUse" | "length" | "cancel" = "toolUse", cached = 119) {
+function fixture(secondInput: number, secondStop: "toolUse" | "stop" | "length" | "cancel" = "toolUse", cacheReports = [119]) {
     const payloads: unknown[] = [];
     const controller = new AbortController();
     const native: ApiStreamSimpleFunction = (model, _context, options) => {
@@ -22,8 +22,10 @@ function fixture(secondInput: number, secondStop: "toolUse" | "length" | "cancel
             const payload = await options?.onPayload?.({ messages: context.messages, max_completion_tokens: model.maxTokens }, model);
             payloads.push(payload);
             const first = payloads.length === 1;
-            if (!first)
-                await options?.onProviderStreamEvent?.({ prompt_progress: { total: 120, cache: cached, processed: cached } }, model);
+            if (!first) {
+                for (const cache of cacheReports)
+                    await options?.onProviderStreamEvent?.({ prompt_progress: { total: 120, cache, processed: cache } }, model);
+            }
             const input = first ? 112 : secondInput;
             const output = first ? 8 : 16;
             const reason = first ? "length" : secondStop === "cancel" ? "aborted" : secondStop;
@@ -75,6 +77,13 @@ describe("bounded llama.cpp continuation", () => {
         expect(result).toMatchObject({ stopReason: "length", content: [thought], usage: { output: 8 } });
     });
 
+    test("preserves a complete tool call when the provider ends with a normal stop", async () => {
+        const result = await fixture(120, "stop").run(model, context).result();
+        expect(result).toMatchObject({
+            stopReason: "stop", content: [{ type: "thinking", thinking: "Six times seven equals 42." }, tool],
+        });
+    });
+
     test("keeps the reasoning but offers no tool action after a second length stop", async () => {
         const f = fixture(120, "length");
         const stream = f.run(model, context);
@@ -87,8 +96,8 @@ describe("bounded llama.cpp continuation", () => {
         });
     });
 
-    test("abandons a cold replay and preserves the first response without executing its tool", async () => {
-        const f = fixture(120, "toolUse", 0);
+    test("does not let a later cache report revive a rejected replay or expose its tool", async () => {
+        const f = fixture(120, "toolUse", [0, 119]);
         const result = await f.run(model, context).result();
         expect(f.payloads).toHaveLength(2);
         expect(result).toMatchObject({
