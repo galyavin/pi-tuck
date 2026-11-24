@@ -99,12 +99,12 @@ export class Run {
     get error() { return 'error' in this.state ? this.state.error : undefined; }
     transition(phase: RunPhase, ctx?: Pick<ExtensionContext, 'hasUI'>, error?: Error): boolean {
         if (!RUN_TRANSITIONS[this.phase].includes(phase) || ((phase === 'failed' || phase === 'commit-failed') && !error)) {
-            const message = `pi-tuck: invalid run transition ${this.phase} -> ${phase}`;
+            const fault = new Error(`pi-tuck: invalid run transition ${this.phase} -> ${phase}`);
             // A rejected transition must stop the caller and latch admission shut.
             // Preserve an existing terminal cause, especially a persistence fault.
             if (this.state.phase !== 'failed' && this.state.phase !== 'commit-failed')
-                this.state = { phase: 'failed', error: new Error(message) };
-            throw new Error(message);
+                this.state = { phase: 'failed', error: fault };
+            throw fault;
         }
         this.state = phase === 'failed' || phase === 'commit-failed' ? { phase, error: error! } : { phase };
         if (phase === 'expired') this.expiredPlan = true;

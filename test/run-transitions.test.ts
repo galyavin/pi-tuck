@@ -45,9 +45,12 @@ test('production rejects invalid transitions and prevents subsequent admission',
   vi.stubEnv('NODE_ENV', 'production');
   try {
     const run = new Run('starting');
-    expect(() => run.transition('claimed', { hasUI: true })).toThrow('invalid run transition');
+    let thrown: unknown;
+    try { run.transition('claimed', { hasUI: true }); } catch (error) { thrown = error; }
+    expect(thrown).toBeInstanceOf(Error);
     expect(run.phase).toBe('failed');
     const cause = run.error;
+    expect(cause).toBe(thrown);
     expect(() => run.transition('admitted', { hasUI: false })).toThrow('invalid run transition');
     expect(run.error).toBe(cause);
   } finally { vi.unstubAllEnvs(); }
