@@ -117,6 +117,7 @@ export interface Options {
  /** Tokens of the fixture summary's own text (default 800). */
  summaryTokens?: number;
  /** Seed a previous summary and a tail of complete user/tool turns for long-running session tests. */
+ archivedReplyOutput?: number;
  seededTail?: { summary: number; tail: number; cycle: number };
  /** Tokens of a steering message queued during the tool call, so it is in the next request but not in the saved conversation. */
  queued?: number;
@@ -261,6 +262,11 @@ export async function harness(options: Options) {
   if (options.branch) manager = SessionManager.inMemory(dir, undefined, [manager.getHeader()!, ...options.branch]);
   // A complete assistant message of this content. `replyOf` builds one without recording it, for measuring a reply that has not been sent yet.
   const replyOf = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => ({ role: 'assistant', content, stopReason, api: responseModel.api, provider: responseModel.provider, model: responseModel.id, timestamp: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 } } });
+  if (options.archivedReplyOutput !== undefined) {
+   const prior = replyOf([{ type: 'text', text: 'Previous answer' }]);
+   prior.usage.output = prior.usage.totalTokens = options.archivedReplyOutput;
+   manager.appendContextEdit(manager.appendMessage(prior), null);
+  }
   const answer = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage => { state.stops.push(stopReason); return replyOf(content, stopReason); };
   // Repeated text lets the compactor summarize almost everything away; unique text (oneTurn) makes the cut keep as much as the plan allows.
   let uniq = 0;

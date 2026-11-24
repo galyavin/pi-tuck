@@ -59,7 +59,7 @@ test(`{"cutAt": ${bad}}: reports an invalid cut point and uses defaults`, async 
 	expect(r.cutAt).toBeUndefined();
 	const warnings = r.notices.filter(n => n.level === 'warning');
 	expect(warnings).toHaveLength(1);
-	expect(warnings[0]!.message).toBe(`pi-tuck: ${r.path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the defaults.`);
+	expect(warnings[0]!.message).toBe(`pi-tuck: ${r.path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the default cut point.`);
 });
 
 test('malformed JSON and invalid cutAt use the original settings warning and defaults', async () => {
@@ -69,18 +69,17 @@ test('malformed JSON and invalid cutAt use the original settings warning and def
 		const warnings = r.notices.filter(n => n.level === 'warning');
 		expect(warnings, file).toHaveLength(1);
 		expect(warnings[0]!.message, file).toContain(`pi-tuck: ${r.path} should be a JSON object`);
-		expect(warnings[0]!.message, file).toContain('using the defaults.');
+		expect(warnings[0]!.message, file).toContain('using the default');
 	}
 });
 
 test.each([
 	['cacheSensitiveModels', ['missing-provider']],
 	['llamaContinuation', { model: 'local/llama', extraTokens: 4096, deadlineMs: 0 }],
-] as const)('an invalid %s points to the failing setting and uses defaults', async (key, value) => {
+] as const)('an invalid %s leaves the valid cut point active', async (key, value) => {
 	const r = await load(JSON.stringify({ cutAt: 0.8, [key]: value }));
-	expect(r.cutAt).toBeUndefined();
+	expect(r.cutAt).toBe(0.8);
 	expect(r.notices).toEqual([{ level: 'warning', message: expect.stringContaining(`${r.path} ${key}`) }]);
-	expect(r.notices[0]!.message).toContain('using the defaults.');
 });
 
 for (const value of [true, false, null, 0, "no", [], { enabled: true }])

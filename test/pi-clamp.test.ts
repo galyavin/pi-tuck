@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest';
 import { normalizeContext } from '@earendil-works/pi-ai';
 import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
-import { piContextSafetyMargin, requestReplyFloor } from '../src/request-capacity';
+import { piContextSafetyMargin } from '../src/request-capacity';
 import { harness } from './budget-fixture';
 import { drive, MODEL } from './calibration-fixture';
 import { providerRequest } from './request-options';
@@ -50,7 +50,7 @@ test.each([{ reserve: 4_096, output: 0 }, { reserve: 16_384, output: 16_384 }])(
 });
 
 test.each([23_000, 27_742])('a request at %s whose real clamp cannot hold the floor is never sent', async setup => {
- const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, systemTokens: setup - 252, host: 200,
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, systemTokens: setup - 252, host: 200, archivedReplyOutput: 3_584,
   limits: { contextWindow: 32_768, maxTokens: 16_384 }, reserveTokens: 16_384,
   compaction: { requestReserve: undefined }, piRequestPath: true });
  try {
@@ -74,7 +74,7 @@ test('real payload builders apply the Responses minimum and the Completions cap'
 });
 
 test('a request above the room is sent when Pi leaves the model’s 1879-token reply cap', async () => {
- const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, systemTokens: 21_748, host: 200,
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, systemTokens: 21_748, host: 200, archivedReplyOutput: 3_584,
   limits: { contextWindow: 32_768, maxTokens: 1_879 }, reserveTokens: 16_384,
   compaction: { requestReserve: undefined }, piRequestPath: true });
  try {
@@ -89,15 +89,4 @@ test('a request above the room is sent when Pi leaves the model’s 1879-token r
    data: { kind: 'above-room', room: 16_384, hardLine: 26_793 },
   });
  } finally { await h.cleanup(); }
-});
-
-test('only a positive model cap limits the branch floor, including its failed-reply fallback', () => {
- const manager = SessionManager.inMemory('/x');
- expect(requestReplyFloor(manager.getBranch(), 16_384, 1_879)).toBe(1_879);
- for (const cap of [undefined, 0, -1]) expect(requestReplyFloor(manager.getBranch(), 16_384, cap)).toBe(3_584);
- manager.appendMessage({ role: 'assistant', content: [], stopReason: 'length', api: MODEL.api, provider: MODEL.provider,
-  model: MODEL.id, timestamp: 0, usage: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1,
-   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
- expect(requestReplyFloor(manager.getBranch(), 16_384, 1_879)).toBe(1_879);
- expect(requestReplyFloor(manager.getBranch(), 16_384, 0)).toBe(16_384);
 });

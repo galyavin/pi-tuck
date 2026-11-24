@@ -39,14 +39,14 @@ export async function thinkingLengthCell(cell: { above: boolean; twice: boolean 
    noOptionalHistory: wire[1] !== undefined && wire[1].messages.every(message => message.role === 'system' || message.role === 'user') &&
     records.every(record => record.kind !== 'excerpt' || record.role === 'user'),
    deepest: details !== undefined && details.tokensAfter === details.carriedTarget,
-   replyFloor: requestReplyFloor(branch, 16_384, 16_384), faults: [...h.faults], notices: [...h.notices] };
+   replyFloor: requestReplyFloor(branch, 16_384, h.session.model!), faults: [...h.faults], notices: [...h.notices] };
  } finally { await h.cleanup(); }
 }
 
 export function expectThinkingLengthOutcome(cell: (typeof thinkingLengthCells)[number], r: Awaited<ReturnType<typeof thinkingLengthCell>>) {
  expect(r.preserved).toBe(true);
  expect(r.faults).toEqual([]);
- expect(r.replyFloor).toBe(Math.max(3_584, ...r.outputs));
+ expect(r.replyFloor).toBe(Math.max(1, ...r.outputs));
  expect(r.notices).toEqual(!cell.above || cell.twice ? [
   "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session.",
  ] : []);

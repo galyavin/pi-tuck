@@ -79,7 +79,12 @@ export function nativeReplyClamp(model: Model<Api>, system: Message[], prompt: U
  const messages = [...system, ...convertToLlm([summary]), ...fresh.map(message => message.role === 'toolResult'
   ? { ...message, content: [{ type: 'text' as const, text: message.content.map(block => block.type === 'text' ? block.text : '').join('\n').slice(0, 800).padEnd(800, ' ') }] }
   : message)];
- return clampMaxTokensToContext(model, normalizeContext({ messages }), model.maxTokens);
+ const context = normalizeContext({ messages });
+ const cap = clampMaxTokensToContext(model, context, model.maxTokens);
+ // A saturated one-token return does not prove that the estimate left one token.
+ const empty = normalizeContext({ messages: [] }), window = 1_000_000;
+ const margin = window - estimateContextTokens(empty).tokens - clampMaxTokensToContext({ ...model, contextWindow: window, maxTokens: window }, empty, window);
+ return estimateContextTokens(context).tokens + margin + cap <= model.contextWindow ? cap : 0;
 }
 
 export function refusalParity(state: NativeState): { violation: boolean; exception?: 'past-window' | 'failed-reply' | 'reply-floor' } {

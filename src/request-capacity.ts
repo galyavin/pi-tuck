@@ -1,4 +1,4 @@
-import { isContextOverflow, normalizeContext } from '@earendil-works/pi-ai';
+import { normalizeContext } from '@earendil-works/pi-ai';
 import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import type { AgentMessage, Messages } from './budget.js';
 import { parseRecords, splitSummary } from './tuck/core/transcript.js';
@@ -51,43 +51,28 @@ export async function piContextSafetyMargin(math?: PiRequestMath): Promise<numbe
     } catch { return 4_096; }
 }
 
-/** The smallest reply room a request above the room must leave after Pi's own clamp: above the user's p99 reply (3,270 tokens). */
-export const REPLY_FLOOR_MIN = 3_584;
-
-/** A spent thinking budget that produced neither a visible answer nor work. Empty/text/tool replies keep the existing length recovery. */
+/** A length stop with visible reasoning but no visible answer or work. */
 export const thinkingOnlyLength = (message: AgentMessage): boolean => message.role === 'assistant' && message.stopReason === 'length' &&
     message.content.length > 0 && message.content.every(block => block.type === 'thinking');
 
-/** Thinking-only exhaustion uses the observed largest reply, not the full reserve. Every other failed length/overflow keeps its override. */
-export const needsFullReplyReserve = (message: AgentMessage): boolean => message.role === 'assistant' &&
-    (message.stopReason === 'length' && !thinkingOnlyLength(message) || message.stopReason === 'error' && isContextOverflow(message));
+type ReplyModel = { provider: string; api: string; id: string; maxTokens: number };
 
-/** Read reply history from assistant messages. Legacy inferred-window receipts carry no capacity evidence. */
-export function replyFit(branch: readonly SessionEntry[]): { failed: boolean; largestOutput: number; thinkingStop: boolean } {
-    let failed = false, largestOutput = 0, thinkingStop = false;
+/** A soft reserve guides compaction. Beyond it, use observed reply demand from this model.
+ * One token is the smallest positive allocation when there is no comparable evidence. */
+export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, model: ReplyModel): number {
+    let largest = 1, thinkingStop = false;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;
-        failed ||= needsFullReplyReserve(message);
-        thinkingStop ||= thinkingOnlyLength(message);
+        if (message.model !== model.id || message.provider !== model.provider || message.api !== model.api ||
+            message.stopReason === 'error' || message.stopReason === 'aborted') continue;
         const output = message.usage?.output;
-        if (typeof output === 'number' && Number.isFinite(output) && output > largestOutput) largestOutput = output;
+        if (typeof output !== 'number' || !Number.isFinite(output) || output <= 0) continue;
+        largest = Math.max(largest, Math.ceil(output));
+        thinkingStop ||= thinkingOnlyLength(message);
     }
-    return { failed, largestOutput, thinkingStop };
-}
-
-export function branchReplyFloor(branch: readonly SessionEntry[], reserve: number): number {
-    const { failed, largestOutput, thinkingStop } = replyFit(branch);
-    if (failed) return reserve;
-    // Include exhausted thinking output across cuts/restarts; requestReplyFloor applies the model cap.
-    const largest = Math.ceil(Math.max(REPLY_FLOOR_MIN, largestOutput));
-    return thinkingStop ? largest : Math.min(reserve, largest);
-}
-
-/** Admission never promises more output than a model with a positive reply cap can produce. */
-export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, maxTokens?: number): number {
-    const floor = branchReplyFloor(branch, reserve);
-    return maxTokens !== undefined && maxTokens > 0 ? Math.min(floor, maxTokens) : floor;
+    const observed = thinkingStop ? largest : Math.min(Math.max(1, reserve), largest);
+    return model.maxTokens > 0 ? Math.min(observed, model.maxTokens) : observed;
 }
 
 /** Check decoded starting text, native or quoted whole with its original role; never JSON-escaped substring matching. */

@@ -4,22 +4,38 @@ import { textOf } from './tuck/core/content.js';
 import type { Clip } from './clip.js';
 
 export type CutEntry = { type: 'compaction'; summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown };
-type Context = Pick<ExtensionContext, 'cwd' | 'sessionManager'>;
+type Context = Pick<ExtensionContext, 'cwd' | 'sessionManager'> & Partial<Pick<ExtensionContext, 'model'>>;
+const budgetIdentity = (model: Context['model']) => model &&
+    JSON.stringify([model.provider, model.api, model.id, model.contextWindow, model.maxTokens]);
 export interface CutView { session: ExtensionContext['sessionManager']; keptFromId: string | undefined; hasTuckCut: boolean; pending: boolean }
 
 /** The only owner of a cut that requests carry before Pi saves it. */
 export class PendingCut {
-    private cut?: CutEntry;
-    private branchLength = 0;
+    private proposal?: { cut: CutEntry; manager: Context['sessionManager']; cwd: string; branchLength: number; anchor: string | undefined; budget?: string };
     private preview?: { manager: Context['sessionManager']; cwd: string; leaf: string | null; view: CutView };
-    plan(cut: CutEntry, branchLength: number) { this.cut = cut; this.branchLength = branchLength; this.preview = undefined; }
-    clear() { this.cut = undefined; this.branchLength = 0; this.preview = undefined; }
-    take() { const cut = this.cut; this.clear(); return cut; }
+    plan(cut: CutEntry, ctx: Context) {
+        const branch = ctx.sessionManager.getBranch();
+        this.proposal = { cut, manager: ctx.sessionManager, cwd: ctx.cwd, branchLength: branch.length,
+            anchor: branch.at(-1)?.id, budget: budgetIdentity(ctx.model) };
+        this.preview = undefined;
+    }
+    clear() { this.proposal = undefined; this.preview = undefined; }
+    take(ctx: Context) {
+        if (!this.view(ctx).pending) return;
+        const cut = this.proposal?.cut;
+        this.clear();
+        return cut;
+    }
     view(ctx: Context, entries: readonly SessionBoundaryDraft[] = []): CutView {
-        const live = ctx.sessionManager, leaf = live.getLeafId?.(), held = this.preview;
-        // Native entries are append-only; a leaf move invalidates both the saved and pending views.
+        const live = ctx.sessionManager, leaf = live.getLeafId?.();
+        const proposal = this.proposal;
+        if (proposal && (proposal.manager !== live || proposal.cwd !== ctx.cwd || proposal.budget !== budgetIdentity(ctx.model))) this.clear();
+        const held = this.preview;
+        // Native entries are append-only. A changed leaf requires checking that the plan's anchor still precedes it.
         if (!entries.length && leaf !== undefined && held && held.manager === live && held.cwd === ctx.cwd && held.leaf === leaf) return held.view;
-        const branch = live.getBranch(), cut = this.cut;
+        const branch = live.getBranch();
+        if (this.proposal?.anchor !== undefined && branch[this.proposal.branchLength - 1]?.id !== this.proposal.anchor) this.clear();
+        const cut = this.proposal?.cut;
         const remember = (view: CutView) => {
             if (!entries.length && leaf !== undefined) this.preview = { manager: live, cwd: ctx.cwd, leaf, view };
             return view;
@@ -30,7 +46,7 @@ export class PendingCut {
                 hasTuckCut: hasTuckCut(branch), pending: false });
         }
         // A compact-all plan predates the prompt. Keep from the first appended entry, skipping our capacity receipts.
-        const keptFromId = cut && (cut.firstKeptEntryId || branch.slice(this.branchLength)
+        const keptFromId = cut && (cut.firstKeptEntryId || branch.slice(this.proposal!.branchLength)
             .find(entry => entry.type !== 'custom' || entry.customType !== 'pi-tuck-capacity')?.id || '');
         const header = live.getHeader();
         if (!header) throw new Error("Missing native session header for the prompt's cut");
@@ -114,12 +130,21 @@ export class Run {
     cut = new PendingCut();
     clips = new Map<string, Clip>();
     pendingBoundaryReceipts: string[] = [];
-    thinkingRetryPending = false;
+    private lengthRecovery: 'available' | 'pending' | 'used' = 'available';
+    get lengthRetryPending() { return this.lengthRecovery === 'pending'; }
+    get canRetryLength() { return this.phase === 'admitted' && this.lengthRecovery === 'available'; }
+    requestLengthRetry() {
+        if (!this.canRetryLength) throw new Error('pi-tuck: capacity recovery is unavailable for this run');
+        this.lengthRecovery = 'pending';
+    }
+    finishLengthRetry() {
+        if (this.lengthRecovery === 'pending') this.lengthRecovery = 'used';
+    }
     /** A refusal-path floor carried by cut; the complete request must still pass Pi's window check. */
     nativeFloorPending = false;
     refusalReceipted = false;
     clear() {
         this.prompt = undefined; this.cut.clear(); this.clips.clear(); this.pendingBoundaryReceipts = [];
-        this.thinkingRetryPending = false; this.nativeFloorPending = false; this.refusalReceipted = false; this.expiredPlan = false;
+        this.nativeFloorPending = false; this.refusalReceipted = false; this.expiredPlan = false;
     }
 }

@@ -64,3 +64,16 @@ test('invalid transition preserves a persistence failure', () => {
   expect(run.phase).toBe('commit-failed');
   expect(run.error).toBe(cause);
 });
+
+
+test('a productive round after recovery does not replenish the recovery allowance', () => {
+  const run = new Run('starting');
+  run.transition('admitted');
+  run.requestLengthRetry();
+  expect(run.lengthRetryPending).toBe(true);
+  run.finishLengthRetry();
+  run.transition('admitted');
+  expect(run.lengthRetryPending).toBe(false);
+  expect(run.canRetryLength).toBe(false);
+  expect(() => run.requestLengthRetry()).toThrow('recovery is unavailable');
+});

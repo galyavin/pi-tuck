@@ -32,7 +32,7 @@ test(`no UI: ${kind} is visible on stderr`, async () => {
    await h.emit('agent_settled', {});
   }
   const expected = { refusal: 'shorten the input', overflow: 'provider refused', 'manual instructions': '/compact ignores',
-   'manual refusal': 'pi-tuck cannot select a cut', 'length stop': 'output limit' }[kind];
+   'manual refusal': 'pi-tuck cannot select a cut', 'length stop': 'length stop' }[kind];
   expect(written.join('')).toContain(expected);
   expect(h.notify).not.toHaveBeenCalled();
  } finally { write.mockRestore(); await h.close(); }

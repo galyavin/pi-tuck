@@ -4,6 +4,7 @@ import { installCompaction } from '../src/compaction';
 import { PendingCut, StartingPrompt, Run } from '../src/run';
 import { projectedMessages } from '../src/omissions';
 import { carriesPrompt } from '../src/request-capacity';
+import { MODEL } from './calibration-fixture';
 import { scriptedModelRuntime } from './model-fixture';
 
 const bands = vi.hoisted(() => [] as { tokensAfter: number }[]);
@@ -135,15 +136,14 @@ test('threshold uses the resolved kept entry when the prompt already exists', as
 test('compact-all resolves at the plan boundary, before later steering and after capacity receipts', () => {
   const manager = SessionManager.inMemory('/virtual/pi-tuck-test/pending-owner'), pending = new PendingCut(), ctx = { cwd: '/virtual/pi-tuck-test/pending-owner', sessionManager: manager };
   manager.appendMessage({ role: 'user', content: 'old', timestamp: 0 });
-  const length = manager.getBranch().length;
-  pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: '', tokensBefore: 10, details: { compactor: 'pi-tuck' } }, length);
+  pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: '', tokensBefore: 10, details: { compactor: 'pi-tuck' } }, ctx);
   expect(pending.view(ctx)).toMatchObject({ keptFromId: '', pending: true, hasTuckCut: true });
   manager.appendCustomEntry('pi-tuck-capacity', {});
   const promptId = manager.appendMessage({ role: 'user', content: 'prompt', timestamp: 1 });
   manager.appendMessage({ role: 'user', content: 'steering', timestamp: 2 });
   expect(pending.view(ctx).keptFromId).toBe(promptId);
-  expect(pending.take()).toBeDefined(); expect(pending.take()).toBeUndefined(); expect(pending.view(ctx).pending).toBe(false);
-  pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: promptId, tokensBefore: 1 }, length);
+  expect(pending.take(ctx)).toBeDefined(); expect(pending.take(ctx)).toBeUndefined(); expect(pending.view(ctx).pending).toBe(false);
+  pending.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: promptId, tokensBefore: 1 }, ctx);
   pending.clear(); expect(pending.view(ctx).pending).toBe(false);
 });
 
@@ -257,12 +257,31 @@ test('the live view follows saved cuts and tree moves after a pending cut is con
   const first = manager.appendMessage({ role: 'user', content: 'first', timestamp: 0 });
   expect(cut.view(ctx)).toMatchObject({ session: manager, keptFromId: undefined, hasTuckCut: false, pending: false });
   const kept = manager.appendMessage({ role: 'user', content: 'kept', timestamp: 1 });
-  cut.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: kept, tokensBefore: 1, details: { compactor: 'pi-tuck' } }, 2);
-  const pending = cut.view(ctx), entry = cut.take()!;
+  cut.plan({ type: 'compaction', summary: 'summary', firstKeptEntryId: kept, tokensBefore: 1, details: { compactor: 'pi-tuck' } }, ctx);
+  const pending = cut.view(ctx), entry = cut.take(ctx)!;
   manager.appendCompaction(entry.summary, entry.firstKeptEntryId, entry.tokensBefore, entry.details, true);
   const saved = cut.view(ctx);
   expect(saved).toMatchObject({ session: manager, keptFromId: kept, hasTuckCut: true, pending: false });
   expect(plain(saved.session.buildSessionProjection().messages)).toEqual(plain(pending.session.buildSessionProjection().messages));
   manager.branch(first);
   expect(cut.view(ctx)).toMatchObject({ session: manager, keptFromId: undefined, hasTuckCut: false, pending: false });
+});
+
+
+test('a pending cut cannot cross a branch fork or model budget change', () => {
+  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/stale-cut'), cut = new PendingCut();
+  const ctx = { cwd: manager.getCwd(), sessionManager: manager, model: { ...MODEL, contextWindow: 64_000 } };
+  const root = manager.appendMessage({ role: 'user', content: 'root', timestamp: 0 });
+  manager.appendMessage({ role: 'user', content: 'branch A', timestamp: 1 });
+  const entry = { type: 'compaction' as const, summary: 'branch A summary', firstKeptEntryId: root, tokensBefore: 10 };
+  cut.plan(entry, ctx);
+  expect(cut.view(ctx).pending).toBe(true);
+  ctx.model.contextWindow = 32_000;
+  expect(cut.view(ctx).pending).toBe(false);
+  expect(cut.take(ctx)).toBeUndefined();
+  cut.plan(entry, ctx);
+  manager.branch(root);
+  manager.appendMessage({ role: 'user', content: 'branch B', timestamp: 2 });
+  expect(cut.view(ctx).pending).toBe(false);
+  expect(cut.take(ctx)).toBeUndefined();
 });

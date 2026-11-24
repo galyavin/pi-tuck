@@ -36,7 +36,7 @@ An unsupported Pi version, a Pi virtual model, or an invalid context window leav
 
 ## Settings
 
-Optional settings go in `pi-tuck.json` in Pi's agent directory (`~/.pi/agent` by default, or `PI_CODING_AGENT_DIR`). Restart Pi to apply changes. The input room starts at the model's context window minus Pi's `compaction.reserveTokens`. Invalid JSON or invalid values for these fields fall back to defaults, with a notice when compaction is active.
+Optional settings go in `pi-tuck.json` in Pi's agent directory (`~/.pi/agent` by default, or `PI_CODING_AGENT_DIR`). Restart Pi to apply changes. The input room starts at the model's context window minus Pi's `compaction.reserveTokens`. Invalid JSON uses defaults. An invalid field uses its own default, with a notice when compaction is active.
 
 - **`cutAt`** is a fraction above 0 and at most 1. The default cut point starts at 60% of the room and adapts after a cut. An explicit value fixes the fraction, subject to a 2% margin below the room even at `1`.
 - **`cacheSensitiveModels`** lists exact `provider/model` identifiers. For these models, the cut point is the full room, taking precedence over `cutAt`. This delays early cuts that would discard a reusable prompt prefix.
@@ -57,7 +57,7 @@ Optional settings go in `pi-tuck.json` in Pi's agent directory (`~/.pi/agent` by
 
 - A thinking-only stop at the model's full output allowance stays in the transcript. If it remains unfinished, pi-tuck reports output exhaustion. A thinking-only stop at a smaller request cap can trigger one capacity retry when a cut can free reply room.
 - A length stop alone leaves its cause uncertain. Pi-tuck uses the context window declared in Pi’s model configuration. Set that window to the effective limit when a server has a smaller one.
-- A large fixed system prompt or set of tools can leave little room for history. Pi-tuck can refuse a request if the protected prompt and reply budget cannot fit after reductions. Token estimates depend on reported usage, and overflow recovery depends on Pi recognizing the provider's error as a context overflow. Try a shorter prompt, `/compact`, or a larger window.
+- Pi’s reserve guides compaction. Above the target, pi-tuck uses observed output from the active model to estimate how much room a reply needs. A large fixed system prompt or tool set can leave little room for history. Pi-tuck can refuse a request if the protected prompt and reply budget cannot fit after reductions. Token estimates depend on reported usage, and overflow recovery depends on Pi recognizing the provider's error as a context overflow. Try a shorter prompt, `/compact`, or a larger window.
 
 When using OpenRouter, you can pin an upstream in Pi's `models.json` if upstreams count context differently.
 
@@ -93,7 +93,7 @@ npm test
 The build emits the SDK export in `dist/` and refreshes the source identifier in `src/build-id.ts`. Run it before the test suite after changing `index.ts` or `src/`. To run one file, use `npm test -- test/llama-continuation.test.ts`. To try this checkout in Pi for one invocation, run `pi --no-extensions -e ./index.ts`.
 
 - The extension entry point reads settings and registers the optional provider adapter. [Entry point](index.ts) · [Continuation adapter](src/llama-continuation.ts)
-- Session hooks plan and commit cuts. Request-capacity code handles Pi's clamp, reply floors, and learned windows. [Compaction hooks](src/compaction.ts) · [Request capacity](src/request-capacity.ts)
+- Session hooks plan and commit cuts. Request-capacity code handles Pi's clamp, and reply budgeting. [Compaction hooks](src/compaction.ts) · [Request capacity](src/request-capacity.ts)
 - The summary compiler renders the cut. Recall reads eligible source entries from the branch. [Summary compiler](src/tuck.ts) · [Recall](src/recall.ts)
 
 See [Contributing](CONTRIBUTING.md) for stress tests and [the changelog](CHANGELOG.md) for release changes.

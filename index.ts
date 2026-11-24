@@ -57,7 +57,7 @@ export default async function (pi: ExtensionAPI) {
 		if (handle.state?.(ctx).kind === "standingDown") return;
 		if (continuationError) notify(ctx, continuationError, "warning");
 		if (settings.error && !said) {
-			said = notify(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");
+			said = notify(ctx, `pi-tuck: ${settings.error}`, "warning");
 		}
 	});
 }
@@ -69,17 +69,21 @@ function readSettings(path: string): Settings {
 	try { text = readFileSync(path, "utf8"); } catch { return {}; }
 	try {
 		const value = JSON.parse(text);
-		if (value && typeof value === "object" && (value.cutAt === undefined || validCutAt(value.cutAt))) {
+		if (value && typeof value === "object" && !Array.isArray(value)) {
+			const settings: Settings = {};
+			const warnings: string[] = [];
+			if (value.cutAt === undefined || validCutAt(value.cutAt)) settings.cutAt = value.cutAt;
+			else warnings.push(`${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the default cut point.`);
 			const models = value.cacheSensitiveModels;
-			if (models !== undefined && !(Array.isArray(models) && models.every(modelRef)))
-				return { error: `${path} cacheSensitiveModels must be an array of provider/model identifiers` };
+			if (Array.isArray(models) && models.every(modelRef)) settings.cacheSensitiveModels = models;
+			else if (models !== undefined) warnings.push(`${path} cacheSensitiveModels must be an array of provider/model identifiers; ignoring that setting.`);
 			const c = value.llamaContinuation;
-			if (c !== undefined && !(c && modelRef(c.model) &&
-				Number.isSafeInteger(c.extraTokens) && c.extraTokens > 0 &&
-				Number.isSafeInteger(c.deadlineMs) && c.deadlineMs > 0 && c.deadlineMs <= 2_147_483_647))
-				return { error: `${path} llamaContinuation requires a provider/model identifier in model, a positive safe integer extraTokens, and an integer deadlineMs from 1 to 2147483647` };
-			return { cutAt: value.cutAt, cacheSensitiveModels: models, llamaContinuation: c };
+			if (c && modelRef(c.model) && Number.isSafeInteger(c.extraTokens) && c.extraTokens > 0 &&
+				Number.isSafeInteger(c.deadlineMs) && c.deadlineMs > 0 && c.deadlineMs <= 2_147_483_647) settings.llamaContinuation = c;
+			else if (c !== undefined) warnings.push(`${path} llamaContinuation requires a provider/model identifier in model, a positive safe integer extraTokens, and an integer deadlineMs from 1 to 2147483647; native continuation is off.`);
+			if (warnings.length) settings.error = warnings.join(" ");
+			return settings;
 		}
 	} catch { /* reported below */ }
-	return { error: `${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1` };
+	return { error: `${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the defaults.` };
 }

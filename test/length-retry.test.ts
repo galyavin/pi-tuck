@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import { branchReplyFloor, needsFullReplyReserve, requestReplyFloor, thinkingOnlyLength } from '../src/request-capacity';
+import { requestReplyFloor, thinkingOnlyLength } from '../src/request-capacity';
 import { statusText } from '../src/status';
 import { MODEL } from './calibration-fixture';
 import { harness } from './budget-fixture';
@@ -73,7 +73,7 @@ test('a retry whose deepest request cannot leave the floor refuses with the exis
  } finally { await h.cleanup(); }
 });
 
-test('the thinking-only floor includes stopped output across cuts, while other failures keep the full reserve', () => {
+test('the floor includes stopped reasoning across cuts and is capped by the active model', () => {
  const manager = SessionManager.inMemory('/x');
  const message = { role: 'assistant' as const, content: [{ type: 'thinking' as const, thinking: 'unfinished reasoning' }],
   api: MODEL.api, model: MODEL.id, provider: MODEL.provider, stopReason: 'length' as const, timestamp: 1,
@@ -81,19 +81,18 @@ test('the thinking-only floor includes stopped output across cuts, while other f
  const id = manager.appendMessage(message);
  manager.appendCompaction('kept summary', '', 1);
  expect(thinkingOnlyLength(message)).toBe(true);
- expect(needsFullReplyReserve(message)).toBe(false);
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(7_650);
- expect(branchReplyFloor(manager.getBranch(), 2_048)).toBe(7_650);
- expect(requestReplyFloor(manager.getBranch(), 16_384, 4_096)).toBe(4_096);
+ expect(requestReplyFloor(manager.getBranch(), 16_384, { ...MODEL, maxTokens: 16_384 })).toBe(7_650);
+ expect(requestReplyFloor(manager.getBranch(), 2_048, { ...MODEL, maxTokens: 16_384 })).toBe(7_650);
+ expect(requestReplyFloor(manager.getBranch(), 16_384, { ...MODEL, maxTokens: 4_096 })).toBe(4_096);
  for (const content of [[], [{ type: 'text' as const, text: 'partial answer' }], [{ type: 'toolCall' as const, id: 'call', name: 'effect', arguments: {} }]]) {
   expect(thinkingOnlyLength({ ...message, content })).toBe(false);
   manager.branch(id);
   manager.appendMessage({ ...message, content });
-  expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(16_384);
+  expect(requestReplyFloor(manager.getBranch(), 16_384, { ...MODEL, maxTokens: 16_384 })).toBe(7_650);
  }
  manager.branch(id);
  manager.appendMessage({ ...message, stopReason: 'error', errorMessage: 'Your input exceeds the context window of this model.' });
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(16_384);
+ expect(requestReplyFloor(manager.getBranch(), 16_384, { ...MODEL, maxTokens: 16_384 })).toBe(7_650);
 });
 
 test('/tuck counts retry receipts on the current branch', () => {
