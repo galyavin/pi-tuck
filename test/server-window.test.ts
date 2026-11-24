@@ -1,128 +1,49 @@
 import { expect, test } from 'vitest';
-import { SessionManager, type SessionEntry } from '@earendil-works/pi-coding-agent';
+import { SessionManager } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { drive, MODEL } from './calibration-fixture';
-import { harness, type Options } from './budget-fixture';
-import { replyFit, seedContextWindow, WINDOW_RECEIPT } from '../src/request-capacity';
+import { harness } from './budget-fixture';
 
-const identity = JSON.stringify([MODEL.provider, MODEL.api, MODEL.id]);
-const usage = (output: number) => ({ input: 63_000, cacheRead: 511, cacheWrite: 0, output, totalTokens: 63_511 + output,
- cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+const legacyWindow = 'pi-tuck-window';
 
-for (const [name, cap, output, learned, laterCap] of [
- ['server clips below the sent cap', 16_384, 4_489, 68_000, undefined],
- ['genuine stop at the sent cap', 4_489, 4_489, undefined, undefined],
- ['no payload cap is no evidence', undefined, 4_489, undefined, undefined],
- ['a later payload edit is the cap actually sent', 16_384, 4_489, undefined, 4_489],
-] as const) test(`window evidence: ${name}`, async () => {
+test('a length stop at an independent output limit does not teach a context window', async () => {
  const manager = SessionManager.inMemory('/virtual/pi-tuck-test/window');
  const d = await drive(manager);
  try {
-  await d.start(); await d.offer(40_000);
-  const payload = { max_tokens: cap };
-  if (cap !== undefined) await d.emit('before_provider_request', { payload });
-  if (laterCap !== undefined) payload.max_tokens = laterCap;
+  await d.start();
+  await d.offer(40_000);
+  await d.emit('before_provider_request', { payload: { max_tokens: 16_384, n_predict: 4_489 } });
   const message: AssistantMessage = { role: 'assistant', api: MODEL.api, provider: MODEL.provider, model: MODEL.id,
-   content: [{ type: 'text', text: 'Partial answer' }], stopReason: 'length', timestamp: 1, usage: usage(output) };
+   content: [{ type: 'text', text: 'Partial answer' }], stopReason: 'length', timestamp: 1,
+   usage: { input: 63_000, cacheRead: 511, cacheWrite: 0, output: 4_489, totalTokens: 68_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
   await d.emit('message_end', { message });
   const id = manager.appendMessage(message);
   await d.emit('turn_end', { message, messageEntryId: id });
-  expect(seedContextWindow(manager.getBranch(), identity, MODEL.contextWindow)).toBe(learned);
-  expect(replyFit(manager.getBranch()).failed).toBe(learned === undefined);
-  expect(seedContextWindow(manager.getBranch(), 'another model', MODEL.contextWindow)).toBeUndefined();
+  expect(manager.getBranch()).toContainEqual(expect.objectContaining({ type: 'custom', customType: 'pi-tuck-calibration' }));
+  expect(manager.getBranch()).not.toContainEqual(expect.objectContaining({ type: 'custom', customType: legacyWindow }));
+  expect(manager.getBranch()).toContainEqual(expect.objectContaining({ id, message }));
  } finally { await d.close(); }
 });
 
-test('a server-clipped reply retries once inside the learned window while preserving the task', async () => {
- let largeReply = false;
- const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, persist: true, stableHost: true,
-  limits: { contextWindow: 81_920, maxTokens: 16_384 }, providerWindow: 68_000, piRequestPath: true,
-  host: 200, systemTokens: 800, reserveTokens: 16_384, keepRecent: 20_000, usageRatio: 1,
-  replyWindow: 'clip', replyWindowOutput: () => largeReply ? 16_384 : 48, cutAtDefault: true, compaction: { requestReserve: undefined } });
- try {
-  for (let i = 0; i < 6; i++) await h.session.prompt(h.sized(1_500));
-  const before = h.state.requests;
-  const task = h.sized(48_000);
-  largeReply = true;
-  await h.session.prompt(task);
-  expect(h.state.requests - before).toBe(2);
-  expect(h.state.stops.slice(before)).toEqual(['length', 'stop']);
-  expect(h.providerRequests.filter(r => r.length).every(r => r.prompt + r.output === 68_000)).toBe(true);
-  expect(seedContextWindow(h.manager.getBranch(), identity, 81_920)).toBe(68_000);
-  expect(JSON.stringify(h.saved())).toContain(task.slice(0, 80));
-  expect(h.faults).toEqual([]);
- } finally { await h.cleanup(); }
-});
-
-test('a fresh real Pi session reads the saved window before its first request, without another clipped reply', async () => {
- const options: Options = { at: 'prompt', complete: 0, noHistory: true, noOpening: true, persist: true, stableHost: true,
-  limits: { contextWindow: 81_920, maxTokens: 16_384 }, providerWindow: 68_000, piRequestPath: true,
-  host: 200, systemTokens: 800, reserveTokens: 16_384, keepRecent: 20_000, usageRatio: 1,
-  replyWindow: 'clip', replyWindowOutput: () => 16_384, cutAtDefault: true, compaction: { requestReserve: undefined } };
- const first = await harness(options);
- let branch: SessionEntry[];
- try {
-  await first.session.prompt(first.sized(52_000));
-  const clipped = first.providerRequests.find(r => !r.summary && r.length);
-  expect(clipped).toBeDefined();
-  expect(clipped!.output).toBeLessThan(clipped!.maxTokens);
-  expect(clipped!.prompt + clipped!.output).toBe(68_000);
-  const file = first.manager.getSessionFile()!;
-  branch = SessionManager.open(file, first.dir).getBranch();
-  expect(seedContextWindow(branch, identity, 81_920)).toBe(68_000);
-  expect(replyFit(branch).failed).toBe(false);
- } finally { await first.cleanup(); }
+test('real Pi resumes with the configured window even when the session contains a legacy inferred window', async () => {
  const rooms: number[] = [];
- const second = await harness({ ...options, persist: false, branch, replyWindowOutput: () => 48,
+ const seed = SessionManager.inMemory('/virtual/pi-tuck-test/legacy-window');
+ seed.appendCustomEntry(legacyWindow, {
+  calibrationIdentity: JSON.stringify([MODEL.provider, MODEL.api, MODEL.id]),
+  learnedContextWindow: 4_096, catalogueContextWindow: 81_920, serverClippedReplyId: 'old',
+ });
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, persist: false,
+  branch: seed.getBranch(), stableHost: true, limits: { contextWindow: 81_920, maxTokens: 16_384 },
+  host: 200, systemTokens: 800, reserveTokens: 16_384, keepRecent: 20_000,
   compaction: { requestReserve: undefined, observeBudget: budget => rooms.push(budget.room) } });
  try {
-  const receipts = branch.filter(e => e.type === 'custom' && e.customType === WINDOW_RECEIPT).length;
-  await second.session.prompt(second.sized(2_000));
+  expect(h.session.model).toMatchObject({ provider: MODEL.provider, api: MODEL.api, id: MODEL.id });
+  expect(h.manager.getBranch()).toContainEqual(expect.objectContaining({ type: 'custom', customType: legacyWindow }));
+  await h.session.prompt(h.sized(4_500));
   expect(rooms.length).toBeGreaterThan(0);
-  expect(rooms[0]).toBe(68_000 - 16_384);
-  expect(rooms.every(room => room === rooms[0])).toBe(true);
-  expect(second.state.requests).toBeGreaterThan(0);
-  expect(second.providerRequests[0]!.prompt + second.providerRequests[0]!.maxTokens).toBeLessThanOrEqual(68_000);
-  expect(second.providerRequests.every(r => !r.refused && !r.length)).toBe(true);
-  expect(second.manager.getBranch().filter(e => e.type === 'custom' && e.customType === WINDOW_RECEIPT).length).toBe(receipts);
-  expect(second.session.messages.findLast(m => m.role === 'assistant')).toMatchObject({ stopReason: 'stop' });
- } finally { await second.cleanup(); }
-});
-
-// Nautilus, 2026-11-20: a server window learned at 68,000 kept capping every session after the configured window grew to 131,072, because
-// each open reseeded it. A learned window holds only while the model keeps the configured window it was learned under.
-test('a learned window is dropped once the configured window differs from the one it was learned under', async () => {
- const options: Options = { at: 'prompt', complete: 0, noHistory: true, noOpening: true, persist: true, stableHost: true,
-  limits: { contextWindow: 81_920, maxTokens: 16_384 }, providerWindow: 68_000, piRequestPath: true,
-  host: 200, systemTokens: 800, reserveTokens: 16_384, keepRecent: 20_000, usageRatio: 1,
-  replyWindow: 'clip', replyWindowOutput: () => 16_384, cutAtDefault: true, compaction: { requestReserve: undefined } };
- const first = await harness(options);
- let branch: SessionEntry[];
- try {
-  await first.session.prompt(first.sized(52_000));
-  branch = SessionManager.open(first.manager.getSessionFile()!, first.dir).getBranch();
-  const receipt = branch.find(e => e.type === 'custom' && e.customType === WINDOW_RECEIPT);
-  expect(receipt && receipt.type === 'custom' ? receipt.data : undefined).toMatchObject({ learnedContextWindow: 68_000, catalogueContextWindow: 81_920 });
-  expect(seedContextWindow(branch, identity, 81_920)).toBe(68_000);
-  expect(seedContextWindow(branch, identity, 131_072)).toBeUndefined();
- } finally { await first.cleanup(); }
- const rooms: number[] = [];
- const second = await harness({ ...options, persist: false, branch, limits: { contextWindow: 131_072, maxTokens: 16_384 }, providerWindow: undefined,
-  replyWindowOutput: () => 48, compaction: { requestReserve: undefined, observeBudget: budget => rooms.push(budget.room) } });
- try {
-  await second.session.prompt(second.sized(2_000));
-  expect(rooms.length).toBeGreaterThan(0);
-  expect(rooms.every(room => room === 131_072 - 16_384)).toBe(true);
-  expect(second.faults).toEqual([]);
- } finally { await second.cleanup(); }
-});
-
-test('a learned window recorded before 1.3.3 (no configured window) is not trusted; a matching one still is', () => {
- const manager = SessionManager.inMemory('/virtual/pi-tuck-test/window-legacy');
- manager.appendCustomEntry(WINDOW_RECEIPT, { calibrationIdentity: identity, learnedContextWindow: 68_000, serverClippedReplyId: 'old' });
- expect(seedContextWindow(manager.getBranch(), identity, 68_000)).toBeUndefined();
- expect(seedContextWindow(manager.getBranch(), identity, 131_072)).toBeUndefined();
- manager.appendCustomEntry(WINDOW_RECEIPT, { calibrationIdentity: identity, learnedContextWindow: 60_000, catalogueContextWindow: 68_000, serverClippedReplyId: 'new' });
- expect(seedContextWindow(manager.getBranch(), identity, 68_000)).toBe(60_000);
- expect(seedContextWindow(manager.getBranch(), identity, undefined)).toBeUndefined();
+  expect(rooms.every(room => room === 81_920 - 16_384)).toBe(true);
+  expect(h.session.messages.findLast(m => m.role === 'assistant')).toMatchObject({ stopReason: 'stop' });
+  expect(h.faults).toEqual([]);
+ } finally { await h.cleanup(); }
 });

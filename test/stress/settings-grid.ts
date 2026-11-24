@@ -36,7 +36,6 @@ import { join } from 'node:path';
 import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 import { overflowNotice, CALIBRATION_CEILING } from '../../src/compaction.js';
-import { seedContextWindow } from '../../src/request-capacity.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, nativeFloorAdmission, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
@@ -448,7 +447,6 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
    name: cell.name, plainPi, configuredWindow: cell.window, providerWindow, usageFactor: cell.usageRatio,
    answered: prompts.filter(p => p.answered).length, refused: prompts.filter(p => !p.answered && !p.hung).length,
    completedTurns: prompts.filter(p => p.completed).length,
-   learnedWindow: seedContextWindow(h.manager.getBranch(), JSON.stringify([h.session.model!.provider, h.session.model!.api, h.session.model!.id]), h.session.model!.contextWindow) ?? null,
    lostTasks: lostTasks.size, lostTaskPrompts: [...lostTasks], stuckSessions: recovery.some(r => r.requests === 0 || r.hung) ? 1 : 0,
    hungPrompts: prompts.filter(p => p.hung).length,
    lengthStops: h.state.stops.filter(s => s === 'length').length, providerOverflows: h.state.overflows,
@@ -472,9 +470,9 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
 }
 
 function wrongWindowOutcome(measured: Awaited<ReturnType<typeof measureWrongWindow>>) {
- const { name, plainPi, answered, refused, completedTurns, learnedWindow, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
+ const { name, plainPi, answered, refused, completedTurns, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
   calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached } = measured;
- return { name, plainPi, answered, refused, completedTurns, learnedWindow, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
+ return { name, plainPi, answered, refused, completedTurns, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
   summaryOverflows, summaryLengthStops, calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached };
 }
 

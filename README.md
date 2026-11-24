@@ -56,7 +56,7 @@ Optional settings go in `pi-tuck.json` in Pi's agent directory (`~/.pi/agent` by
 ## Output exhaustion and small windows
 
 - A thinking-only stop at the model's full output allowance stays in the transcript. If it remains unfinished, pi-tuck reports output exhaustion. A thinking-only stop at a smaller request cap can trigger one capacity retry when a cut can free reply room.
-- If provider usage shows that a server stopped below the sent output cap, pi-tuck can learn a smaller window and retry inside it. A change to the configured window invalidates that observation.
+- A length stop alone leaves its cause uncertain. Pi-tuck uses the context window declared in Pi’s model configuration. Set that window to the effective limit when a server has a smaller one.
 - A large fixed system prompt or set of tools can leave little room for history. Pi-tuck can refuse a request if the protected prompt and reply budget cannot fit after reductions. Token estimates depend on reported usage, and overflow recovery depends on Pi recognizing the provider's error as a context overflow. Try a shorter prompt, `/compact`, or a larger window.
 
 When using OpenRouter, you can pin an upstream in Pi's `models.json` if upstreams count context differently.

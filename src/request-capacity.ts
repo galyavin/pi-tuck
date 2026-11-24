@@ -62,41 +62,13 @@ export const thinkingOnlyLength = (message: AgentMessage): boolean => message.ro
 export const needsFullReplyReserve = (message: AgentMessage): boolean => message.role === 'assistant' &&
     (message.stopReason === 'length' && !thinkingOnlyLength(message) || message.stopReason === 'error' && isContextOverflow(message));
 
-/** Saved immediately at the reply's turn boundary, even when recovery cannot make a compaction. */
-/** `catalogueContextWindow` is the model's configured window when the server clipped below it. A learned window holds only while the
- * configured window is unchanged: a server or catalogue that grew must not stay capped by an old clip (Nautilus, 2026-11-20). */
-export interface WindowReceipt { calibrationIdentity: string; learnedContextWindow: number; catalogueContextWindow: number; serverClippedReplyId: string }
-export const WINDOW_RECEIPT = 'pi-tuck-window';
-function windowSettings(entry: SessionEntry): Partial<WindowReceipt> | undefined {
-    if (entry.type === 'custom' && entry.customType === WINDOW_RECEIPT) return entry.data as Partial<WindowReceipt> | undefined;
-    if (entry.type === 'compaction') return (entry.details as { diagnosticReceipt?: { settings?: Partial<WindowReceipt> } } | undefined)?.diagnosticReceipt?.settings;
-    return undefined;
-}
-/** The newest learned window for `identity`, if it was learned under the model's current configured window. One recorded before 1.3.3
- * carries no configured window and is not trusted: if the server still clips, the next clipped reply learns it again. */
-export function seedContextWindow(branch: readonly SessionEntry[], identity: string, catalogue: number | undefined): number | undefined {
-    for (let i = branch.length; i--;) {
-        const settings = windowSettings(branch[i]!);
-        if (settings?.calibrationIdentity !== identity) continue;
-        const window = settings.learnedContextWindow;
-        if (!(Number.isSafeInteger(window) && window! > 0)) return undefined;
-        return catalogue !== undefined && settings.catalogueContextWindow === catalogue ? window : undefined;
-    }
-    return undefined;
-}
-
-/** One branch reader for the reserve override and reply floor, including history before cuts. A server-clipping receipt follows its reply. */
+/** Read reply history from assistant messages. Legacy inferred-window receipts carry no capacity evidence. */
 export function replyFit(branch: readonly SessionEntry[]): { failed: boolean; largestOutput: number; thinkingStop: boolean } {
     let failed = false, largestOutput = 0, thinkingStop = false;
-    const clipped = new Set<string>();
-    for (let i = branch.length; i--;) {
-        const entry = branch[i]!;
-        const receipt = entry.type === 'custom' && entry.customType === WINDOW_RECEIPT ? windowSettings(entry) : undefined;
-        if (receipt && Number.isSafeInteger(receipt.learnedContextWindow) && receipt.learnedContextWindow! > 0 &&
-            typeof receipt.serverClippedReplyId === 'string') clipped.add(receipt.serverClippedReplyId);
+    for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;
-        failed ||= !clipped.has(entry.id) && needsFullReplyReserve(message);
+        failed ||= needsFullReplyReserve(message);
         thinkingStop ||= thinkingOnlyLength(message);
         const output = message.usage?.output;
         if (typeof output === 'number' && Number.isFinite(output) && output > largestOutput) largestOutput = output;
