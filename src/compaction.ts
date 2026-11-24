@@ -49,8 +49,7 @@ const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JS
 /** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. Like every failure but
  * a `CommitFault`, it ends with its attempt (`resetRun`), and the next attempt plans afresh from the session as it is. */
 class Refusal extends Error {}
-/** A cut this compactor supplied that Pi then failed to commit. Pi appends a cut to the session in memory before it writes the file, so the
- * session may hold a cut its file lacks; what is written after would build on it. The one failure that stays until the session restarts. */
+/** Pi could not confirm a pi-tuck cut on disk. Keep this fault until restart because a failed boundary may leave memory and disk out of sync. */
 class CommitFault extends Error {}
 /** A refusal for want of room, which the user can remedy: it carries advice. */
 class CapacityError extends Refusal {}

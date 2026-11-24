@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { createAssistantMessageEventStream, normalizeContext, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
-import type { ApiStreamSimpleFunction } from "@earendil-works/pi-ai/compat";
+import { createAssistantMessageEventStream, normalizeContext, type AssistantMessage, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { getApiProvider, type ApiStreamSimpleFunction } from "@earendil-works/pi-ai/compat";
 import { llamaContinuationStream } from "../src/llama-continuation";
 
 const model: Model<"openai-completions"> = {
@@ -119,4 +119,51 @@ describe("bounded llama.cpp continuation", () => {
         expect(f.payloads).toHaveLength(1);
         expect(result).toMatchObject({ stopReason: "length", content: [thought] });
     });
+});
+
+test.each([119, 0])("the native Pi parser admits continuation only with a warm cache (cached tokens %s)", async cache => {
+    const payloads: Record<string, unknown>[] = [];
+    const openai = getApiProvider("openai-completions")!;
+    const fetch: NonNullable<SimpleStreamOptions["fetch"]> = async (_input, init) => {
+        payloads.push(JSON.parse(String(init?.body)));
+        const continued = payloads.length === 2;
+        const delta = (value: object, finish_reason: string | null = null) => ({ choices: [{ index: 0, delta: value, finish_reason }] });
+        const chunks = continued ? [
+            { choices: [], prompt_progress: { total: 120, cache } },
+            delta({ reasoning_content: " seven equals 42." }),
+            delta({ tool_calls: [{ index: 0, id: tool.id, type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }),
+            delta({}, "tool_calls"),
+            { choices: [], usage: { prompt_tokens: 120, completion_tokens: 16, total_tokens: 136 } },
+        ] : [
+            delta({ reasoning_content: thought.thinking }),
+            delta({}, "length"),
+            { choices: [], usage: { prompt_tokens: 112, completion_tokens: 8, total_tokens: 120 } },
+        ];
+        const body = chunks.map(chunk => `data: ${JSON.stringify({
+            id: "fixture", object: "chat.completion.chunk", created: 0, model: model.id, ...chunk,
+        })}\n\n`).join("") + "data: [DONE]\n\n";
+        return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    };
+    const run = llamaContinuationStream(profile, openai.streamSimple);
+    const stream = run(model, context, { apiKey: "fixture", fetch, maxRetries: 0 });
+    const events = [];
+    for await (const event of stream) events.push(event);
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]).toMatchObject({
+        continue_final_message: "reasoning_content", max_completion_tokens: 32, return_progress: true,
+        messages: [...payloads[0]!.messages as unknown[], { role: "assistant", content: "", reasoning_content: thought.thinking }],
+    });
+    expect(events.filter(event => event.type === "toolcall_end")).toHaveLength(cache ? 1 : 0);
+    if (cache) {
+        expect(await stream.result()).toMatchObject({
+            stopReason: "toolUse", usage: { input: 112, output: 24, totalTokens: 136 },
+            content: [{ type: "thinking", thinking: "Six times seven equals 42." }, tool],
+        });
+    } else {
+        expect(await stream.result()).toMatchObject({
+            stopReason: "length", content: [thought], usage: { output: 8 },
+            errorMessage: expect.stringContaining("without rebuilding context"),
+        });
+    }
 });

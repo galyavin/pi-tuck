@@ -11,10 +11,7 @@ export type { CompactionOptions } from "./src/compaction";
 export { installCompaction } from "./src/compaction";
 export { inspectIncident, readableIncident } from "./src/diagnostic-replay.js";
 
-/** pi-tuck as a Pi extension: compaction and history recall. `"cutAt"` in `pi-tuck.json` in Pi's agent folder (a number above 0 and at most
- * 1) fixes the cut point as a fraction of the input room; without it, the cut point adapts. */
-/** The oldest Pi with every hook and API pi-tuck uses, and the oldest its tests pass on (Pi 1.2 added the custom message that starts a
- * run to before_agent_start, which the prompt's cut counts). */
+/** Pi 1.2 added the run's custom message to before_agent_start so preflight can count it. */
 export const PI_FLOOR = "1.2.0";
 /** Whether a Pi version is at or above the floor. A version that does not parse is taken as supported. */
 export function piSupported(version: string): boolean {
@@ -72,13 +69,16 @@ function readSettings(path: string): Settings {
 	try { text = readFileSync(path, "utf8"); } catch { return {}; }
 	try {
 		const value = JSON.parse(text);
-		if (value && typeof value === "object" && (value.cutAt === undefined || validCutAt(value.cutAt)) &&
-			(value.cacheSensitiveModels === undefined || Array.isArray(value.cacheSensitiveModels) && value.cacheSensitiveModels.every(modelRef))) {
+		if (value && typeof value === "object" && (value.cutAt === undefined || validCutAt(value.cutAt))) {
+			const models = value.cacheSensitiveModels;
+			if (models !== undefined && !(Array.isArray(models) && models.every(modelRef)))
+				return { error: `${path} cacheSensitiveModels must be an array of provider/model identifiers` };
 			const c = value.llamaContinuation;
-			if (c === undefined || c && modelRef(c.model) &&
+			if (c !== undefined && !(c && modelRef(c.model) &&
 				Number.isSafeInteger(c.extraTokens) && c.extraTokens > 0 &&
-				Number.isSafeInteger(c.deadlineMs) && c.deadlineMs > 0 && c.deadlineMs <= 2_147_483_647)
-				return { cutAt: value.cutAt, cacheSensitiveModels: value.cacheSensitiveModels, llamaContinuation: c };
+				Number.isSafeInteger(c.deadlineMs) && c.deadlineMs > 0 && c.deadlineMs <= 2_147_483_647))
+				return { error: `${path} llamaContinuation requires a provider/model identifier in model, a positive safe integer extraTokens, and an integer deadlineMs from 1 to 2147483647` };
+			return { cutAt: value.cutAt, cacheSensitiveModels: models, llamaContinuation: c };
 		}
 	} catch { /* reported below */ }
 	return { error: `${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1` };

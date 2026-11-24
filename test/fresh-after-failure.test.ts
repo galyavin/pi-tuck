@@ -31,8 +31,8 @@ for (const [name, site] of Object.entries(sites))
 		} finally { await h.cleanup(); }
 	}, 120000);
 
-// The one exception: a cut this compactor supplied that Pi failed to commit. The session holds a cut its file lacks, and what is written after
-// would build on it, so the failure stays until the session restarts.
+// A failed cut write leaves the boundary unverified. Check the file and next request;
+// whether Pi rolls back the in-memory entry depends on its version.
 test('a cut Pi failed to commit stays a fault for the next prompt', async () => {
  const h = await harness({ at: 'prompt', complete: BAND + 100, host: HOST, persist: true });
 	try {
@@ -41,7 +41,6 @@ test('a cut Pi failed to commit stays a fault for the next prompt', async () => 
 		manager._persist = entry => { if (entry.type === 'compaction') throw new Error('ENOSPC: no space left on device'); persist(entry); };
 		await h.run();
   expect(h.faults.join(' | ')).toContain('boundary cut was not saved in the session file');
-  expect(h.manager.getBranch().some(e => e.type === 'compaction')).toBe(true);
   expect(SessionManager.open(h.manager.getSessionFile()!, h.dir).getBranch().some(e => e.type === 'compaction')).toBe(false);
 		const requests = h.state.requests;
 		await h.session.prompt('A short prompt');

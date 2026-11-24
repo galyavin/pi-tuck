@@ -44,7 +44,7 @@ test.each([0, -1, undefined, NaN, Infinity, -Infinity])(`${api} with unknown win
   await emit('agent_settled');
   expect(notify).not.toHaveBeenCalled();
   await commands.get('tuck').handler('', ctx);
-  expect(notify.mock.calls.at(-1)?.[0]).toContain('standing down:');
+  expect(notify.mock.calls.at(-1)?.[0]).toContain('is standing down');
   expect(notify.mock.calls.at(-1)?.[0]).toContain(api === 'pi-virtual' ? 'pi-virtual model' : 'context window');
  } finally { await handle.close(); }
 });

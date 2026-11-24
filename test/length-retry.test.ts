@@ -4,34 +4,10 @@ import { branchReplyFloor, needsFullReplyReserve, requestReplyFloor, thinkingOnl
 import { statusText } from '../src/status';
 import { MODEL } from './calibration-fixture';
 import { harness } from './budget-fixture';
-import { thinkingLengthCell, thinkingLengthCells } from './length-retry-fixture';
+import { expectThinkingLengthOutcome, thinkingLengthCell, thinkingLengthCells } from './length-retry-fixture';
 
 test.each(thinkingLengthCells)('thinking-only length recovery: $name', async cell => {
- const r = await thinkingLengthCell(cell);
- if (!cell.above) {
-  expect(r.requests).toBe(1);
-  expect(r.retries).toBe(0);
-  expect(r.stops).toEqual(['length']);
-  expect(r.preserved).toBe(true);
-  expect(r.faults).toEqual([]);
-  return;
- }
- expect(r.requests).toBe(2);
- expect(r.retries).toBe(1);
- expect(r.stops).toEqual(['length', cell.twice ? 'length' : 'stop']);
- expect(r.omitted).toBe(true);
- expect(r.preserved).toBe(true);
- expect(r.wholePrompt).toBe(true);
- // Below the room Pi's cap is already the model's whole reply cap, so the retry gives up no history; above it the deepest cut buys room.
- expect(r.noOptionalHistory).toBe(cell.above);
- expect(r.deepest).toBe(cell.above);
- expect(r.caps[1]).toBeGreaterThanOrEqual(r.outputs[0]!);
- if (cell.above) expect(r.caps[1]).toBeGreaterThan(r.caps[0]!);
- expect(r.replyFloor).toBe(Math.max(3_584, ...r.outputs));
- expect(r.receipt).toMatchObject({ kind: 'retry', stoppedOutputTokens: r.outputs[0], piEstimateTokens: r.contextTokens[1], piCap: r.caps[1] });
- expect(r.faults).toEqual([]);
- // K10: a retry that ends normally clears the length-stop notice; a retried reply that stops again leaves exactly one.
- expect(r.notices).toEqual(cell.twice ? ["pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session."] : []);
+ expectThinkingLengthOutcome(cell, await thinkingLengthCell(cell));
 });
 
 test.each(['text', 'toolCall'] as const)('a length stop with %s does not trigger pi-tuck recovery', async kind => {
@@ -124,5 +100,5 @@ test('/tuck counts retry receipts on the current branch', () => {
  expect(statusText({ version: 'test', active: true, branch: [
   { type: 'custom', customType: 'pi-tuck-capacity', data: { kind: 'retry' } },
   { type: 'custom', customType: 'pi-tuck-capacity', data: { kind: 'above-room' } },
- ], cutAt: undefined })).toContain('Retries: 1 after thinking-only length stops in this session.');
+ ], cutAt: undefined })).toContain('Capacity retries on this branch: 1.');
 });
