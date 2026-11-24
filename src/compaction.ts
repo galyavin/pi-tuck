@@ -236,6 +236,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const protectedPrompt = (ctx: ExtensionContext) => run?.prompt?.id(ctx.sessionManager.getBranch());
     const clips = () => run?.clips ?? emptyClips;
     const emptyClips = new Map<string, Clip>();
+    const restoreClips = (snapshot: ReadonlyMap<string, Clip>) => {
+        const current = clips();
+        current.clear();
+        for (const [id, clip] of snapshot) current.set(id, clip);
+    };
     const resetRun = (session = false) => {
         if (!session && run?.phase === "commit-failed") run.clear(); else run = undefined;
         calibration.pending = undefined;
@@ -452,7 +457,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const candidate = deepest();
             if (candidate.kind === "cut" && fits(total(candidate), limits(ctx).hardLine, ctx) && requestClamp(project(candidate), ctx).leavesFloor)
                 return candidate;
-            clips().clear(); for (const [id, clip] of previousClips) clips().set(id, clip);
+            restoreClips(previousClips);
             return { kind: "fault", capacity: true, message: clampMessage };
         };
         for (let retry = 0; ; retry++) {
@@ -959,13 +964,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const saved = { ...cut, firstKeptEntryId: current.keptFromId! };
         return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
     };
-    const retryLength = (event: TurnEndEvent, ctx: ExtensionContext) => {
-        const serverClip = serverClipped.has(event.message);
+    const retryLength = (event: TurnEndEvent, ctx: ExtensionContext, serverClip: boolean) => {
         // Exhausting the full per-request allowance is not evidence that input is too large.
         // Preserve the unfinished response; provider-native continuation owns this case.
         // Native Pi does not compact-and-retry output that reached the catalogue cap.
-        if (thinkingOnlyLength(event.message) && !serverClip &&
-            event.message.role === "assistant" && ctx.model &&
+        if (!serverClip && event.message.role === "assistant" && ctx.model &&
             event.message.usage.output >= ctx.model.maxTokens) {
             return { entries: event.entries, continue: false };
         }
@@ -990,8 +993,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // planner found no history to cut, there is no capacity diagnosis to make.
         if (!serverClip && (check?.cap === undefined || asIsCheck.cap === undefined || check.cap <= asIsCheck.cap) &&
             (asIsCheck.leavesFloor || decision.kind === "fault" && !decision.capacity)) {
-            clips().clear();
-            for (const [id, clip] of previousClips) clips().set(id, clip);
+            restoreClips(previousClips);
             markBoundary(entries);
             return { entries, continue: false };
         }
@@ -1019,8 +1021,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         try {
             if (standDown(ctx)) return;
             if (!active() || run?.phase !== "admitted") return;
-            if ((thinkingOnlyLength(event.message) || serverClipped.has(event.message)) && !failure() && !ctx.signal?.aborted && settingsFor().getCompactionSettings(ctx.model).enabled)
-                return retryLength(event, ctx);
+            const thinkingStop = thinkingOnlyLength(event.message);
+            const serverClip = serverClipped.has(event.message);
+            if ((thinkingStop || serverClip) && !failure() && !ctx.signal?.aborted && settingsFor().getCompactionSettings(ctx.model).enabled)
+                return retryLength(event, ctx, serverClip);
             run.thinkingRetryPending = false;
             const decide = event.outcome === "completed" && !ctx.signal?.aborted && event.context.canContinue && event.toolResults.length > 0 &&
                 settingsFor().getCompactionSettings(ctx.model).enabled;
@@ -1097,7 +1101,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (!accepts(decision)) decision = deepestDecision(ctx, false, true);
         let native = false;
         if (decision.kind !== "cut" || !accepts(decision)) {
-            clips().clear(); for (const [id, clip] of previousClips) clips().set(id, clip);
+            restoreClips(previousClips);
             const floor = nativeFloorDecision(ctx, false, true, project);
             if (!floor) return { messages };
             decision = floor;

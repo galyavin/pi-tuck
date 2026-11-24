@@ -104,7 +104,7 @@ export function llamaContinuationStream(profile: LlamaContinuation, native: ApiS
                     }
                     if (signal.aborted) {
                         first = { ...first, stopReason: "aborted", errorMessage: "Continuation cancelled or deadline reached" };
-                    } else if (!cacheVerified || admission.signal.aborted) {
+                    } else if (!cacheVerified) {
                         first = { ...first, errorMessage: CONTINUATION_CACHE_MISS };
                     } else if (second.stopReason !== "error" && second.stopReason !== "aborted" &&
                         promptTokens(second) === expectedPrompt &&
