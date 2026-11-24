@@ -25,7 +25,7 @@ export function statusText(input: {
     const cuts = input.branch.filter(e => e.type === "compaction"), ours = cuts.filter(e => (e.details as { compactor?: unknown } | null | undefined)?.compactor === "pi-tuck");
     const last = ours.at(-1), before = last?.tokensBefore, after = (last?.details as { tokensAfter?: unknown } | undefined)?.tokensAfter;
     const count = (n: number) => n.toLocaleString("en-US");
-    const cutLine = ours.length === 0 ? input.pending ? "Cuts: none saved yet in this session." : input.cacheSensitive ? "Cuts: none yet in this session. Recall is available." : "Cuts: none yet in this session. The recall tools appear after the first cut."
+    const cutLine = ours.length === 0 ? input.pending ? "Cuts: none saved yet in this session." : "Cuts: none yet in this session. The recall tools appear after the first cut."
         : `Cuts: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
     const native = cuts.length - ours.length;
     const retries = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity" &&

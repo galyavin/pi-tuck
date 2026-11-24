@@ -112,7 +112,7 @@ pi-tuck needs no setting. Put optional settings in `pi-tuck.json` in Pi's agent 
 - A number above 0 and at most 1 fixes the cut point as a share of the room. `1` cuts at the full room.
 - If the file is bad, pi-tuck says so at session start and uses the defaults.
 
-For a local runtime that loses expensive prompt state when history changes, list its model under `cacheSensitiveModels`. This skips early cuts while the configured reply reserve fits and keeps the recall tool available from the first request.
+For a local runtime that loses expensive prompt state when history changes, list its model under `cacheSensitiveModels`. This skips early cuts while the configured reply reserve fits.
 
 The optional `llamaContinuation` setting gives one **verified** llama.cpp Chat Completions model a single continuation after a thinking-only response exhausts its full output allowance. Configure the provider in Pi's `models.json`. The extra allowance is bounded by remaining context and `extraTokens`. The deadline covers both requests. Enable this only on a runtime and template tested with `continue_final_message`. For example:
 

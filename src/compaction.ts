@@ -622,7 +622,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	});
 	pi.on("session_before_tree", (event, ctx) => !standDown(ctx) && event.preparation.userWantsSummary ? { cancel: true } : undefined);
     pi.on("session_start", (_event, ctx) => { resetRun(true); recorder.stop("session-transition"); proposalId = undefined; calibration.reseed(ctx, "session"); });
-    const historyToolsEnabled = (ctx: ExtensionContext) => stateFor(ctx).kind === "active" && (preservePrefix(ctx) || view(ctx).hasTuckCut);
+    const historyToolsEnabled = (ctx: ExtensionContext) => stateFor(ctx).kind === "active" && view(ctx).hasTuckCut;
     const syncHistoryTools = (ctx: ExtensionContext) => { if (active()) applyHistoryTools(pi, historyToolsEnabled(ctx)); };
     pi.on("session_start", (_event, ctx) => syncHistoryTools(ctx));
     // A plan decided on `input` is for the branch it was decided on: moving in the tree leaves it planned for another branch, whose kept entry
