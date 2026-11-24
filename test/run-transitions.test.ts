@@ -22,14 +22,14 @@ test(`run transition ${from} -> ${to}`, () => {
     expect(run.error).toBe(to === 'failed' || to === 'commit-failed' ? error : undefined);
   } else {
     expect(() => run.transition(to, undefined, error)).toThrow(`invalid run transition ${from} -> ${to}`);
-    expect(run.phase).toBe(from);
+    expect(run.phase).toBe(from === 'commit-failed' ? 'commit-failed' : 'failed');
   }
 });
 
 test('failed phases require error data', () => {
   const run = new Run('starting');
   expect(() => run.transition('failed')).toThrow('invalid run transition');
-  expect(run.phase).toBe('starting');
+  expect(run.phase).toBe('failed');
 });
 
 test('expired input-plan provenance survives admission until the attempt data is cleared', () => {
@@ -41,17 +41,23 @@ test('expired input-plan provenance survives admission until the attempt data is
   expect(run.expired).toBe(false);
 });
 
-test('production ignores invalid transitions and warns once without a UI', () => {
-  const write = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+test('production rejects invalid transitions and prevents subsequent admission', () => {
   vi.stubEnv('NODE_ENV', 'production');
   try {
-    const run = new Run('starting'); run.transition('failed', undefined, new Error('failed attempt'));
-    expect(run.transition('admitted', { hasUI: true })).toBe(false);
-    expect(write).not.toHaveBeenCalled();
-    expect(run.transition('starting', { hasUI: false })).toBe(false);
-    expect(run.transition('admitted', { hasUI: false })).toBe(false);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(write.mock.calls[0][0]).toContain('invalid run transition failed -> starting');
+    const run = new Run('starting');
+    expect(() => run.transition('claimed', { hasUI: true })).toThrow('invalid run transition');
     expect(run.phase).toBe('failed');
-  } finally { vi.unstubAllEnvs(); write.mockRestore(); }
+    const cause = run.error;
+    expect(() => run.transition('admitted', { hasUI: false })).toThrow('invalid run transition');
+    expect(run.error).toBe(cause);
+  } finally { vi.unstubAllEnvs(); }
+});
+
+test('invalid transition preserves a persistence failure', () => {
+  const cause = new Error('write failed');
+  const run = new Run('starting');
+  run.transition('commit-failed', undefined, cause);
+  expect(() => run.transition('admitted')).toThrow('invalid run transition');
+  expect(run.phase).toBe('commit-failed');
+  expect(run.error).toBe(cause);
 });
