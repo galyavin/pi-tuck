@@ -3,6 +3,12 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.5]
+
+- Preserve reasoning-only output exhaustion and avoid retries that cannot buy reply room.
+- Allow selected local models to defer early cuts and keep a stable recall tool declaration.
+- Support bounded native llama.cpp continuation for an explicitly configured and verified provider.
+
 ## [1.3.4] - 2026-11-20
 
 ### Fixed

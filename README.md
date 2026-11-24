@@ -102,7 +102,7 @@ pi-tuck stands down to native Pi when it cannot work safely: the window is unkno
 
 ## Settings
 
-pi-tuck needs no setting. One is optional. Put it in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`, or the folder that `PI_CODING_AGENT_DIR` names):
+pi-tuck needs no setting. Put optional settings in `pi-tuck.json` in Pi's agent folder (`~/.pi/agent`, or the folder that `PI_CODING_AGENT_DIR` names):
 
 ```json
 { "cutAt": 0.8 }
@@ -112,10 +112,25 @@ pi-tuck needs no setting. One is optional. Put it in `pi-tuck.json` in Pi's agen
 - A number above 0 and at most 1 fixes the cut point as a share of the room. `1` cuts at the full room.
 - If the file is bad, pi-tuck says so at session start and uses the defaults.
 
+For a local runtime that loses expensive prompt state when history changes, list its model under `cacheSensitiveModels`. This skips early cuts while the configured reply reserve fits and keeps the recall tool available from the first request.
+
+The optional `llamaContinuation` setting gives one **verified** llama.cpp Chat Completions model a single continuation after a thinking-only response exhausts its full output allowance. Configure the provider in Pi's `models.json`. The extra allowance is bounded by remaining context and `extraTokens`. The deadline covers both requests. Enable this only on a runtime and template tested with `continue_final_message`. For example:
+
+```json
+{
+  "cacheSensitiveModels": ["my-provider/my-model"],
+  "llamaContinuation": {
+    "model": "my-provider/my-model",
+    "extraTokens": 4096,
+    "deadlineMs": 5400000
+  }
+}
+```
+
 ## Small windows
 
 - pi-tuck keeps the same reply room as native Pi (`reserveTokens`).
-- After a reply that stops for length with thinking only, pi-tuck retries the turn once.
+- When a reply spends the full allowance on thinking, pi-tuck keeps it in the transcript and reports output exhaustion. It retries for capacity only if recovery can make more room.
 - When a run ends on a reply cut at the output limit, pi-tuck says so.
 - When a server clips replies below the window, pi-tuck learns the smaller window. It drops that window when the model's window changes.
 - pi-tuck refuses a request only past the window. The refusal names what does not fit.

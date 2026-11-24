@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { installCompaction } from "./src/compaction";
 import { validCutAt } from "./src/budget";
 import { notify } from "./src/notify";
+import type { LlamaContinuation } from "./src/llama-continuation";
 import { cleanupLegacyFiles } from "./src/legacy-cleanup";
 
 export type { CompactionOptions } from "./src/compaction";
@@ -35,24 +36,50 @@ export default async function (pi: ExtensionAPI) {
 		return;
 	}
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
-	const handle = await installCompaction(pi, { cutAt: settings.cutAt });
+	const handle = await installCompaction(pi, { cutAt: settings.cutAt, cacheSensitiveModels: settings.cacheSensitiveModels });
+	const continuation = settings.llamaContinuation;
+	let continuationError: string | undefined;
+	if (continuation) {
+		try {
+			const [{ getApiProvider }, { llamaContinuationStream }] = await Promise.all([
+				import("@earendil-works/pi-ai/compat"), import("./src/llama-continuation"),
+			]);
+			const native = getApiProvider("openai-completions")?.streamSimple;
+			if (!native) throw new Error("Pi's Chat Completions provider is unavailable");
+			pi.registerProvider(continuation.model.split("/")[0]!, {
+				api: "openai-completions",
+				streamSimple: llamaContinuationStream(continuation, native),
+			});
+		} catch (error) {
+			continuationError = `pi-tuck: native continuation unavailable: ${String(error)}`;
+		}
+	}
 	let said = false;
 	pi.on("session_start", async (_event, ctx) => {
 		await cleanupLegacyFiles(ctx);
 		if (handle.state?.(ctx).kind === "standingDown") return;
+		if (continuationError) notify(ctx, continuationError, "warning");
 		if (settings.error && !said) {
 			said = notify(ctx, `pi-tuck: ${settings.error}; using the defaults.`, "warning");
 		}
 	});
 }
 
-function readSettings(path: string): { cutAt?: number; error?: string } {
+type Settings = { cutAt?: number; cacheSensitiveModels?: string[]; llamaContinuation?: LlamaContinuation; error?: string };
+const modelRef = (value: unknown) => typeof value === "string" && /^[^/]+\/.+/.test(value);
+function readSettings(path: string): Settings {
 	let text: string;
 	try { text = readFileSync(path, "utf8"); } catch { return {}; }
 	try {
 		const value = JSON.parse(text);
-		if (value && typeof value === "object" &&
-			(value.cutAt === undefined || validCutAt(value.cutAt))) return { cutAt: value.cutAt };
+		if (value && typeof value === "object" && (value.cutAt === undefined || validCutAt(value.cutAt)) &&
+			(value.cacheSensitiveModels === undefined || Array.isArray(value.cacheSensitiveModels) && value.cacheSensitiveModels.every(modelRef))) {
+			const c = value.llamaContinuation;
+			if (c === undefined || c && modelRef(c.model) &&
+				Number.isSafeInteger(c.extraTokens) && c.extraTokens > 0 &&
+				Number.isSafeInteger(c.deadlineMs) && c.deadlineMs > 0 && c.deadlineMs <= 2_147_483_647)
+				return { cutAt: value.cutAt, cacheSensitiveModels: value.cacheSensitiveModels, llamaContinuation: c };
+		}
 	} catch { /* reported below */ }
 	return { error: `${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1` };
 }

@@ -8,6 +8,14 @@ import { thinkingLengthCell, thinkingLengthCells } from './length-retry-fixture'
 
 test.each(thinkingLengthCells)('thinking-only length recovery: $name', async cell => {
  const r = await thinkingLengthCell(cell);
+ if (!cell.above) {
+  expect(r.requests).toBe(1);
+  expect(r.retries).toBe(0);
+  expect(r.stops).toEqual(['length']);
+  expect(r.preserved).toBe(true);
+  expect(r.faults).toEqual([]);
+  return;
+ }
  expect(r.requests).toBe(2);
  expect(r.retries).toBe(1);
  expect(r.stops).toEqual(['length', cell.twice ? 'length' : 'stop']);
@@ -23,7 +31,7 @@ test.each(thinkingLengthCells)('thinking-only length recovery: $name', async cel
  expect(r.receipt).toMatchObject({ kind: 'retry', stoppedOutputTokens: r.outputs[0], piEstimateTokens: r.contextTokens[1], piCap: r.caps[1] });
  expect(r.faults).toEqual([]);
  // K10: a retry that ends normally clears the length-stop notice; a retried reply that stops again leaves exactly one.
- expect(r.notices).toEqual(cell.twice ? ["pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue."] : []);
+ expect(r.notices).toEqual(cell.twice ? ["pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session."] : []);
 });
 
 test.each(['text', 'toolCall'] as const)('a length stop with %s does not trigger pi-tuck recovery', async kind => {
