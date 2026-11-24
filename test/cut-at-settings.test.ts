@@ -4,9 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
-// `"cutAt"` in pi-tuck.json in Pi's agent folder is read by index.ts and handed to installCompaction; any value that is not a number above
-// 0 and at most 1 is a settings error, reported at the next session start with the other settings errors, and the default applies.
-// installCompaction is replaced by a recorder (it is covered by cut-at.test.ts), so that the option the extension passes can be read.
+// Record the options and startup warnings from the extension entry point.
 const state = vi.hoisted(() => ({ options: [] as { cutAt?: number }[] }));
 vi.mock('../src/compaction', () => ({
 	installCompaction: vi.fn(async (_pi: unknown, options: { cutAt?: number }) => { state.options.push(options); return {}; }),
@@ -56,7 +54,7 @@ test('with the legacy setting false the cut point still applies', async () => {
 });
 
 for (const bad of ['0', '-0.5', '1.01', '2', '"0.6"', 'null', 'true', '[0.6]', '{}', '"fast"'])
-test(`{"cutAt": ${bad}}: a settings error, reported with the same warning as any other, and the default applies`, async () => {
+test(`{"cutAt": ${bad}}: reports an invalid cut point and uses defaults`, async () => {
 	const r = await load(`{"cutAt": ${bad}}`);
 	expect(r.cutAt).toBeUndefined();
 	const warnings = r.notices.filter(n => n.level === 'warning');
@@ -64,7 +62,7 @@ test(`{"cutAt": ${bad}}: a settings error, reported with the same warning as any
 	expect(warnings[0]!.message).toBe(`pi-tuck: ${r.path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the defaults.`);
 });
 
-test('the error path is the one every settings error takes: a file that is not an object of known values, or not JSON, gives the same warning and the default', async () => {
+test('malformed JSON and invalid cutAt use the original settings warning and defaults', async () => {
 	for (const file of ['{"cutAt": 0, "semanticRecall": false}', 'not json', '[]x']) {
 		const r = await load(file);
 		expect(r.cutAt, file).toBeUndefined();
@@ -73,6 +71,16 @@ test('the error path is the one every settings error takes: a file that is not a
 		expect(warnings[0]!.message, file).toContain(`pi-tuck: ${r.path} should be a JSON object`);
 		expect(warnings[0]!.message, file).toContain('using the defaults.');
 	}
+});
+
+test.each([
+	['cacheSensitiveModels', ['missing-provider']],
+	['llamaContinuation', { model: 'local/llama', extraTokens: 4096, deadlineMs: 0 }],
+] as const)('an invalid %s points to the failing setting and uses defaults', async (key, value) => {
+	const r = await load(JSON.stringify({ cutAt: 0.8, [key]: value }));
+	expect(r.cutAt).toBeUndefined();
+	expect(r.notices).toEqual([{ level: 'warning', message: expect.stringContaining(`${r.path} ${key}`) }]);
+	expect(r.notices[0]!.message).toContain('using the defaults.');
 });
 
 for (const value of [true, false, null, 0, "no", [], { enabled: true }])

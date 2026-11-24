@@ -128,7 +128,7 @@ async function arm(shape: Cell, setup: Setup, model: { provider: string; id: str
    await h.session.prompt('/tuck');
    expect(h.providerFingerprints).toHaveLength(requests);
    expect(h.notices).toHaveLength(1);
-   expect(h.notices[0]).toContain(`: standing down: ${setup.reason}; Pi's own compaction runs.`);
+   expect(h.notices[0]).toContain(`is standing down (${setup.reason}). Pi controls compaction.`);
   }
   const file = h.manager.getSessionFile();
   expect(file).toBeTruthy();

@@ -20,7 +20,7 @@ import type { RecallPolicy } from "./recall.js";
 import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY_CHARACTERS } from "./recall.js";
 
 import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
-import { LOADED_VERSION, statusText } from "./status.js";
+import { CONTINUATION_CACHE_MISS, LOADED_VERSION, statusText } from "./status.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { notify } from "./notify.js";
 import { applyHistoryTools, historyToolDeclarations, historyToolNames, stageHistoryTools } from "./history-tools.js";
@@ -49,8 +49,7 @@ const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JS
 /** The compactor's verdict that this attempt cannot be made: the cut it needs cannot be made, or the request cannot fit. Like every failure but
  * a `CommitFault`, it ends with its attempt (`resetRun`), and the next attempt plans afresh from the session as it is. */
 class Refusal extends Error {}
-/** A cut this compactor supplied that Pi then failed to commit. Pi appends a cut to the session in memory before it writes the file, so the
- * session may hold a cut its file lacks; what is written after would build on it. The one failure that stays until the session restarts. */
+/** Pi could not confirm a pi-tuck cut on disk. Keep this fault until restart because a failed boundary may leave memory and disk out of sync. */
 class CommitFault extends Error {}
 /** A refusal for want of room, which the user can remedy: it carries advice. */
 class CapacityError extends Refusal {}
@@ -165,6 +164,8 @@ export interface CompactionOptions {
 	 * which is the room less 2% of it, or this fraction of the room when that is lower; a lower value cuts earlier and leaves less. The room
 	 * owns cut targets; standalone final capacity admission uses the branch reply floor. If omitted, the band adapts to the last cut. */
 	cutAt?: number;
+	/** Models where a usable cached prefix is more valuable than an early cut. */
+	cacheSensitiveModels?: readonly string[];
 	/** A host's response reserve: without `responseExact: true`, the catalogue maximum output stays its floor; with it, `response` is exact.
 	 * Standalone cuts against Pi's reserveTokens, then admits up to the window less Pi's safety margin and max(3,584, largest branch output), capped at that reserve.
 	 * After a genuine length stop with text/tool output or context overflow it holds the full reserve, also raised to the catalogue maximum.
@@ -225,7 +226,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("session_compact", (_event, ctx) => observe(ctx));
     pi.on("session_shutdown", () => { recorder.stop("session-shutdown"); });
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
-        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, pending: view(ctx).pending }), "info");
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, cacheSensitive: preservePrefix(ctx), pending: view(ctx).pending }), "info");
     } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
@@ -234,6 +235,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const protectedPrompt = (ctx: ExtensionContext) => run?.prompt?.id(ctx.sessionManager.getBranch());
     const clips = () => run?.clips ?? emptyClips;
     const emptyClips = new Map<string, Clip>();
+    const restoreClips = (snapshot: ReadonlyMap<string, Clip>) => {
+        const current = clips();
+        current.clear();
+        for (const [id, clip] of snapshot) current.set(id, clip);
+    };
     const resetRun = (session = false) => {
         if (!session && run?.phase === "commit-failed") run.clear(); else run = undefined;
         calibration.pending = undefined;
@@ -247,7 +253,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (stateFor(ctx).kind === "active") return false;
         resetRun();
         calibration.windowObservation = undefined;
-        lengthStop = false;
+        lengthStop = undefined;
         return true;
     };
     const promptRefusal = () => new Refusal("Prompt check failed: the whole starting prompt cannot fit after cutting to the band and room, shrinking the summary and clipping fresh results. Shorten the prompt or choose a model with a larger context window, then retry");
@@ -345,15 +351,24 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     });
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
-    let lengthStop = false;
-    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = false; calibration.pending = undefined; });
-    pi.on("message_end", event => { if (event.message.role === "assistant") lengthStop = event.message.stopReason === "length"; });
+    let lengthStop: { kind: "thinking" | "output"; cacheMiss: boolean } | undefined;
+    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted", ctx); run.thinkingRetryPending = false; lengthStop = undefined; calibration.pending = undefined; });
+    pi.on("message_end", event => {
+        if (event.message.role !== "assistant") return;
+        lengthStop = event.message.stopReason === "length" ? {
+            kind: event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output",
+            cacheMiss: event.message.errorMessage === CONTINUATION_CACHE_MISS,
+        } : undefined;
+    });
     pi.on("agent_settled", (_event, ctx) => {
         try {
             if (standDown(ctx) || !lengthStop || !active()) return;
-            lengthStop = false;
-            const message = "pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
-            notify(ctx, message, "warning");
+            const { kind, cacheMiss } = lengthStop;
+            const message = kind === "thinking"
+                ? "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session."
+                : "pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
+            lengthStop = undefined;
+            notify(ctx, kind === "thinking" && cacheMiss ? `${message} ${CONTINUATION_CACHE_MISS}` : message, "warning");
         } finally { resetRun(); }
     });
 	const active = () => options.active?.() ?? true;
@@ -386,8 +401,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const hardLine = Math.min(Math.max(room, contextWindow(ctx) - piMargin - floor), calibration.lastCeiling ?? Infinity);
         return { response, room, hardLine, replyFloor: floor };
     };
-    const decisionBand = (ctx: ExtensionContext, room: number, system: number, current = view(ctx)) => {
-        const last = current.session.getBranch().findLast(entry => entry.type === "compaction");
+    const preservePrefix = (ctx: ExtensionContext) => ctx.model !== undefined &&
+        options.cacheSensitiveModels?.includes(`${ctx.model.provider}/${ctx.model.id}`);
+    const decisionBand = (ctx: ExtensionContext, room: number, system: number, current?: ReturnType<typeof view>) => {
+        if (preservePrefix(ctx)) return room;
+        const last = (current ?? view(ctx)).session.getBranch().findLast(entry => entry.type === "compaction");
         const after = last?.type === "compaction" ? (last.details as { tokensAfter?: unknown } | undefined)?.tokensAfter : undefined;
         return bandOf(room, cutAt, options.cutAt === undefined && typeof after === "number" && Number.isFinite(after) && after >= 0
             ? { system, tokensAfter: after, factor: calibration.factor } : undefined);
@@ -438,7 +456,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             const candidate = deepest();
             if (candidate.kind === "cut" && fits(total(candidate), limits(ctx).hardLine, ctx) && requestClamp(project(candidate), ctx).leavesFloor)
                 return candidate;
-            clips().clear(); for (const [id, clip] of previousClips) clips().set(id, clip);
+            restoreClips(previousClips);
             return { kind: "fault", capacity: true, message: clampMessage };
         };
         for (let retry = 0; ; retry++) {
@@ -545,6 +563,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     return { compaction: { ...compaction, firstKeptEntryId: current.keptFromId! } };
                 }
             }
+            // Capacity is decided when there is another request to send. A threshold
+            // notification after exhausted reasoning must not put that response away.
+            if (event.reason === "threshold" && lengthStop?.kind === "thinking") return { cancel: true };
             const operatorManual = event.reason === "manual";
             if (operatorManual && run?.phase !== "admitted") resetRun();
 			access();
@@ -942,7 +963,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const saved = { ...cut, firstKeptEntryId: current.keptFromId! };
         return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
     };
-    const retryLength = (event: TurnEndEvent, ctx: ExtensionContext) => {
+    const retryLength = (event: TurnEndEvent, ctx: ExtensionContext, serverClip: boolean) => {
+        // Exhausting the full per-request allowance is not evidence that input is too large.
+        // Preserve the unfinished response; provider-native continuation owns this case.
+        // Native Pi does not compact-and-retry output that reached the catalogue cap.
+        if (!serverClip && event.message.role === "assistant" && ctx.model &&
+            event.message.usage.output >= ctx.model.maxTokens) {
+            return { entries: event.entries, continue: false };
+        }
         // Pi's supported boundary drafts commit before finishTurn honors `continue`. Omitting the selected failed response also prevents
         // Pi's later native length recovery from retrying it independently. The stored message and its output usage stay on the branch.
         const entries: SessionBoundaryDraft[] = [...(atBoundary(event, ctx, "run-end", false)?.entries ?? event.entries),
@@ -951,35 +979,35 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const preview = liveCut.view(ctx, entries).session;
         const view: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
         const hostInput = hostMessages(ctx), host = conversationTokens(hostInput);
-        // The deepest cut only when it buys reply room: where Pi's cap on the request as it stands (the stopped reply left out) is already
-        // as large as the deepest cut's, the turn is retried uncut, and no history is given up for nothing.
         const asIs = projectedRequest(preview.buildSessionProjection().messages, view, hostInput, event.context.pendingMessages, ctx.getSystemPrompt(), pi.getActiveTools(), false);
         const asIsCheck = requestClamp(asIs, view);
         const previousClips = new Map(clips());
         const decision = deepestDecision(view, false, true);
-        if (!serverClipped.has(event.message) && decision.kind === "cut" && asIsCheck.cap !== undefined && asIsCheck.leavesFloor &&
-            requestClamp(projectedRequest(decision.plan.messages, view, hostInput, event.context.pendingMessages, ctx.getSystemPrompt(), pi.getActiveTools(), true), view).cap! <= asIsCheck.cap) {
-            clips().clear(); for (const [id, clip] of previousClips) clips().set(id, clip);
-            const { room, hardLine } = limits(view);
-            run!.thinkingRetryPending = true;
-            const drafts = [...entries, { type: "custom" as const, customType: "pi-tuck-capacity", data: { kind: "retry", stoppedReplyEntryId: event.messageEntryId,
-                stoppedOutputTokens: event.message.role === "assistant" ? event.message.usage?.output ?? 0 : 0, cut: false,
-                piEstimateTokens: asIsCheck.estimate, piCap: asIsCheck.cap, room, hardLine, buildId: BUILD_ID } }];
-            markBoundary(drafts);
-            return { entries: drafts, continue: true };
+        const cut = decision.kind === "cut" ? {
+            ...decision,
+            messages: projectedRequest(decision.plan.messages, view, hostInput, event.context.pendingMessages, ctx.getSystemPrompt(), pi.getActiveTools(), true),
+        } : undefined;
+        const check = cut && requestClamp(cut.messages, view);
+        // An unchanged allowance would repeat the same failed generation. If the
+        // planner found no history to cut, there is no capacity diagnosis to make.
+        if (!serverClip && (check?.cap === undefined || asIsCheck.cap === undefined || check.cap <= asIsCheck.cap) &&
+            (asIsCheck.leavesFloor || decision.kind === "fault" && !decision.capacity)) {
+            restoreClips(previousClips);
+            markBoundary(entries);
+            return { entries, continue: false };
         }
-        if (decision.kind !== "cut") throw new CapacityError(clampMessage);
-        const messages = projectedRequest(decision.plan.messages, view, hostInput, event.context.pendingMessages, ctx.getSystemPrompt(), pi.getActiveTools(), true);
+        if (!cut || !check) throw new CapacityError(decision.kind === "fault" ? decision.message : clampMessage);
+        const { messages } = cut;
         if (run?.prompt && !carriesPrompt(messages, run.prompt.text(ctx.sessionManager.getBranch()), run.prompt.role)) throw promptRefusal();
         const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
-        const tokens = system + conversationTokens(messages), check = requestClamp(messages, view);
+        const tokens = system + conversationTokens(messages);
         const { response, room, hardLine } = limits(view);
         // A learned server boundary uses the same admission rule as the guard: below the room the whole reserve fits in provider units.
         // Keep the thinking-only rule's unconditional native-clamp floor unchanged.
-        const needsClampFloor = !serverClipped.has(event.message) || corrected(tokens, view) > room;
+        const needsClampFloor = !serverClip || corrected(tokens, view) > room;
         if (!fits(tokens, hardLine, view) || check.cap === undefined || needsClampFloor && !check.leavesFloor) throw new CapacityError(clampMessage);
-        const compaction = captureDraft(decision.plan.compaction, view, decision.plan.reserve, "length-retry", tokens, true, false, undefined,
-            { response, host, mandatory: system + host + conversationTokens(event.context.pendingMessages), target: decision.target, margin: room - decisionBand(view, room, system) });
+        const compaction = captureDraft(cut.plan.compaction, view, cut.plan.reserve, "length-retry", tokens, true, false, undefined,
+            { response, host, mandatory: system + host + conversationTokens(event.context.pendingMessages), target: cut.target, margin: room - decisionBand(view, room, system) });
         run!.thinkingRetryPending = true;
         const drafts = [...entries, { type: "compaction" as const, summary: compaction.summary, firstKeptEntryId: compaction.firstKeptEntryId || null, details: compaction.details },
             { type: "custom" as const, customType: "pi-tuck-capacity", data: { kind: "retry", stoppedReplyEntryId: event.messageEntryId,
@@ -992,8 +1020,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         try {
             if (standDown(ctx)) return;
             if (!active() || run?.phase !== "admitted") return;
-            if ((thinkingOnlyLength(event.message) || serverClipped.has(event.message)) && !failure() && !ctx.signal?.aborted && settingsFor().getCompactionSettings(ctx.model).enabled)
-                return retryLength(event, ctx);
+            const thinkingStop = thinkingOnlyLength(event.message);
+            const serverClip = serverClipped.has(event.message);
+            if ((thinkingStop || serverClip) && !failure() && !ctx.signal?.aborted && settingsFor().getCompactionSettings(ctx.model).enabled)
+                return retryLength(event, ctx, serverClip);
             run.thinkingRetryPending = false;
             const decide = event.outcome === "completed" && !ctx.signal?.aborted && event.context.canContinue && event.toolResults.length > 0 &&
                 settingsFor().getCompactionSettings(ctx.model).enabled;
@@ -1070,7 +1100,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (!accepts(decision)) decision = deepestDecision(ctx, false, true);
         let native = false;
         if (decision.kind !== "cut" || !accepts(decision)) {
-            clips().clear(); for (const [id, clip] of previousClips) clips().set(id, clip);
+            restoreClips(previousClips);
             const floor = nativeFloorDecision(ctx, false, true, project);
             if (!floor) return { messages };
             decision = floor;
@@ -1123,7 +1153,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // Pi commits these entries before the run settles.
         try {
             if (!active() || run?.phase !== "admitted" || failure() || !settingsFor().getCompactionSettings(ctx.model).enabled) return;
-            const decide = event.outcome === "completed" && !ctx.signal?.aborted;
+            const decide = event.outcome === "completed" && !ctx.signal?.aborted && lengthStop?.kind !== "thinking";
             if (view(ctx).pending ? event.outcome === "error" : !decide) return;
             return atBoundary(event, ctx, "run-end", decide);
         } catch (error) { fail(error, ctx); }

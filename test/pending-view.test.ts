@@ -62,7 +62,7 @@ test('switching to an unknown window discards a pending cut and preserves the na
   } finally { await h.handle.close(); }
 });
 
-test.each([false, true])('an uncut length retry checks whether its pending cut was committed (saved=%s)', async saved => {
+test.each([false, true])('a stopped length response checks whether its pending cut was committed (saved=%s)', async saved => {
   const h = await fixture();
   try {
     await h.emit('before_agent_start', { messageType: 'user', prompt: h.prompt, systemPrompt: h.ctx.getSystemPrompt(), systemPromptOptions: { selectedTools: [] } });
@@ -74,8 +74,8 @@ test.each([false, true])('an uncut length retry checks whether its pending cut w
     const messageEntryId = h.manager.appendMessage(message);
     const context = { contextMessages: h.manager.buildSessionProjection().messages, pendingMessages: [], canContinue: true };
     const retry = await h.emit('turn_end', { message, messageEntryId, entries: [], toolResults: [], outcome: 'completed', context });
-    expect(retry.continue).toBe(true);
-    expect(retry.entries.find((entry: any) => entry.customType === 'pi-tuck-capacity')?.data.cut).toBe(false);
+    expect(retry.continue).toBe(false);
+    expect(retry.entries.find((entry: any) => entry.customType === 'pi-tuck-capacity')).toBeUndefined();
     const cut = retry.entries.find((entry: any) => entry.type === 'compaction');
     expect(cut).toBeDefined();
     if (saved) h.manager.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);

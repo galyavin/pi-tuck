@@ -1,3 +1,4 @@
+import { expect } from 'vitest';
 import type { TranscriptContext } from '@earendil-works/pi-ai';
 import { requestReplyFloor } from '../src/request-capacity';
 import { parseRecords, splitSummary } from '../src/tuck/core/transcript';
@@ -40,4 +41,30 @@ export async function thinkingLengthCell(cell: { above: boolean; twice: boolean 
    deepest: details !== undefined && details.tokensAfter === details.carriedTarget,
    replyFloor: requestReplyFloor(branch, 16_384, 16_384), faults: [...h.faults], notices: [...h.notices] };
  } finally { await h.cleanup(); }
+}
+
+export function expectThinkingLengthOutcome(cell: (typeof thinkingLengthCells)[number], r: Awaited<ReturnType<typeof thinkingLengthCell>>) {
+ expect(r.preserved).toBe(true);
+ expect(r.faults).toEqual([]);
+ expect(r.replyFloor).toBe(Math.max(3_584, ...r.outputs));
+ expect(r.notices).toEqual(!cell.above || cell.twice ? [
+  "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session.",
+ ] : []);
+
+ if (!cell.above) {
+  expect(r.requests).toBe(1);
+  expect(r.retries).toBe(0);
+  expect(r.stops).toEqual(['length']);
+  return;
+ }
+
+ expect(r.requests).toBe(2);
+ expect(r.retries).toBe(1);
+ expect(r.stops).toEqual(['length', cell.twice ? 'length' : 'stop']);
+ expect(r.omitted).toBe(true);
+ expect(r.wholePrompt).toBe(true);
+ expect(r.noOptionalHistory).toBe(true);
+ expect(r.deepest).toBe(true);
+ expect(r.caps[1]).toBeGreaterThan(Math.max(r.caps[0]!, r.outputs[0]!));
+ expect(r.receipt).toMatchObject({ kind: 'retry', stoppedOutputTokens: r.outputs[0], piEstimateTokens: r.contextTokens[1], piCap: r.caps[1] });
 }

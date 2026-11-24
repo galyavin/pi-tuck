@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+export const CONTINUATION_CACHE_MISS = "Native continuation stopped because the server could not reuse the unfinished response without rebuilding context.";
+
 /** The version of the package this code was loaded from: the open session keeps it until Pi restarts, whatever is installed since. */
 export const LOADED_VERSION: string = (() => {
     try {
@@ -18,13 +20,14 @@ export function statusText(input: {
     branch: readonly { type: string; tokensBefore?: unknown; details?: unknown; customType?: unknown; data?: unknown }[];
     pending?: boolean;
     cutAt: number | undefined;
+    cacheSensitive?: boolean;
 }): string {
-    if (!input.active) return `pi-tuck ${input.version} is loaded but inactive in this host; Pi's own compaction runs.`;
-    if (input.compaction?.kind === 'standingDown') return `pi-tuck ${input.version}: standing down: ${input.compaction.reason}; Pi's own compaction runs.`;
+    if (!input.active) return `pi-tuck ${input.version} is inactive in this host.`;
+    if (input.compaction?.kind === 'standingDown') return `pi-tuck ${input.version} is standing down (${input.compaction.reason}). Pi controls compaction.`;
     const cuts = input.branch.filter(e => e.type === "compaction"), ours = cuts.filter(e => (e.details as { compactor?: unknown } | null | undefined)?.compactor === "pi-tuck");
     const last = ours.at(-1), before = last?.tokensBefore, after = (last?.details as { tokensAfter?: unknown } | undefined)?.tokensAfter;
     const count = (n: number) => n.toLocaleString("en-US");
-    const cutLine = ours.length === 0 ? input.pending ? "Cuts: none saved yet in this session." : "Cuts: none yet in this session. The recall tools appear after the first cut."
+    const cutLine = ours.length === 0 ? input.pending ? "Cuts: none saved yet in this session." : "Cuts: none yet in this session. Recall becomes available after the first pi-tuck cut on this branch."
         : `Cuts: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
     const native = cuts.length - ours.length;
     const retries = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity" &&
@@ -32,10 +35,10 @@ export function statusText(input: {
     return [
         `pi-tuck ${input.version} (the version this session loaded; restart Pi after an update).`,
         cutLine,
-        ...(retries ? [`Retries: ${retries} after thinking-only length stops in this session.`] : []),
+        ...(retries ? [`Capacity retries on this branch: ${retries}.`] : []),
         ...(input.pending ? ["A cut is pending: requests already carry it; the first boundary saves it."] : []),
         ...(native > 0 ? [`Pi's own compaction cut ${native} time${native === 1 ? "" : "s"} in this session.`] : []),
-        input.cutAt === undefined ? "Cut point: adapts by itself." : `Cut point: fixed at cutAt ${input.cutAt} of the input room. Remove cutAt from pi-tuck.json to let it adapt.`,
+        input.cacheSensitive ? "Cut point: preserves the active prefix while the reply reserve fits." : input.cutAt === undefined ? "Cut point: adapts by itself." : `Cut point: cutAt ${input.cutAt} of the room, subject to the standard margin. Remove cutAt from pi-tuck.json to let it adapt.`,
         "Search: by keyword.",
     ].join("\n");
 }

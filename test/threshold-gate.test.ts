@@ -167,3 +167,16 @@ test("a declined threshold ask does not end an operator's running incident recor
   expect(JSON.parse(h.notices.at(-1)!).state, r.probe).toBe('recording');
  } finally { await h.cleanup(); await new Promise(resolve => setTimeout(resolve, 100)); rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("a cache-sensitive model keeps its active prefix until a cut is required", async () => {
+ const options = { ...base, at: "prompt" as const, complete: 155000, cutAtDefault: true };
+ const normal = await scenario(options);
+ const cacheSensitiveModels = ["openai-codex/gpt-6.1-sol"];
+ const cached = await scenario({ ...options, compaction: { ...EXACT_RESERVE, cacheSensitiveModels } });
+ const due = await scenario({ ...options, complete: ROOM_EXACT + 2000, compaction: { ...EXACT_RESERVE, cacheSensitiveModels } });
+ expect(normal.cuts, normal.probe).toBe(1);
+ expect(cached.cuts, cached.probe).toBe(0);
+ expect(cached.faults, cached.probe).toEqual([]);
+ expect(due.cuts, due.probe).toBe(1);
+ expect(due.faults, due.probe).toEqual([]);
+});

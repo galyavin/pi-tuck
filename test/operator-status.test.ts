@@ -16,7 +16,7 @@ test('the loaded version is the package version', () => {
 test('/tuck before any cut, adaptive', () => {
  expect(statusText(base)).toBe([
   'pi-tuck 9.9.9 (the version this session loaded; restart Pi after an update).',
-  'Cuts: none yet in this session. The recall tools appear after the first cut.',
+  'Cuts: none yet in this session. Recall becomes available after the first pi-tuck cut on this branch.',
   'Cut point: adapts by itself.',
   'Search: by keyword.',
  ].join('\n'));
@@ -29,9 +29,9 @@ test('/tuck counts pi-tuck cuts on the branch, gives the last one, and names Pi\
 });
 
 test('/tuck names a hand-set cut point, and keyword search', () => {
- expect(statusText({ ...base, cutAt: 0.9 })).toContain('Cut point: fixed at cutAt 0.9 of the input room. Remove cutAt from pi-tuck.json to let it adapt.');
+ expect(statusText({ ...base, cutAt: 1 })).toContain('Cut point: cutAt 1 of the room, subject to the standard margin.');
  expect(statusText(base)).toContain('Search: by keyword.');
- expect(statusText({ ...base, active: false })).toBe("pi-tuck 9.9.9 is loaded but inactive in this host; Pi's own compaction runs.");
+ expect(statusText({ ...base, active: false })).toBe('pi-tuck 9.9.9 is inactive in this host.');
 });
 
 test('/tuck is a command, not a tool, and shows no JSON', async () => {
