@@ -227,7 +227,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("session_compact", (_event, ctx) => observe(ctx));
     pi.on("session_shutdown", () => { recorder.stop("session-shutdown"); });
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
-        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, pending: view(ctx).pending }), "info");
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, cacheSensitive: preservePrefix(ctx), pending: view(ctx).pending }), "info");
     } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
@@ -552,6 +552,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     return { compaction: { ...compaction, firstKeptEntryId: current.keptFromId! } };
                 }
             }
+            // Capacity is decided when there is another request to send. A threshold
+            // notification after exhausted reasoning must not put that response away.
+            if (event.reason === "threshold" && lengthStop === "thinking") return { cancel: true };
             const operatorManual = event.reason === "manual";
             if (operatorManual && run?.phase !== "admitted") resetRun();
 			access();
@@ -1138,7 +1141,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // Pi commits these entries before the run settles.
         try {
             if (!active() || run?.phase !== "admitted" || failure() || !settingsFor().getCompactionSettings(ctx.model).enabled) return;
-            const decide = event.outcome === "completed" && !ctx.signal?.aborted;
+            const decide = event.outcome === "completed" && !ctx.signal?.aborted && lengthStop !== "thinking";
             if (view(ctx).pending ? event.outcome === "error" : !decide) return;
             return atBoundary(event, ctx, "run-end", decide);
         } catch (error) { fail(error, ctx); }
