@@ -102,7 +102,7 @@ export function seedWindow(branch: readonly SessionEntry[], key: string): number
     return initialWindow(key);
 }
 /** One accounting owner. Session start still defers receipt loading until the first budget read;
- * tree moves load immediately, and identity changes keep any uncommitted window observation. */
+ * tree moves load immediately. */
 class Calibration {
     identity = '';
     factor = 1;
@@ -113,7 +113,7 @@ class Calibration {
     private seededIdentity = '';
     static key(ctx: ExtensionContext) { return ctx.model ? JSON.stringify([ctx.model.provider, ctx.model.api, ctx.model.id]) : ''; }
     select(ctx: ExtensionContext) { this.identity = Calibration.key(ctx); }
-    needsSeed(ctx: ExtensionContext) { return this.seededIdentity !== Calibration.key(ctx); }
+    needsSeed() { return this.seededIdentity !== this.identity; }
     reseed(ctx: ExtensionContext, reason: 'identity' | 'session' | 'tree') {
         this.identity = Calibration.key(ctx);
         this.pending = undefined;
@@ -247,7 +247,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const calibration = new Calibration();
     const identityFor = (ctx: ExtensionContext) => {
         calibration.select(ctx);
-        if (calibration.needsSeed(ctx)) calibration.reseed(ctx, "identity");
+        if (calibration.needsSeed()) calibration.reseed(ctx, "identity");
         return calibration.identity;
     };
     pi.on("model_select", (_event, ctx) => { calibration.select(ctx); });
@@ -261,7 +261,6 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The cut planner's raw reserve for the target limit, on the same factor as every other consumer.
     const planReserve = (target: Target, room: number, band: number, mandatory: number, ctx: ExtensionContext) => {
         identityFor(ctx);
-        // The compiler subtracts this reserve from the catalogue window. Targets already use the learned window.
         return planningReserve(ctx.model?.contextWindow ?? 0, target === "band" ? band : room, calibration.factor, mandatory);
     };
     pi.on("message_end", (event, ctx) => {
@@ -304,7 +303,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
     let lengthStop: { kind: "thinking" | "output"; cacheMiss: boolean } | undefined;
-    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted", ctx); lengthStop = undefined; calibration.pending = undefined; });
+    pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted"); lengthStop = undefined; calibration.pending = undefined; });
     pi.on("message_end", event => {
         if (event.message.role !== "assistant") return;
         lengthStop = event.message.stopReason === "length" ? {
@@ -326,13 +325,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	const active = () => options.active?.() ?? true;
 	const settingsFor = () => options.settings ?? SettingsManager.inMemory(pi.getSettings?.());
 	// Pi’s configured reserve is the standalone cut target, separate from the output cap.
-	const requestReserve = (ctx: ExtensionContext) => {
+	const responseReserve = (ctx: ExtensionContext) => {
         const host = options.requestReserve?.(ctx);
         const budget = host ?? { response: settingsFor().getCompactionSettings(ctx.model).reserveTokens };
         if (!Number.isSafeInteger(budget.response) || budget.response < 0)
             throw new Error("Invalid host request reserve");
         const floor = host && host.responseExact !== true;
-        return { response: floor ? Math.max(budget.response, ctx.model?.maxTokens ?? 0) : budget.response };
+        return floor ? Math.max(budget.response, ctx.model?.maxTokens ?? 0) : budget.response;
     };
     const inputRoom = (response: number, ctx: ExtensionContext) => {
         const configured = options.activeInputTokens;
@@ -344,7 +343,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     };
     // Room still owns every existing cut/clip attempt. Only final capacity admission uses the hard line.
     const limits = (ctx: ExtensionContext) => {
-        const { response } = requestReserve(ctx), room = inputRoom(response, ctx);
+        const response = responseReserve(ctx), room = inputRoom(response, ctx);
         const floor = options.requestReserve || !ctx.model ? response : requestReplyFloor(ctx.sessionManager.getBranch(), response, ctx.model);
         const hardLine = Math.min(Math.max(room, contextWindow(ctx) - piMargin - floor), calibration.lastCeiling ?? Infinity);
         return { response, room, hardLine, replyFloor: floor };
@@ -384,7 +383,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // whereas our hard line is in corrected units; fitting that line alone need not leave the branch's reply floor.
     const requestClamp = (messages: Messages, ctx: ExtensionContext) => {
         const context = normalizeContext({ messages: convertToLlm(messages) });
-        const cap = piClamp?.({ ...ctx.model!, contextWindow: contextWindow(ctx) }, context, ctx.model!.maxTokens);
+        const cap = piClamp?.(ctx.model!, context, ctx.model!.maxTokens);
         const estimate = piMath ? piMath.estimateContextTokens(context).tokens : 0;
         const fitsWindow = cap !== undefined && cap > 0 && estimate + piMargin + cap <= contextWindow(ctx);
         // The native clamp bottoms out at one even when the estimate leaves no room.
@@ -442,7 +441,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         calibration.pending = undefined;
         // Keep the same terminal run until Pi settles; later start hooks cannot admit it.
         run ??= new Run("starting"); run.clear();
-        run.transition(fault instanceof CommitFault ? "commit-failed" : "failed", ctx, fault);
+        run.transition(fault instanceof CommitFault ? "commit-failed" : "failed", fault);
         run.refusalReceipted = true;
         try {
             if (!receipted) receipt("refusal", fault.message, ctx);
@@ -468,7 +467,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         catch (error) { fail(error, ctx); }
         // Pi normally reaches its pre-run threshold check within microtasks. Auth I/O or a later extension's input I/O can make a
         // real prompt expire too; safely fall back to carrying its cut in the request and saving it at the first boundary.
-        setImmediate(() => { if (run === decision && decision.phase === "decided") decision.transition("expired", ctx); });
+        setImmediate(() => { if (run === decision && decision.phase === "decided") decision.transition("expired"); });
     });
 
 	pi.registerTool({
@@ -505,7 +504,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // Pi checks its own threshold after a prompt's input and before the run starts: the prompt's cut, planned with the prompt counted,
             // is the answer, and it is saved before the first request.
             if ((run?.phase === "decided" || run?.phase === "claimed") && event.reason === "threshold") {
-                run.transition("claimed", ctx);
+                run.transition("claimed");
                 if (view(ctx).pending) {
                     access();
                     const current = view(ctx), { type: _, ...compaction } = run.cut.take(ctx)!;
@@ -717,7 +716,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const prompted = run && ["decided", "claimed", "expired"].includes(run.phase) && event.messageType !== "custom";
         if (!prompted && !failure()) beginRun("starting");
         run ??= new Run("starting");
-        if (!failure() && run.phase !== "starting") run.transition("starting", ctx);
+        if (!failure() && run.phase !== "starting") run.transition("starting");
         const prompt = event.messageType === "custom" ? textOf(event.message.content) : event.prompt;
         run.prompt = prompt ? new StartingPrompt(prompt, ctx.sessionManager.getBranch().length, event.messageType) : undefined;
         try {
@@ -939,7 +938,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const check = cut && requestClamp(cut.messages, view);
         // An unchanged allowance would repeat the same failed generation. If the
         // planner found no history to cut, there is no capacity diagnosis to make.
-        if (check?.cap === undefined || asIsCheck.cap === undefined || check.cap <= Math.max(asIsCheck.cap, stoppedOutput ?? 0)) {
+        if (!cut || check?.cap === undefined || asIsCheck.cap === undefined || check.cap <= Math.max(asIsCheck.cap, stoppedOutput ?? 0)) {
             restoreClips(previousClips);
             if (!asIsCheck.leavesFloor) {
                 if (check && !check.leavesFloor) throw new CapacityError(clampMessage);
@@ -948,13 +947,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             markBoundary(entries);
             return { entries, continue: false };
         }
-        if (!cut || !check) throw new CapacityError(decision.kind === "fault" ? decision.message : clampMessage);
         const { messages } = cut;
         if (run?.prompt && !carriesPrompt(messages, run.prompt.text(ctx.sessionManager.getBranch()), run.prompt.role)) throw promptRefusal();
         const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
         const tokens = system + conversationTokens(messages);
         const { response, room, hardLine } = limits(view);
-        if (!fits(tokens, hardLine, view) || check.cap === undefined || !check.leavesFloor) throw new CapacityError(clampMessage);
+        if (!fits(tokens, hardLine, view) || !check.leavesFloor) throw new CapacityError(clampMessage);
         const compaction = captureDraft(cut.plan.compaction, view, cut.plan.reserve, "length-retry", tokens, true, false, undefined,
             { response, host, mandatory: system + host + conversationTokens(event.context.pendingMessages), target: cut.target, margin: room - decisionBand(view, room, system) });
         run!.requestLengthRetry();

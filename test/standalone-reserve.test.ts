@@ -1,4 +1,4 @@
-import { expect, test, vi } from 'vitest';
+import { expect, test } from 'vitest';
 import { SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { normalizeContext } from '@earendil-works/pi-ai';
@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CompactionOptions } from '../src/compaction';
-import { CAPACITY, MODEL, SUMMARY, drive, guarded } from './calibration-fixture';
+import { CAPACITY, MODEL, guarded } from './calibration-fixture';
 import { OVERFLOW_TEXT, receiptOf, scenario } from './budget-fixture';
 
 const window = 81_920, reserve = 16_384, cap = 32_768;

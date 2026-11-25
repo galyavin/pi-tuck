@@ -15,13 +15,13 @@ test(`run transition ${from} -> ${to}`, () => {
   const error = new Error('failed attempt');
   const run = new Run('decided');
   if (from === 'admitted') { run.transition('starting'); run.transition(from); }
-  else if (from !== 'decided') run.transition(from, undefined, error);
+  else if (from !== 'decided') run.transition(from, error);
   if (allowed[from].includes(to)) {
-    expect(run.transition(to, undefined, error)).toBe(true);
+    run.transition(to, error);
     expect(run.phase).toBe(to);
     expect(run.error).toBe(to === 'failed' || to === 'commit-failed' ? error : undefined);
   } else {
-    expect(() => run.transition(to, undefined, error)).toThrow(`invalid run transition ${from} -> ${to}`);
+    expect(() => run.transition(to, error)).toThrow(`invalid run transition ${from} -> ${to}`);
     expect(run.phase).toBe(from === 'commit-failed' ? 'commit-failed' : 'failed');
   }
 });
@@ -46,12 +46,12 @@ test('production rejects invalid transitions and prevents subsequent admission',
   try {
     const run = new Run('starting');
     let thrown: unknown;
-    try { run.transition('claimed', { hasUI: true }); } catch (error) { thrown = error; }
+    try { run.transition('claimed'); } catch (error) { thrown = error; }
     expect(thrown).toBeInstanceOf(Error);
     expect(run.phase).toBe('failed');
     const cause = run.error;
     expect(cause).toBe(thrown);
-    expect(() => run.transition('admitted', { hasUI: false })).toThrow('invalid run transition');
+    expect(() => run.transition('admitted')).toThrow('invalid run transition');
     expect(run.error).toBe(cause);
   } finally { vi.unstubAllEnvs(); }
 });
@@ -59,7 +59,7 @@ test('production rejects invalid transitions and prevents subsequent admission',
 test('invalid transition preserves a persistence failure', () => {
   const cause = new Error('write failed');
   const run = new Run('starting');
-  run.transition('commit-failed', undefined, cause);
+  run.transition('commit-failed', cause);
   expect(() => run.transition('admitted')).toThrow('invalid run transition');
   expect(run.phase).toBe('commit-failed');
   expect(run.error).toBe(cause);

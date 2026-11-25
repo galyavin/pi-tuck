@@ -113,7 +113,7 @@ export class Run {
     get expired() { return this.expiredPlan; }
     /** Failure data, only present in a failed phase. The phase alone decides admission. */
     get error() { return 'error' in this.state ? this.state.error : undefined; }
-    transition(phase: RunPhase, ctx?: Pick<ExtensionContext, 'hasUI'>, error?: Error): boolean {
+    transition(phase: RunPhase, error?: Error): void {
         if (!RUN_TRANSITIONS[this.phase].includes(phase) || ((phase === 'failed' || phase === 'commit-failed') && !error)) {
             const fault = new Error(`pi-tuck: invalid run transition ${this.phase} -> ${phase}`);
             // A rejected transition must stop the caller and latch admission shut.
@@ -124,7 +124,6 @@ export class Run {
         }
         this.state = phase === 'failed' || phase === 'commit-failed' ? { phase, error: error! } : { phase };
         if (phase === 'expired') this.expiredPlan = true;
-        return true;
     }
     prompt?: StartingPrompt;
     cut = new PendingCut();
