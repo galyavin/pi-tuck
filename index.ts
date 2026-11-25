@@ -67,13 +67,14 @@ const modelRef = (value: unknown) => typeof value === "string" && /^[^/]+\/.+/.t
 function readSettings(path: string): Settings {
 	let text: string;
 	try { text = readFileSync(path, "utf8"); } catch { return {}; }
+	const cutAtHint = `${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1`;
 	try {
 		const value = JSON.parse(text);
 		if (value && typeof value === "object" && !Array.isArray(value)) {
 			const settings: Settings = {};
 			const warnings: string[] = [];
 			if (value.cutAt === undefined || validCutAt(value.cutAt)) settings.cutAt = value.cutAt;
-			else warnings.push(`${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the default cut point.`);
+			else warnings.push(`${cutAtHint}; using the default cut point.`);
 			const models = value.cacheSensitiveModels;
 			if (Array.isArray(models) && models.every(modelRef)) settings.cacheSensitiveModels = models;
 			else if (models !== undefined) warnings.push(`${path} cacheSensitiveModels must be an array of provider/model identifiers; ignoring that setting.`);
@@ -85,5 +86,5 @@ function readSettings(path: string): Settings {
 			return settings;
 		}
 	} catch { /* reported below */ }
-	return { error: `${path} should be a JSON object like {"cutAt": 0.8}, with cutAt a number above 0 and at most 1; using the defaults.` };
+	return { error: `${cutAtHint}; using the defaults.` };
 }
