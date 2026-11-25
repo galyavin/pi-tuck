@@ -19,12 +19,14 @@ test.each([8_192, 65_536])('overflow recovery with output limit %d must reduce t
   limits: { contextWindow: 65_536, maxTokens }, piRequestPath: true,
   compaction: { requestReserve: undefined, cutAt: 1 }, replies: ['overflow'] });
  try {
-  await h.run();
+  const result = await h.run();
   expect(h.state.requests).toBe(maxTokens === 8_192 ? 2 : 1);
   expect(h.faults).toEqual([]);
   if (maxTokens === 8_192) {
    const [before, after] = h.state.requestOptions;
+   expect(after!.contextTokens).toBeLessThan(before!.contextTokens);
    expect(after!.contextTokens + after!.maxTokens).toBeLessThan(before!.contextTokens + before!.maxTokens);
+   expect(result.wholePrompt).toEqual([true, true]);
   }
   const sends = h.state.requests;
   await h.session.prompt('A fresh, small task');

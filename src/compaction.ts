@@ -273,8 +273,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // input limit as a planning assumption and keep that assumption explicit in the notice.
         if (overflow) {
             if (run?.phase === "admitted" && !options.requestReserve && piClamp) {
-                const failed = requestClamp(paired.messages, ctx);
-                if (failed.cap !== undefined) run.rejectedBudget = { input: failed.estimate, output: failed.cap };
+                const { estimate, cap } = requestClamp(paired.messages, ctx);
+                if (cap !== undefined) run.rejectedBudget = { input: estimate, output: cap };
             }
             const window = contextWindow(ctx), bound = (window + 1) / paired.tokens;
             const learned = bound <= CALIBRATION_CEILING;
@@ -517,7 +517,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // cut: the system part and the host input. A prompt's cut is pi-tuck's own and never comes here.
             const saved = ctx.sessionManager.buildSessionProjection().messages;
             const hostInput = hostMessages(ctx), host = conversationTokens(hostInput);
-            const system = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), saved, ctx.getSystemPrompt());
+            const systemPrompt = ctx.getSystemPrompt(), tools = pi.getActiveTools();
+            const system = requestSystemPart(systemPrompt, tools, saved, systemPrompt);
+            const project = (messages: Messages, cut: boolean) => projectedRequest(messages, ctx, hostInput, [], systemPrompt, tools, cut);
             const mandatory = system + host, band = decisionBand(ctx, room, system, view(ctx, event.reason === "threshold"));
             const before = plannerMeasureFor(ctx)(saved);
             observeBudget(before + mandatory, ctx);
@@ -553,26 +555,27 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 decision = fits(before + mandatory, hardLine, ctx) ? { kind: "none" } : decide(hardLine, hardLine);
                 decision = clampAboveRoom(decision, ctx, room, hardLine,
                     candidate => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory,
-                    candidate => projectedRequest(candidate.kind === "cut" ? candidate.plan.messages : saved, ctx, hostInput, [], ctx.getSystemPrompt(), pi.getActiveTools(), candidate.kind === "cut"),
+                    candidate => project(candidate.kind === "cut" ? candidate.plan.messages : saved, candidate.kind === "cut"),
                     target => target <= room ? decide() : decide(target, target),
                     () => deepestDecision(ctx, operatorManual || run?.phase !== "admitted", retain));
             }
             const rejected = event.reason === "overflow" && event.willRetry ? run?.rejectedBudget : undefined;
             if (rejected && decision.kind === "cut") {
-                const improves = (candidate: CutPlan) => {
-                    const messages = projectedRequest(candidate.messages, ctx, hostInput, [], ctx.getSystemPrompt(), pi.getActiveTools(), true);
+                const prompt = run?.prompt;
+                const canRetry = (candidate: CutPlan) => {
+                    const messages = project(candidate.messages, true);
                     const { estimate, cap, leavesFloor } = requestClamp(messages, ctx);
-                    const systemTokens = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
                     const improves = leavesFloor && cap !== undefined && estimate < rejected.input &&
-                        estimate + cap < rejected.input + rejected.output && fits(systemTokens + conversationTokens(messages), hardLine, ctx) &&
-                        (!run?.prompt || carriesPrompt(messages, run.prompt.text(ctx.sessionManager.getBranch()), run.prompt.role));
+                        estimate + cap < rejected.input + rejected.output &&
+                        fits(requestSystemPart(systemPrompt, tools, messages, systemPrompt) + conversationTokens(messages), hardLine, ctx) &&
+                        (!prompt || carriesPrompt(messages, prompt.text(ctx.sessionManager.getBranch()), prompt.role));
                     recorder.capture("overflow-recovery", "estimated-before-provider-transforms", { rejected, input: estimate, output: cap, improves });
                     return improves;
                 };
-                if (!improves(decision.plan)) {
+                if (!canRetry(decision.plan)) {
                     const previousClips = new Map(clips());
                     const deepest = deepestDecision(ctx, false, retain);
-                    if (deepest.kind !== "cut" || !improves(deepest.plan)) {
+                    if (deepest.kind !== "cut" || !canRetry(deepest.plan)) {
                         restoreClips(previousClips);
                         recorder.stop("no-capacity-gain");
                         return { cancel: true };
@@ -1120,9 +1123,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 	pi.on("context_with_system", (event, ctx) => {
         if (standDown(ctx)) return;
         // Reaching the next request boundary proves native commit returned, not durable storage.
-        if (run) { run.pendingBoundaryReceipts = []; }
+        if (run) {
+            run.pendingBoundaryReceipts = [];
+            run.rejectedBudget = undefined;
+        }
         calibration.pending = undefined;
-        if (run) run.rejectedBudget = undefined;
 		try {
 			if (!active()) return;
 			access();

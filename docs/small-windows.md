@@ -13,7 +13,7 @@ Words used here:
 
 In standalone use, pi-tuck uses Pi's configured reserve as the cut target. A length stop or context overflow leaves that reserve in place.
 
-For a request above the room, pi-tuck estimates the reply floor from observed output for the active provider, API, and model on the current branch. It ignores errored and aborted responses. The floor starts at one token without comparable usage and is capped by the reserve and the model's positive output limit. A retry must also improve on the interrupted attempt.
+For a request above the room, pi-tuck estimates the reply floor from observed output for the active provider, API, and model on the current branch. It ignores errored and aborted responses. The floor starts at one token without comparable usage and is capped by the reserve and the model's positive output limit.
 
 Resume, fork, and `/tree` use the selected branch's observed reply sizes. An SDK host can provide a separate reserve. `responseExact: true` uses the host's declared value. Otherwise the host reserve is at least the model's configured output limit.
 
