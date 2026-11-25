@@ -60,6 +60,8 @@ type ReplyModel = { provider: string; api: string; id: string; maxTokens: number
 /** Ordinary reply demand is bounded by the reserve and model output limit.
  * Recovery compares its candidate against the interrupted attempt separately. */
 export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, model: ReplyModel): number {
+    const reserved = Math.max(1, reserve);
+    const limit = model.maxTokens > 0 ? Math.min(reserved, model.maxTokens) : reserved;
     let largest = 1;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
@@ -68,10 +70,10 @@ export function requestReplyFloor(branch: readonly SessionEntry[], reserve: numb
             message.stopReason === 'error' || message.stopReason === 'aborted') continue;
         const output = message.usage?.output;
         if (typeof output !== 'number' || !Number.isFinite(output) || output <= 0) continue;
-        largest = Math.max(largest, Math.ceil(output));
+        largest = Math.max(largest, output);
+        if (largest >= limit) break;
     }
-    const observed = Math.min(Math.max(1, reserve), largest);
-    return model.maxTokens > 0 ? Math.min(observed, model.maxTokens) : observed;
+    return Math.min(limit, Math.ceil(largest));
 }
 
 /** Check decoded starting text, native or quoted whole with its original role; never JSON-escaped substring matching. */
