@@ -67,7 +67,7 @@ async function boundary(options: { history: number; oneTurn: boolean; complete: 
 		const saved = event.context.contextMessages, pi = h.extension();
 		const toolsJson = JSON.stringify(pi.getAllTools().filter(t => pi.getActiveTools().includes(t.name)).map(t => ({ name: t.name, description: t.description, parameters: t.parameters })));
 		const mandatory = referenceSystemPart(saved, ctx.getSystemPrompt(), toolsJson) + HOST, before = measure(saved);
-		const plan = (limit: number): Plan => planned(tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before }, ctx, planningReserve(WINDOW, limit, 1, mandatory), measure, {}, true));
+		const plan = (limit: number): Plan => planned(tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, keepRecentTokens: h.settings.getCompactionSettings(ctx.model).keepRecentTokens }, ctx, planningReserve(WINDOW, limit, 1, mandatory), measure, {}, true));
 		found.push({ room: plan(ROOM), band: plan(BAND), before, mandatory, total: before + mandatory });
 	} });
 	try {
@@ -132,7 +132,7 @@ async function prompt(options: { history: number; complete: number }) {
 		const measure = (messages: Parameters<typeof measurableConversationTokens>[0]) => measurableConversationTokens(messages, ctx);
 		const mandatory = h.promptTokens() + h.mandatory + HOST, before = measure(ctx.sessionManager.buildSessionProjection().messages);
 		if (before + mandatory < BAND) return;
-		const plan = (limit: number): Plan => planned(tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, newPrompt: true }, ctx, planningReserve(WINDOW, limit, 1, mandatory), measure, {}, false));
+		const plan = (limit: number): Plan => planned(tuckObservedDraft(tuck, { branchEntries: ctx.sessionManager.getBranch(), tokensBefore: before, newPrompt: true, keepRecentTokens: h.settings.getCompactionSettings(ctx.model).keepRecentTokens }, ctx, planningReserve(WINDOW, limit, 1, mandatory), measure, {}, false));
 		found.push({ room: plan(ROOM), band: plan(BAND), before, mandatory, total: before + mandatory });
 	} });
 	try { const r = await h.run(); const entries = r.entries.filter(entry => receiptOf(entry).reason === 'prompt'); return { r, found, cut: entries.length, entry: entries[0] }; } finally { await h.cleanup(); }

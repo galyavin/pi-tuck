@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { DEFAULT_CUT_AT } from '../src/budget';
 
 // Record the options and startup warnings from the extension entry point.
 const state = vi.hoisted(() => ({ options: [] as { cutAt?: number }[] }));
@@ -37,6 +38,7 @@ async function load(file: string | undefined) {
 test('without a settings file the cut point is not set and nothing is reported', async () => {
 	const r = await load(undefined);
 	expect(r.cutAt).toBeUndefined();
+	expect(r.cutAt ?? DEFAULT_CUT_AT).toBe(1);
 	expect(r.notices.filter(n => n.level === 'warning')).toEqual([]);
 });
 

@@ -26,7 +26,7 @@ test('an offline replay of a recorded operator cut reproduces the live summary',
 	const start = vi.spyOn(IncidentRecorder.prototype, 'start');
 	let h: Awaited<ReturnType<typeof harness>> | undefined;
 	try {
-		h = await harness({ at: 'prompt', complete: 60000, host: HOST, compaction: { diagnostics: { directory, ...BOUNDS } } });
+		h = await harness({ at: 'prompt', complete: 60000, host: HOST, keepRecent: 40000, compaction: { diagnostics: { directory, ...BOUNDS } } });
 		await h.session.prompt('/tuck-incident on');
 		await h.session.compact();
 		expect(h.compactions()).toHaveLength(1);

@@ -19,20 +19,15 @@ export interface ToolShape { name: string; description: string; parameters: unkn
 export const TRIGGER_MARGIN_FRACTION = 0.02;
 /** Whether `value` is a cut point: a fraction of the room above 0 and at most 1. */
 export const validCutAt = (value: unknown): value is number => typeof value === "number" && value > 0 && value <= 1;
-/**
- * The one owner of the band: the limit a cut is triggered at and preferably planned to. An adaptive default may raise the cut point above
- * 60% using the last cut's conversation size and current system size, both estimates, so they are converted to the room's units by the factor. Explicit cut points use the fraction alone. The margin caps both.
- */
-/** The initial default cut point: 60% of the room before a usable previous cut. Measured against 1 with paired replays (no answer loss) and billed
- * input under automatic and explicit prompt caching (about 17% less at 128k, 10-14% at 32k). */
-export const DEFAULT_CUT_AT = 0.6;
-/** Preferred native carry, in the planner's estimate: never more than the
- * keep-recent cut offers or the tail amount the adaptive band assumes. */
+/** Trigger at the room for native parity of post-cut headroom. */
+export const DEFAULT_CUT_AT = 1;
+/** Preferred native carry, in the planner's estimate, bounded by the keep-recent offer and the existing tail limit. */
 export const carriedTailTokens = (offeredTokens: number): number => Math.min(offeredTokens, MAX_TAIL_TOKENS / 2);
-export const bandOf = (room: number, cutAt = 1, adaptive?: { system: number; tokensAfter: number; factor: number }): number => {
+/** The one owner of the band: the trigger and preferred planning limit, capped by the margin. */
+export const bandOf = (room: number, cutAt = DEFAULT_CUT_AT): number => {
 	const positive = Math.max(0, room);
 	const base = Math.floor(positive * cutAt);
-	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), adaptive ? Math.max(base, Math.ceil((adaptive.system + adaptive.tokensAfter + carriedTailTokens(MAX_TAIL_TOKENS)) * adaptive.factor)) : base);
+	return Math.min(room - Math.ceil(positive * TRIGGER_MARGIN_FRACTION), base);
 };
 
 /** The cut's one carried-context grant, in the planner's estimate. Combines
@@ -115,7 +110,7 @@ export type Decision<D extends object = {}> =
 	| { kind: "cut"; target: Target; plan: Extract<Plan<D>, { draft: true }> }
 	| { kind: "fault"; capacity: boolean; message: string };
 export interface CutInput<D extends object = {}> {
-	/** The band adapts by itself (no explicit cut point), so a cut that isn't due must also free a tenth of the room. */
+	/** With no explicit cut point, a cut that isn't due must also free a tenth of the room. */
 	usefulOnly?: boolean;
 	/** Saved conversation, measured by the planner's own function. */
 	before: number;

@@ -169,7 +169,7 @@ test("a declined threshold ask does not end an operator's running incident recor
 });
 
 test("a cache-sensitive model keeps its active prefix until a cut is required", async () => {
- const options = { ...base, at: "prompt" as const, complete: 155000, cutAtDefault: true };
+ const options = { ...base, at: "prompt" as const, complete: ROOM_EXACT - 2000, cutAtDefault: true };
  const normal = await scenario(options);
  const cacheSensitiveModels = ["openai-codex/gpt-6.1-sol"];
  const cached = await scenario({ ...options, compaction: { ...EXACT_RESERVE, cacheSensitiveModels } });

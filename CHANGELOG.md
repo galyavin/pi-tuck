@@ -3,9 +3,15 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [1.3.5]
+## [1.4.0]
+
+### Added
+
+- Content lane: kept output, definition maps and plain-text thinking openings rank below kept reads and searches in the summary.
 
 ### Changed
+
+- Post-cut headroom: cut at the room by default, and carry no more native history than Pi keeps. The adaptive cut point is gone.
 
 - Use Pi's reserve as the cut target and replace the fixed reply floor with observed output for the active model. Observed reply demand stays within the reserve and the model's output limit.
 - Allow selected local models to defer early cuts.

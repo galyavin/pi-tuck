@@ -147,7 +147,7 @@ async function open(branch?: SessionEntry[], cwd?: string, selectedModel?: Model
   let refuse = false;
   const h = await harness({ at: 'prompt', complete: 0, host: 0, noHistory: true, noOpening: true,
     persist: !branch, trackRuntimeSpies: false,
-    systemTokens: 200, stableHost: true, liveTools: true, reserveTokens: 4096, keepRecent: 0,
+    systemTokens: 200, stableHost: true, liveTools: true, reserveTokens: 4096, keepRecent: 20000,
     toolResultTokens: () => effectTokens,
     limits: { contextWindow: 32768, maxTokens: 4096 }, cutAtDefault: true,
     compaction: { requestReserve: () => ({ response: refuse ? 32768 : 4096 }) } });

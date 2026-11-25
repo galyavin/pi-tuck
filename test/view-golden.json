@@ -3,140 +3,150 @@
 		[
 			"dialogue",
 			15,
-			"b787a6c1f3c3def86c369befe6d1cce8aa093272c35f318539c042393f5d5f4f"
+			"b7a90a5733bdd5e6249a903777d06a2f80973fd9ecb87f8c9edd439192d8c24b"
 		],
 		[
 			"shrunk",
-			25,
-			"80368214bfbacdf52b9bab7ebea7caf929ea2b4d3ab661abf1a17d06a1ba17be"
+			24,
+			"dc5c4fee191f3aede7530efbd8f86c57d4bd17fb020d7dae14a7e0d7c3828529"
 		],
 		[
 			"shrunk",
-			34,
-			"1060da76516585def4a32b1e9f7d5bc5772e78a1666e7d0ea7b87921d60eed9f"
+			33,
+			"cb6e6fbd320c29a7757fe02c06aeece39634d25ee9b1c40b5b33eee0376b76fe"
 		]
 	],
 	"low-prose-32k": [
 		[
 			"dialogue",
 			18,
-			"c816b1e12c9cb86532e34aab6b61ad899246e336f3ae20060f3cf637d81d3ca2"
+			"d093b4ac550236ceaae1810b90e91866a8c49bbfcda8d41149eff0f13a85a740"
 		],
 		[
 			"dialogue",
-			27,
-			"9be6fae2b6c57c77d5996184b23bee7db1c3f6f92bf51059a78be95d215dd157"
+			26,
+			"4b7989028a95f3bd84186017af4c7c716acab3920851bcecfdd2851562156ca8"
 		],
 		[
 			"dialogue",
-			35,
-			"bf69f688334dafd3bd51d4ee139f633f44ef29744d476969e0e381179bd9387b"
+			33,
+			"291f68b0460c9795bb0120e8acad1945579d6cdb718111b6dcf7bc6c44725e03"
 		],
 		[
 			"dialogue",
-			42,
-			"85cab6c9420e3f6fa30a9de52d19c93f978710163f5e47506e3304fcbc4fb064"
+			39,
+			"ce5cd882f067e385422eb2485011c3935f556db0a92b1d12a2a8856cf2f9e127"
 		],
 		[
 			"dialogue",
-			49,
-			"0f2a5a5d4efa1b78c14991aa839fabcbbd3deef8dbf455b1a4db9fef9608947b"
+			46,
+			"a8f79f2e4109facf1c932401c88b42c3641a9cf6be5a1720a58a388817e7bcd0"
 		],
 		[
 			"dialogue",
-			55,
-			"6ed1885de0731215241d8fe53becd791604ebecfd6aaa91ddf435aac8b6c86af"
+			53,
+			"73f3ba01b90f334fd96c8d30b42fc5271039046894ac2fc103c899d65f8de5df"
 		],
 		[
 			"dialogue",
-			62,
-			"62fc9fe4a8953d3d0c943fd4a32aac566fa3210e045b0145cf59575cb4edd33e"
+			60,
+			"4334d5629478d172485e4b19653d307364a2b2ccbd02898a0f138aa29248329a"
+		],
+		[
+			"dialogue",
+			67,
+			"441dedc23aac8eaad20ddfcdaa8a7acc0023b465cb3646b15420b8389898a775"
 		],
 		[
 			"shrunk",
-			73,
-			"135ee3e77ff2055047eeff4cc90973bb4f533964f2f37141e2756427c32e0b5f"
+			74,
+			"178bafc23b579590df657594d3dedeb8bc96c57f20268eda11f4b0280f7c8049"
 		],
 		[
 			"shrunk",
-			80,
-			"f3e8ad0a47c3e470e39b573b715cc19e3affa6d9483e0e18a657e18b95d7453f"
+			81,
+			"325f94f9efb2ea041146e77ebe9f872ad9b560a7fd531c66f7034b2c9130be33"
 		]
 	],
 	"residual-32k": [
 		[
 			"dialogue",
 			20,
-			"093ee7fe76f7583e79e64ac7f3d1a2df1571b9e1a6fb14259dbff6f9572ce69c"
+			"dc897e5846bb473a86dc904c594c6fa754620499254e28e92ce10128eef4312e"
 		],
 		[
 			"dialogue",
 			30,
-			"60c434d8594d0b7b5aec4e082130c55bc1a8fda63dd9d335d4b586fa7002233b"
+			"3c499f974f9e0006de07a3dace2d88d8ca875e5bc002e2cd15a620b6b501d1e0"
 		],
 		[
 			"dialogue",
-			40,
-			"8890e951ff4165a7688c10d982573dd5baf97ff7df4377e427481af9e294c62e"
+			39,
+			"c0b728c394d49851ff989b099ae3ca88c7b0eea920c0e7056addca7124472f2a"
 		],
 		[
 			"dialogue",
-			50,
-			"82ab6a4a2bb740133b4c94a69f93489b061c8a77307cfbbbcf5e72772e5fd332"
+			47,
+			"5d74445128edadfed0491032354f6b27224f2afc840248e9b61ca1d0449dab12"
 		],
 		[
 			"dialogue",
-			59,
-			"fa504926bdfbc301c5fa8b2916a4f4b7995e2026cea93ae3057097925e0e1e2c"
+			55,
+			"da8e1535c469b0ad7f562e851e588ae9e4dfe7eead51c9a83a0b89e4be860eb5"
 		],
 		[
 			"dialogue",
-			68,
-			"2b9ec7ff5fa92ff9b698c47e0b7681158e662ec1c1f5c478ca3438e6b5d96abd"
+			63,
+			"11924559002fd09061bd597b8750af086fc8a2f55ab2e380fc8d78e07247f243"
 		]
 	],
 	"prose-128k": [
 		[
 			"dialogue",
 			62,
-			"e78d31bb816ed88e2a04c37c8f3b6f64e904225ea032eda3a57c5d0bea19f5e6"
+			"6e199c26f9fc467097d4592299a881be70f9f7274e95d999f97a877d374cbb07"
 		],
 		[
 			"shrunk",
 			106,
-			"83e2293169eac45b7e775abc4d50fc9973207666399d2b056ebeeab13cbe481b"
+			"ff16567221bdb68f2c5be5b5d20996fc9003f67c3f9eeb723a5bd21284860952"
 		]
 	],
 	"low-prose-128k": [
 		[
 			"dialogue",
 			78,
-			"472508d2b60e1fa87ab84c9c85952a02e2cb04b7f5e217bc0b242c259dba087d"
+			"dbfc382e229db6e8ad00aea6a4341d55c650c8f093c5f0000264982829c22dbe"
 		],
 		[
 			"dialogue",
-			142,
-			"55ad6a5e9d4f9e788823200794ff313454dc3da538b7920a8d89f655bcec3c6c"
+			141,
+			"c287249fc25312c18068b801d5a09b7b16ac46b6e1c147fbe9e331cec4aeba84"
 		],
 		[
 			"dialogue",
-			203,
-			"70ca73810e5308fc96c950185f2ef7fd998209c99af0f4fd37d1e50b2fe496e0"
+			201,
+			"50c706383a332515d0ea4ceca8851002f2531d6ac228f70659d48158e2fb9bcf"
 		],
 		[
 			"dialogue",
-			261,
-			"ce03b320b18363ac909b58c31a229d75190855278fc808f426d08778879944c4"
+			258,
+			"3913f33b6cf3c2902d0f3618033485e7a93fbc85f3037e7d9d6e8edac05548cc"
 		],
 		[
 			"dialogue",
-			316,
-			"709f58f3541532c9873767fc1eb7795ae1176957000267144c985189f2562bf5"
+			312,
+			"9c7e2a1ac7d80c9d97c73dc5ca0e01a8d0dd1ae0081ad16aea2cc268d2162ff3"
+		],
+		[
+			"dialogue",
+			364,
+			"9181ac3018ade5c46be3a6b0491a36247b1f893e1f1514f2ac809309e1a915a0"
 		],
 		[
 			"shrunk",
-			369,
-			"dac056cc23e0c1f40b2bb14d3bffe956349e455f2b527aeb20588b012459599d"
+			418,
+			"c32819886f6de15f30bd0004eedf9d7feed93f0402c6505d9f09096aa785f5c4"
 		]
 	]
 }
