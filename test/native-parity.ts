@@ -46,9 +46,8 @@ export function nativeCompactionPoint(window: number, settings: ReturnType<Setti
  return low;
 }
 
-/** A reply that did not fit, after which the reply needs the whole reserve: a length stop that wrote text or a tool call, or a context overflow.
- * A thinking-only length stop is not one (1.0.25): the session retries it with the largest reply as its floor, so a later refusal is judged
- * by the clamp oracle, not exempted here. Written from the branch alone, not from pi-tuck's helper. */
+/** The parity oracle exempts branches with context overflow or a length stop. Thinking-only length stops
+ * remain subject to the clamp oracle. Read independently from the branch. */
 export function failedReply(branch: readonly SessionEntry[]): boolean {
  return branch.some(e => {
   if (e.type !== 'message' || e.message.role !== 'assistant') return false;

@@ -53,36 +53,23 @@ class Refusal extends Error {}
 class CommitFault extends Error {}
 /** A refusal for want of room, which the user can remedy: it carries advice. */
 class CapacityError extends Refusal {}
-/** What a capacity refusal tells the operator. When the provider has counted far more input than pi-tuck's estimate, the refusal most
- * likely comes from that counting (an upstream behind a router can spend much more context on tool schemas), so the notice says so. */
+/** Explain a high planning factor, which can come from reported usage or an overflow estimate. */
 export const refusalNotice = (message: string, factor: number): string =>
     message + "; shorten the input, use a model with a larger window, or lower Pi's compaction.reserveTokens, then retry." +
-    (factor >= 1.5 ? ` This provider has counted up to ${factor.toFixed(1)}x the input pi-tuck estimates; through a router such as OpenRouter, a different upstream may count less.` : "");
-/** What the operator hears when the provider refuses a request pi-tuck admitted as over its window: the bound that reply puts on the counting, and
- * what pi-tuck did with it. A bound pi-tuck cannot carry (above the ceiling) says so rather than implying the next request is planned at it. */
+    (factor >= 1.5 ? ` pi-tuck is planning with ${factor.toFixed(1)}x its base input estimate. Through a router such as OpenRouter, a different upstream may count less.` : "");
+/** Keep the provider rejection distinct from the assumption used to estimate a planning factor. */
 export const overflowNotice = (contextWindow: number, bound: number, learned: boolean): string =>
-    `pi-tuck: the provider refused this request as over its ${contextWindow}-token window, so the input counted at least ${bound.toFixed(2)}x what pi-tuck estimated` +
-    (learned ? "; the next request is planned at that." : "; too far out to be a low estimate, so the factor is unchanged.");
+    `pi-tuck: the provider refused this request for context overflow. Using the configured ${contextWindow}-token window as the input limit gives a planning factor of ${bound.toFixed(2)}x.` +
+    (learned ? " pi-tuck added this estimate to its calibration." : " This exceeds the calibration ceiling, so the factor is unchanged.");
 /** The most a seed or an overflow raise may set the calibration factor to. A paired reply's own ratio is not bounded by it. */
 export const CALIBRATION_CEILING = 1.5;
 /** How many recent paired replies (and overflow bounds, and the seed while it is among them) the calibration factor is the maximum of. */
 export const CALIBRATION_WINDOW = 32;
-/** Measured provider-input undercount by model, as "provider/id". An identity with no usable receipt of its own starts its window with this entry, which
- * ages out after CALIBRATION_WINDOW later entries; every other model starts at 1. Empty: an undercount of 1.18 once measured for openai/gpt-6.1-sol
- * was replayed reasoning, which the estimate now counts; with it counted, the first 32 requests of a real session measured at most 0.97. */
-export const MEASURED_CALIBRATION: Readonly<Record<string, number>> = {};
-/** The window of an identity with no usable receipt of its own: the model's measured undercount (at most CALIBRATION_CEILING), else 1. `key` is
- * `identityFor`'s [provider, api, id]. */
-function initialWindow(key: string): number[] {
-    try { const [provider, , id] = JSON.parse(key) as [string, string, string]; return [Math.min(MEASURED_CALIBRATION[`${provider}/${id}`] ?? 1, CALIBRATION_CEILING)]; } catch { return [1]; }
-}
 export const CALIBRATION_RECEIPT = 'pi-tuck-calibration';
-/** The calibration window a session starts with under accounting identity `key`: the newest calibration entry or compaction on the branch that carries this package's
- * receipt decides, and no older receipt is consulted. A receipt without the identity field (written before it existed) or from another identity gives `initialWindow`.
- * Otherwise its `calibrationWindow` (an array of 1..CALIBRATION_WINDOW finite numbers, oldest first) is the window, each entry clamped to
- * [0, CALIBRATION_CEILING]; without a valid one, the window is its `calibrationFactor` clamped to [1, CALIBRATION_CEILING] as one entry, else
- * `initialWindow`. A usable receipt of the identity's own wins over the measured seed, as a learned window replaces it: a Resume from a receipt
- * written before the seed existed, or after it aged out, starts at that receipt's window (as low as 1). Reads only; a malformed receipt never throws. */
+/** Read the newest applicable calibration receipt on the branch for `key` ([provider, api, id]). A custom
+ * observation for another identity is skipped. A compaction receipt for another or missing identity resets
+ * the seed to [1]. A matching receipt supplies its recent ratios clamped to [0, CALIBRATION_CEILING],
+ * or its legacy factor clamped to [1, CALIBRATION_CEILING]. Without a usable seed, start at [1]. */
 export function seedWindow(branch: readonly SessionEntry[], key: string): number[] {
     for (let i = branch.length; i--;) {
         const entry = branch[i]!;
@@ -92,14 +79,14 @@ export function seedWindow(branch: readonly SessionEntry[], key: string): number
         const { calibrationIdentity, calibrationFactor, calibrationWindow } = receipt?.settings ?? {}, stored: unknown = calibrationWindow;
         if (calibrationIdentity !== key) {
             if (entry.type === "custom") continue; // Another model's new observation does not hide this model's last saved seed.
-            return initialWindow(key);
+            return [1];
         }
         if (Array.isArray(stored) && stored.length >= 1 && stored.length <= CALIBRATION_WINDOW && stored.every(n => typeof n === "number" && Number.isFinite(n)))
             return stored.map(n => Math.min(Math.max(n, 0), CALIBRATION_CEILING));
         if (typeof calibrationFactor === "number" && Number.isFinite(calibrationFactor)) return [Math.min(Math.max(calibrationFactor, 1), CALIBRATION_CEILING)];
-        return initialWindow(key);
+        return [1];
     }
-    return initialWindow(key);
+    return [1];
 }
 /** One accounting owner. Session start still defers receipt loading until the first budget read;
  * tree moves load immediately. */
@@ -279,10 +266,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             message.provider !== ctx.model?.provider || message.model !== ctx.model.id || message.api !== ctx.model.api ||
             (!overflow && !["stop", "toolUse", "length"].includes(message.stopReason)) ||
             !isDeepStrictEqual(convertToLlm(paired.messages), paired.snapshot)) return;
-        // The provider refused this exact request for exceeding the window: its true count was at least window + 1, a lower bound on the ratio. A
-        // bound above the ceiling says the estimate is not merely low, so it is not learned: the overflow ends the attempt as it does without it.
-        // Either way the operator hears it from pi-tuck. The estimate is what admitted the request, and a turn that ended in the provider's error
-        // with no word from pi-tuck read as a hang: every other refusal says why, and this is the path that skipped it.
+        // The error alone does not report the server's window or whether it counted input plus output. Use the configured
+        // input limit as a planning assumption and keep that assumption explicit in the notice.
         if (overflow) {
             const window = contextWindow(ctx), bound = (window + 1) / paired.tokens;
             const learned = bound <= CALIBRATION_CEILING;
@@ -295,9 +280,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const counts = [usage.input, usage.cacheRead, usage.cacheWrite];
         if (!counts.every(n => Number.isSafeInteger(n) && n >= 0)) return;
         const input = counts.reduce((a, b) => a + b, 0), ratio = input / paired.tokens;
-        // A request that was answered cannot have held more than the model's window, so a report above it describes something that never happened.
-        // Learning from one sets the factor for the requests after it: a 60,000-token cache read reported in a 32,768-token window made a
-        // 6,000-token prompt refuse. The overflow branch above learns from a refusal, where the count is a lower bound, and the ceiling is unchanged.
+        // Reject usage above the configured window for calibration. Learning from a reported 60,000-token
+        // cache read with a 32,768-token window once made a subsequent 6,000-token prompt refuse.
         if (input > 0 && input <= ctx.model.contextWindow && Number.isSafeInteger(input) && Number.isFinite(ratio)) learn(ratio, ctx);
     });
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another

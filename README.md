@@ -65,7 +65,7 @@ When using OpenRouter, you can pin an upstream in Pi's `models.json` if upstream
 { "providers": { "openrouter": { "compat": { "openRouterRouting": { "only": ["your-upstream"], "allow_fallbacks": false } } } } }
 ```
 
-See the [proposed Pi request contract](docs/pi-request-boundary.md) for the remaining limits on final request admission and retry coordination.
+See [Small windows](docs/small-windows.md) for the current budgeting policy and the [proposed Pi request contract](docs/pi-request-boundary.md) for the limits on final request admission and retry coordination.
 
 ## Use from code
 

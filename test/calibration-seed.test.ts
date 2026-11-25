@@ -40,6 +40,9 @@ test('a Resume starts at the newest receipt: 1.19 over an earlier 1.05, and 1.05
  await expectFactor(1.19, sessionOf([stamp(1.05), stamp(1.19)]), 'newest 1.19');
  await expectFactor(1.05, sessionOf([stamp(1.19), stamp(1.05)]), 'newest 1.05');
  await expectFactor(1, sessionOf([]), 'no compaction');
+ await expectFactor(1, sessionOf([]), 'no compaction for the formerly seeded provider', async d => {
+  d.ctx.model = { ...MODEL, provider: 'openai' };
+ });
  await expectFactor(1, sessionOf([stamp(1)]), 'a receipt that recorded 1');
 });
 

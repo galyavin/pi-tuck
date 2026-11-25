@@ -6,12 +6,12 @@ Thanks for helping with pi-tuck.
 
 ```bash
 npm ci
-npm run check   # type-check
 npm run build   # refresh src/build-id.ts after source changes
+npm run check   # type-check
 npm test        # test suite
 ```
 
-The stress tests are slower and run in CI: `STRESS=1 npx vitest run test/stress`.
+Run the slower stress suite with CI's strict failure checks using `STRESS=1 STRESS_STRICT=1 npm test -- test/stress --testTimeout=600000`. CI runs these checks on the minimum supported Pi release and the latest published one.
 
 ## Pull requests
 
