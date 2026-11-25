@@ -14,7 +14,7 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 ### Fixed
 
 - Preserve reasoning-only output exhaustion and allow at most one pi-tuck capacity retry per run when a cut increases the estimated reply cap.
-- Reject overflow recovery cuts that leave either estimated input or the estimated combined request unchanged or larger.
+- Require standalone overflow recovery cuts to lower estimated input and combined request size when the failed request has a paired estimate.
 - Stop inferring a smaller context window from an ambiguous length stop. Windows inferred by earlier versions no longer constrain requests.
 - Reject invalid run transitions and discard pending cuts when their branch or model budget changes.
 - Keep valid settings active when another field in `pi-tuck.json` is invalid.

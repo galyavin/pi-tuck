@@ -51,7 +51,7 @@ Some servers clip replies before reaching the requested output cap. A length sto
 
 ## After an overflow
 
-When Pi offers a standalone overflow recovery cut and pi-tuck has a request estimate to compare, the cut must preserve the task prompt and reduce both the estimated input and the estimated input plus output cap. Pi may change the final request after this check.
+When Pi offers a standalone overflow recovery cut and pi-tuck has an estimate for the failed request, the cut must preserve the task prompt and lower both estimated input and estimated input plus output cap. If the planned cut fails these checks, pi-tuck tries its smallest projection and declines recovery if that also fails. Pi may change the final request after this check.
 
 ## Token counts
 

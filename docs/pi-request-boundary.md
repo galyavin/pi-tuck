@@ -20,4 +20,6 @@ Return usage tied to the same final request so pi-tuck can calibrate across resu
 - A transport retry and session retry occur in one run. Both use the same allowance and cancellation signal, and neither sends after terminal settlement.
 - A session write fails during a recovery revision. No request depending on that revision is sent.
 - A backend rejects actual capacity, reports ordinary output exhaustion, or supplies only a length stop. Each outcome retains its distinct evidence and selects only permitted recovery.
+- A cut frees input tokens and Pi raises the output cap by the same amount. After an ambiguous overflow, Pi tries a candidate that lowers input and the combined total or settles the failed attempt.
+- A handler replaces the planned payload. Reported usage can seed calibration only when paired with an estimate for the dispatched request and scoped to its serving route. A resume with an unlabelled calibration window starts at neutral.
 - A provider without authoritative counting still runs normal requests and compaction. Another provider changes its effective window or route between attempts. Earlier measurements do not authorize the new request.
