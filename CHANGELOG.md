@@ -7,13 +7,14 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
-- Use Pi's reserve as the cut target and replace the fixed reply floor with observed output for the active model. A length stop no longer raises the reserve to the model's output limit.
+- Use Pi's reserve as the cut target and replace the fixed reply floor with observed output for the active model. Observed reply demand stays within the reserve and the model's output limit.
 - Allow selected local models to defer early cuts.
 - Support bounded native llama.cpp continuation for an explicitly configured and verified provider.
 
 ### Fixed
 
 - Preserve reasoning-only output exhaustion and allow at most one pi-tuck capacity retry per run when a cut increases the estimated reply cap.
+- Reject overflow recovery cuts that leave either estimated input or the estimated combined request unchanged or larger.
 - Stop inferring a smaller context window from an ambiguous length stop. Windows inferred by earlier versions no longer constrain requests.
 - Reject invalid run transitions and discard pending cuts when their branch or model budget changes.
 - Keep valid settings active when another field in `pi-tuck.json` is invalid.

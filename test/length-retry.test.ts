@@ -10,6 +10,24 @@ test.each(thinkingLengthCells)('thinking-only length recovery: $name', async cel
  expectThinkingLengthOutcome(cell, await thinkingLengthCell(cell));
 });
 
+test('a full-cap thinking stop leaves room for a fresh prompt and a later long tool turn', async () => {
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 800,
+  limits: { contextWindow: 65_536, maxTokens: 32_768 }, reserveTokens: 16_384, piRequestPath: true,
+  compaction: { requestReserve: undefined }, thinkingOnlyLength: n => n === 1, toolCalls: n => n === 3,
+  replyTokens: () => 20_000 });
+ try {
+  await h.session.prompt('Initial task');
+  expect(h.state.answers.map(a => [a.stopReason, a.usage.output])).toEqual([['length', 32_768]]);
+  expect(requestReplyFloor(h.manager.getBranch(), 16_384, h.session.model!)).toBe(16_384);
+  await h.session.prompt('Fresh task');
+  await h.session.prompt('Task with a long tool turn');
+  expect(h.state.answers.map(a => a.stopReason)).toEqual(['length', 'stop', 'toolUse', 'stop']);
+  expect(h.state.effects).toBe(1);
+  expect(h.state.requestOptions[2]!.maxTokens).toBeGreaterThan(20_000);
+  expect(h.faults).toEqual([]);
+ } finally { await h.cleanup(); }
+});
+
 test.each(['text', 'toolCall'] as const)('a length stop with %s does not trigger pi-tuck recovery', async kind => {
  const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 800,
   limits: { contextWindow: 32_768, maxTokens: 2_048 }, reserveTokens: 16_384, piRequestPath: true,
@@ -73,7 +91,7 @@ test('a retry whose deepest request cannot leave the floor refuses with the exis
  } finally { await h.cleanup(); }
 });
 
-test('the floor includes stopped reasoning across cuts and is capped by the active model', () => {
+test('the ordinary floor includes stopped reasoning within the reserve and model limit', () => {
  const manager = SessionManager.inMemory('/x');
  const message = { role: 'assistant' as const, content: [{ type: 'thinking' as const, thinking: 'unfinished reasoning' }],
   api: MODEL.api, model: MODEL.id, provider: MODEL.provider, stopReason: 'length' as const, timestamp: 1,
@@ -82,7 +100,7 @@ test('the floor includes stopped reasoning across cuts and is capped by the acti
  manager.appendCompaction('kept summary', '', 1);
  expect(thinkingOnlyLength(message)).toBe(true);
  expect(requestReplyFloor(manager.getBranch(), 16_384, { ...MODEL, maxTokens: 16_384 })).toBe(7_650);
- expect(requestReplyFloor(manager.getBranch(), 2_048, { ...MODEL, maxTokens: 16_384 })).toBe(7_650);
+ expect(requestReplyFloor(manager.getBranch(), 2_048, { ...MODEL, maxTokens: 16_384 })).toBe(2_048);
  expect(requestReplyFloor(manager.getBranch(), 16_384, { ...MODEL, maxTokens: 4_096 })).toBe(4_096);
  for (const content of [[], [{ type: 'text' as const, text: 'partial answer' }], [{ type: 'toolCall' as const, id: 'call', name: 'effect', arguments: {} }]]) {
   expect(thinkingOnlyLength({ ...message, content })).toBe(false);

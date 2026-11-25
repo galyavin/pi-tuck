@@ -237,7 +237,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (calibration.needsSeed()) calibration.reseed(ctx, "identity");
         return calibration.identity;
     };
-    pi.on("model_select", (_event, ctx) => { calibration.select(ctx); });
+    pi.on("model_select", (_event, ctx) => {
+        calibration.select(ctx);
+        if (run) run.rejectedBudget = undefined;
+    });
     const contextWindow = (ctx: ExtensionContext) => ctx.model?.contextWindow ?? 0;
     // The factor is max(1, the last CALIBRATION_WINDOW paired ratios, overflow bounds and seed): it rises at once and a stale high ratio ages out.
     const learn = (value: number, ctx: ExtensionContext) => calibration.learn(value, ctx, (kind, data) => pi.appendEntry(kind, data));
@@ -269,6 +272,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // The error alone does not report the server's window or whether it counted input plus output. Use the configured
         // input limit as a planning assumption and keep that assumption explicit in the notice.
         if (overflow) {
+            if (run?.phase === "admitted" && !options.requestReserve && piClamp) {
+                const failed = requestClamp(paired.messages, ctx);
+                if (failed.cap !== undefined) run.rejectedBudget = { input: failed.estimate, output: failed.cap };
+            }
             const window = contextWindow(ctx), bound = (window + 1) / paired.tokens;
             const learned = bound <= CALIBRATION_CEILING;
             notify(ctx, overflowNotice(window, bound, learned), "warning");
@@ -549,6 +556,29 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                     candidate => projectedRequest(candidate.kind === "cut" ? candidate.plan.messages : saved, ctx, hostInput, [], ctx.getSystemPrompt(), pi.getActiveTools(), candidate.kind === "cut"),
                     target => target <= room ? decide() : decide(target, target),
                     () => deepestDecision(ctx, operatorManual || run?.phase !== "admitted", retain));
+            }
+            const rejected = event.reason === "overflow" && event.willRetry ? run?.rejectedBudget : undefined;
+            if (rejected && decision.kind === "cut") {
+                const improves = (candidate: CutPlan) => {
+                    const messages = projectedRequest(candidate.messages, ctx, hostInput, [], ctx.getSystemPrompt(), pi.getActiveTools(), true);
+                    const { estimate, cap, leavesFloor } = requestClamp(messages, ctx);
+                    const systemTokens = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt());
+                    const improves = leavesFloor && cap !== undefined && estimate < rejected.input &&
+                        estimate + cap < rejected.input + rejected.output && fits(systemTokens + conversationTokens(messages), hardLine, ctx) &&
+                        (!run?.prompt || carriesPrompt(messages, run.prompt.text(ctx.sessionManager.getBranch()), run.prompt.role));
+                    recorder.capture("overflow-recovery", "estimated-before-provider-transforms", { rejected, input: estimate, output: cap, improves });
+                    return improves;
+                };
+                if (!improves(decision.plan)) {
+                    const previousClips = new Map(clips());
+                    const deepest = deepestDecision(ctx, false, retain);
+                    if (deepest.kind !== "cut" || !improves(deepest.plan)) {
+                        restoreClips(previousClips);
+                        recorder.stop("no-capacity-gain");
+                        return { cancel: true };
+                    }
+                    decision = deepest;
+                }
             }
             if (decision.kind === "cut") { return { compaction: captureDraft(decision.plan.compaction, ctx, decision.plan.reserve, event.reason, event.preparation.tokensBefore,
                 retain, operatorManual, event.preparation.previousSummary, { response, host, mandatory, target: decision.target, margin: room - band }) }; }
@@ -1092,6 +1122,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         // Reaching the next request boundary proves native commit returned, not durable storage.
         if (run) { run.pendingBoundaryReceipts = []; }
         calibration.pending = undefined;
+        if (run) run.rejectedBudget = undefined;
 		try {
 			if (!active()) return;
 			access();

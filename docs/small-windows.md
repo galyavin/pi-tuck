@@ -13,9 +13,9 @@ Words used here:
 
 In standalone use, pi-tuck uses Pi's configured reserve as the cut target. A length stop or context overflow leaves that reserve in place.
 
-For a request above the room, pi-tuck estimates the reply floor from observed output for the active provider, API, and model on the current branch. It ignores errored and aborted responses. The floor starts at one token without comparable usage and is normally capped by the reserve and the model's positive output limit. An observed thinking-only length stop lets the floor exceed the reserve, subject to the model's output limit.
+For a request above the room, pi-tuck estimates the reply floor from observed output for the active provider, API, and model on the current branch. It ignores errored and aborted responses. The floor starts at one token without comparable usage and is capped by the reserve and the model's positive output limit. A retry must also improve on the interrupted attempt.
 
-Resume, fork, and `/tree` use the selected branch's observations. An SDK host can provide a separate reserve. `responseExact: true` uses the host's declared value. Otherwise the host reserve is at least the model's configured output limit.
+Resume, fork, and `/tree` use the selected branch's observed reply sizes. An SDK host can provide a separate reserve. `responseExact: true` uses the host's declared value. Otherwise the host reserve is at least the model's configured output limit.
 
 ## What pi-tuck does before it refuses a request
 
@@ -48,6 +48,10 @@ When a run ends at the output limit, pi-tuck reports whether the response stoppe
 ## A server that clips replies
 
 Some servers clip replies before reaching the requested output cap. A length stop alone cannot distinguish a smaller context window from an independent output limit. pi-tuck uses the configured window and ignores inferred-window entries from older versions. Set the model's `contextWindow` to the effective server limit if it is smaller. Silent truncation can go undetected without usable provider evidence. [Pi request boundary proposal](pi-request-boundary.md)
+
+## After an overflow
+
+When Pi offers a standalone overflow recovery cut and pi-tuck has a request estimate to compare, the cut must preserve the task prompt and reduce both the estimated input and the estimated input plus output cap. Pi may change the final request after this check.
 
 ## Token counts
 

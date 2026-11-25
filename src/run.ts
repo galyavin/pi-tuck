@@ -129,6 +129,7 @@ export class Run {
     cut = new PendingCut();
     clips = new Map<string, Clip>();
     pendingBoundaryReceipts: string[] = [];
+    rejectedBudget?: { input: number; output: number };
     private lengthRecovery: 'available' | 'pending' | 'used' = 'available';
     get lengthRetryPending() { return this.lengthRecovery === 'pending'; }
     get canRetryLength() { return this.phase === 'admitted' && this.lengthRecovery === 'available'; }
@@ -144,6 +145,6 @@ export class Run {
     refusalReceipted = false;
     clear() {
         this.prompt = undefined; this.cut.clear(); this.clips.clear(); this.pendingBoundaryReceipts = [];
-        this.nativeFloorPending = false; this.refusalReceipted = false; this.expiredPlan = false;
+        this.rejectedBudget = undefined; this.nativeFloorPending = false; this.refusalReceipted = false; this.expiredPlan = false;
     }
 }

@@ -13,5 +13,5 @@ test('a small model starts with minimal headroom and ignores other models and fa
  expect(requestReplyFloor(entries, 16_384, model)).toBe(1);
  expect(requestReplyFloor([...entries, assistant(34.5)], 16_384, model)).toBe(35);
  expect(requestReplyFloor([...entries, assistant(200, 'length')], 64, model)).toBe(64);
- expect(requestReplyFloor([...entries, assistant(400, 'length', true)], 64, model)).toBe(256);
+ expect(requestReplyFloor([...entries, assistant(400, 'length', true)], 64, model)).toBe(64);
 });

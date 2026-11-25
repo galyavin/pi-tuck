@@ -57,10 +57,10 @@ export const thinkingOnlyLength = (message: AgentMessage): boolean => message.ro
 
 type ReplyModel = { provider: string; api: string; id: string; maxTokens: number };
 
-/** A soft reserve guides compaction. Beyond it, use observed reply demand from this model.
- * One token is the smallest positive allocation when there is no comparable evidence. */
+/** Ordinary reply demand is bounded by the reserve and model output limit.
+ * Recovery compares its candidate against the interrupted attempt separately. */
 export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, model: ReplyModel): number {
-    let largest = 1, thinkingStop = false;
+    let largest = 1;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;
@@ -69,9 +69,8 @@ export function requestReplyFloor(branch: readonly SessionEntry[], reserve: numb
         const output = message.usage?.output;
         if (typeof output !== 'number' || !Number.isFinite(output) || output <= 0) continue;
         largest = Math.max(largest, Math.ceil(output));
-        thinkingStop ||= thinkingOnlyLength(message);
     }
-    const observed = thinkingStop ? largest : Math.min(Math.max(1, reserve), largest);
+    const observed = Math.min(Math.max(1, reserve), largest);
     return model.maxTokens > 0 ? Math.min(observed, model.maxTokens) : observed;
 }
 
