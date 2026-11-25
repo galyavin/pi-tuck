@@ -57,12 +57,15 @@ export const thinkingOnlyLength = (message: AgentMessage): boolean => message.ro
 
 type ReplyModel = { provider: string; api: string; id: string; maxTokens: number };
 
+/** Reply room a cut above the room aims for before any long reply is seen. Cuts only: admission keeps the observed floor. */
+export const CUT_REPLY_FLOOR = 3_584;
+
 /** Ordinary reply demand is bounded by the reserve and model output limit.
  * Recovery compares its candidate against the interrupted attempt separately. */
-export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, model: ReplyModel): number {
+export function requestReplyFloor(branch: readonly SessionEntry[], reserve: number, model: ReplyModel, minimum = 1): number {
     const reserved = Math.max(1, reserve);
     const limit = model.maxTokens > 0 ? Math.min(reserved, model.maxTokens) : reserved;
-    let largest = 1;
+    let largest = minimum;
     for (const entry of branch) {
         if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
         const message = entry.message;

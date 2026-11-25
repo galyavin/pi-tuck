@@ -1,6 +1,6 @@
 import { textOf } from "./tuck/core/content.js";
 import { PendingCut, StartingPrompt, Run, type CutEntry } from "./run.js";
-import { requestReplyFloor, carriesPrompt, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath } from "./request-capacity.js";
+import { CUT_REPLY_FLOOR, requestReplyFloor, carriesPrompt, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
 import { DIAGNOSTIC_BUILD, IncidentRecorder, attachReceipt, permittedEntries, receiptId, findReceiptEntry, type Receipt, type RecorderOptions } from "./diagnostics.js";
 import { createHash } from "node:crypto";
@@ -341,9 +341,10 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         return Math.min(contextWindow(ctx) - response, ceiling ?? Infinity);
     };
     // Room still owns every existing cut/clip attempt. Only final capacity admission uses the hard line.
+    let floorMinimum = 1;
     const limits = (ctx: ExtensionContext) => {
         const response = responseReserve(ctx), room = inputRoom(response, ctx);
-        const floor = options.requestReserve || !ctx.model ? response : requestReplyFloor(ctx.sessionManager.getBranch(), response, ctx.model);
+        const floor = options.requestReserve || !ctx.model ? response : requestReplyFloor(ctx.sessionManager.getBranch(), response, ctx.model, floorMinimum);
         const hardLine = Math.min(Math.max(room, contextWindow(ctx) - piMargin - floor), calibration.lastCeiling ?? Infinity);
         return { response, room, hardLine, replyFloor: floor };
     };
@@ -381,6 +382,24 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const fitsWindow = cap !== undefined && cap > 0 && estimate + piMargin + cap <= contextWindow(ctx);
         // The native clamp bottoms out at one even when the estimate leaves no room.
         return { cap, leavesFloor: cap === undefined || fitsWindow && cap >= limits(ctx).replyFloor, estimate, fitsWindow };
+    };
+    // Plan a cut above the room for the cut floor first. The floor only shapes cuts: where no plan reaches it, the admission floor plans as if it
+    // did not exist, so it never refuses a request.
+    const planAboveRoom = (plan: (hardLine: number) => Decision<CutPlan>, ctx: ExtensionContext): Decision<CutPlan> => {
+        const { replyFloor, room } = limits(ctx);
+        if (!options.requestReserve) {
+            const previousClips = new Map(clips());
+            floorMinimum = CUT_REPLY_FLOOR;
+            try {
+                const shaped = limits(ctx);
+                if (shaped.replyFloor > replyFloor && shaped.hardLine > room) {
+                    const decision = plan(shaped.hardLine);
+                    if (decision.kind === "cut" || decision.kind === "none") return decision;
+                }
+            } finally { floorMinimum = 1; }
+            restoreClips(previousClips);
+        }
+        return plan(limits(ctx).hardLine);
     };
     const projectedRequest = (messages: Messages, ctx: ExtensionContext, host: Messages, incoming: Messages, prompt: string, tools: readonly string[], cut: boolean) => {
         const enabled = cut || historyToolsEnabled(ctx), shapes = toolShapes(historyToolNames(pi, tools, enabled));
@@ -554,12 +573,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             let decision: Decision<CutPlan> = decide();
             const { hardLine } = limits(ctx);
             if (!operatorManual && hardLine > room && decision.kind === "fault") {
-                decision = fits(before + mandatory, hardLine, ctx) ? { kind: "none" } : decide(hardLine, hardLine);
-                decision = clampAboveRoom(decision, ctx, room, hardLine,
+                decision = planAboveRoom(hardLine => clampAboveRoom(fits(before + mandatory, hardLine, ctx) ? { kind: "none" } : decide(hardLine, hardLine), ctx, room, hardLine,
                     candidate => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory,
                     candidate => project(candidate.kind === "cut" ? candidate.plan.messages : saved, candidate.kind === "cut"),
                     target => target <= room ? decide() : decide(target, target),
-                    () => deepestDecision(ctx, operatorManual || run?.phase !== "admitted", retain));
+                    () => deepestDecision(ctx, operatorManual || run?.phase !== "admitted", retain)), ctx);
             }
             const rejected = event.reason === "overflow" && event.willRetry ? run?.rejectedBudget : undefined;
             if (rejected && decision.kind === "cut") {
@@ -707,13 +725,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         let decision: Decision<CutPlan> = gate.kind === "plan" ? decide(room, band, gate.opportunistic) : { kind: "defer" };
         const { hardLine } = limits(ctx);
         if (hardLine > room && (decision.kind === "defer" || decision.kind === "fault")) {
-            decision = fits(before + mandatory, hardLine, ctx) ? { kind: "none" } :
-                fits(mandatory, hardLine, ctx) ? decide(hardLine, hardLine, false) : { kind: "defer" };
-            decision = clampAboveRoom(decision, ctx, room, hardLine,
+            decision = planAboveRoom(hardLine => clampAboveRoom(fits(before + mandatory, hardLine, ctx) ? { kind: "none" } :
+                fits(mandatory, hardLine, ctx) ? decide(hardLine, hardLine, false) : { kind: "defer" }, ctx, room, hardLine,
                 candidate => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory,
                 candidate => projectedRequest(candidate.kind === "cut" ? candidate.plan.messages : saved, ctx, hostInput, incomingMessages, observedPrompt, tools, candidate.kind === "cut"),
                 target => decide(target, target <= room ? band : target, false),
-                () => deepestDecision(ctx, !protectedId, Boolean(protectedId)));
+                () => deepestDecision(ctx, !protectedId, Boolean(protectedId))), ctx);
         }
         if (decision.kind === "defer") return;
         // An opportunistic cut inside the band that cannot reach it is no fault: the request goes to the guard.
@@ -875,17 +892,19 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         calibration.estimatedTokens = corrected(before + mandatory, ctx);
         const { hardLine } = limits(ctx);
         if (hardLine > room && (decision.kind === "defer" || decision.kind === "fault")) {
-            if (fits(before + mandatory, hardLine, ctx)) decision = { kind: "none" };
-            else { decision = decide(hardLine, hardLine); tryClips(hardLine, hardLine); }
-            decision = clampAboveRoom(decision, ctx, room, hardLine,
-                candidate => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory,
-                candidate => projectedRequest(candidate.kind === "cut" ? candidate.plan.messages : saved, ctx, hostInput, event.context.pendingMessages as Messages, ctx.getSystemPrompt(), pi.getActiveTools(), candidate.kind === "cut"),
-                target => {
-                    const targetBand = target <= room ? band : target;
-                    decision = decide(target, targetBand, target > room);
-                    tryClips(target, targetBand, target > room);
-                    return decision;
-                }, () => deepestDecision(ctx, false, true));
+            decision = planAboveRoom(hardLine => {
+                if (fits(before + mandatory, hardLine, ctx)) decision = { kind: "none" };
+                else { decision = decide(hardLine, hardLine); tryClips(hardLine, hardLine); }
+                return clampAboveRoom(decision, ctx, room, hardLine,
+                    candidate => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory,
+                    candidate => projectedRequest(candidate.kind === "cut" ? candidate.plan.messages : saved, ctx, hostInput, event.context.pendingMessages as Messages, ctx.getSystemPrompt(), pi.getActiveTools(), candidate.kind === "cut"),
+                    target => {
+                        const targetBand = target <= room ? band : target;
+                        decision = decide(target, targetBand, target > room);
+                        tryClips(target, targetBand, target > room);
+                        return decision;
+                    }, () => deepestDecision(ctx, false, true));
+            }, ctx);
         }
         if (decision.kind === "fault" && reason === "tool-loop") {
             if (decision.capacity) decision = nativeFloorDecision(ctx, false, true,
@@ -1063,9 +1082,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const total = (candidate: Decision<CutPlan>) => (candidate.kind === "cut" ? candidate.plan.after : before) + mandatory;
         let decision = decide(room, band);
         if (hardLine > room && (decision.kind === "defer" || decision.kind === "fault")) {
-            decision = decide(hardLine, hardLine);
-            decision = clampAboveRoom(decision, ctx, room, hardLine, total, project,
-                target => decide(target, target <= room ? band : target), () => deepestDecision(ctx, false, true));
+            decision = planAboveRoom(hardLine => clampAboveRoom(decide(hardLine, hardLine), ctx, room, hardLine, total, project,
+                target => decide(target, target <= room ? band : target), () => deepestDecision(ctx, false, true)), ctx);
         }
         const accepts = (candidate: Decision<CutPlan>) => {
             if (candidate.kind !== "cut" || candidate.plan.after >= before) return false;

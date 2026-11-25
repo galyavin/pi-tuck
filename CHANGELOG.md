@@ -14,6 +14,8 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 - Post-cut headroom: cut at the room by default, and carry no more native history than Pi keeps. The adaptive cut point is gone.
 
 - Use Pi's reserve as the cut target and replace the fixed reply floor with observed output for the active model. Observed reply demand stays within the reserve and the model's output limit.
+- A cut above the room aims to leave 3,584 reply tokens, within the reserve and the model's output limit. Where no cut can, the request goes
+  out as before.
 - Allow selected local models to defer early cuts.
 - Support bounded native llama.cpp continuation for an explicitly configured and verified provider.
 
