@@ -228,6 +228,9 @@ export async function harness(options: Options) {
  // Physical-window recovery compares replies with compaction timestamps. Keep Date deterministic for these cells, advancing at each
  // provider response; real timers still drive the prompt watchdog. Otherwise a fast retry can fall on either side of a millisecond boundary.
  const physicalClock = options.providerWindow !== undefined;
+ // Live, pi-ai stamps a reply when its stream starts, so a cut saved after the stream is strictly newer than that reply. The frozen
+ // clock moves on 1 ms once a reply has streamed; otherwise a cut shares the reply's stamp and Pi trusts the pre-cut usage.
+ const afterStream = () => { if (physicalClock) vi.setSystemTime(Date.now() + 1); };
  if (physicalClock) { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-01-01T00:00:00.001Z')); }
  // A timestamp on an exact second is written 4 characters shorter (source-time.ts), which moves a summary by a token. Tests that walk a cut's edge
  // token by token must not depend on the clock, so a message is never stamped on an exact second here.
@@ -552,7 +555,7 @@ export async function harness(options: Options) {
      message.usage.output = availableOutput; message.usage.totalTokens = count + availableOutput;
      stream.push({ type: 'done', reason: 'length', message });
     } else stream.push({ type: 'done', reason: 'stop', message });
-    stream.end(message); return stream;
+    stream.end(message); afterStream(); return stream;
    }
    options.onWire?.(_ctx);
    const request = options.piRequestPath ? await providerRequest(_m, _ctx, streamOptions) : undefined;
@@ -586,14 +589,14 @@ export async function harness(options: Options) {
     state.assistantSizes[state.requests - 1] = 0;
     const failed = refuse('503 Service Unavailable: the upstream is temporarily overloaded', 503);
     state.answers.push(failed);
-    stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
+    stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); afterStream(); return stream;
    }
    if (providerRefused) {
     state.overflows++;
     state.assistantSizes[state.requests - 1] = 0; // the model sent no content at all for this request
     const failed = refuse(overflowText(count, maxTokens), options.rejectStatus);
     state.answers.push(failed);
-    stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); return stream;
+    stream.push({ type: 'error', reason: 'error', error: failed }); stream.end(failed); afterStream(); return stream;
    }
    // A request that never answers: nothing arrives until the turn is aborted, which is when a transport closes.
    if (options.neverEnds?.(state.requests)) {
@@ -615,7 +618,7 @@ export async function harness(options: Options) {
     failed.timestamp = Math.max(Date.now(), cutAt + 1);
     state.answers.push(failed);
     if (failing === 'length') stream.push({ type: 'done', reason: 'length', message: failed }); else stream.push({ type: 'error', reason: 'error', error: failed });
-    stream.end(failed); return stream;
+    stream.end(failed); afterStream(); return stream;
    }
    const reply: AssistantMessage['content'] = toolRound ? options.parallelReads
     ? options.parallelReads.map((_, index) => ({ type: 'toolCall' as const, id: `parallel-read-${state.requests}-${index}`, name: 'read', arguments: { index } }))
@@ -675,7 +678,7 @@ export async function harness(options: Options) {
    // Every reply is measured as pi-tuck measures it, so a caller can weigh the assistant content a run just added to the session.
    state.replies.push(estimateTokens(message));
    state.answers.push(message);
-   stream.push({ type: 'done', reason: message.stopReason as 'toolUse' | 'stop' | 'length', message }); stream.end(message); return stream;
+   stream.push({ type: 'done', reason: message.stopReason as 'toolUse' | 'stop' | 'length', message }); stream.end(message); afterStream(); return stream;
   };
   const allCompactions = () => manager.getEntries().filter((e): e is Extract<SessionEntry, { type: 'compaction' }> => e.type === 'compaction').slice(cutsBefore);
   const isRunEnd = (e: { details?: unknown }) => (e.details as { diagnosticReceipt?: { reason?: string } } | undefined)?.diagnosticReceipt?.reason === 'run-end';
