@@ -14,6 +14,34 @@ import { BAND_EXACT, EXACT_RESERVE, HOST, ROOM_EXACT, WINDOW, expectParity, harn
 // Window 272,000 less the exact reserve leaves a room of 239,232.
 const base = { at: 'prompt' as const, complete: 60000, host: HOST, reserveTokens: 0, compaction: EXACT_RESERVE };
 
+test.each([
+ { maxTokens: 8_192, expected: 'ordinary' },
+ { maxTokens: 40_000, expected: 'deepest' },
+ { maxTokens: 65_536, expected: 'cancelled' },
+] as const)('overflow recovery with output limit $maxTokens is $expected', async ({ maxTokens, expected }) => {
+ const h = await harness({ at: 'prompt', complete: 45_000, host: HOST, reserveTokens: 0, keepRecent: 4_000,
+  limits: { contextWindow: 65_536, maxTokens }, piRequestPath: true,
+  compaction: { requestReserve: undefined, cutAt: 1 }, replies: ['overflow'] });
+ try {
+  const result = await h.run();
+  expect(h.state.requests).toBe(expected === 'cancelled' ? 1 : 2);
+  expect(h.faults).toEqual([]);
+  if (expected !== 'cancelled') {
+   const [before, after] = h.state.requestOptions;
+   const cuts = h.compactions();
+   expect(cuts).toHaveLength(1);
+   expect(Boolean((cuts[0]!.details as { deepest?: boolean }).deepest)).toBe(expected === 'deepest');
+   expect(after!.contextTokens).toBeLessThan(before!.contextTokens);
+   expect(after!.contextTokens + after!.maxTokens).toBeLessThan(before!.contextTokens + before!.maxTokens);
+   expect(result.wholePrompt).toEqual([true, true]);
+  }
+  const sends = h.state.requests;
+  await h.session.prompt('A fresh, small task');
+  expect(h.state.requests).toBe(sends + 1);
+  expect(h.state.answers.at(-1)?.stopReason).toBe('stop');
+ } finally { await h.cleanup(); }
+});
+
 for (const kind of ['length', 'overflow'] as const)
 test(`a recoverable ${kind === 'length' ? 'length stop' : 'provider overflow'}: Pi compacts through the package with the system part reserved, retries once, and the retry succeeds`, async () => {
  const r = await scenario({ ...base, replies: [kind] });
