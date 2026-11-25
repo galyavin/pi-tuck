@@ -13,7 +13,7 @@ async function fixture(){
  const reply=(stopReason:string)=>fire('message_end',{message:{role:'assistant',stopReason,content:[]}});
  return {notices,fire,reply};
 }
-const NOTICE="pi-tuck: the last reply stopped at the model's output limit and may be cut off. Ask the agent to continue.";
+const NOTICE="pi-tuck: the last reply ended with a length stop and may be cut off. Ask the agent to continue.";
 test('a run that ends on a reply cut at the output limit gets one notice', async()=>{
  const f=await fixture();await f.fire('agent_start');await f.reply('length');await f.fire('agent_settled');await f.fire('agent_settled');
  expect(f.notices.filter(n=>n===NOTICE)).toHaveLength(1);
@@ -32,7 +32,7 @@ test('with no UI (pi -p) the notice goes to stderr', async()=>{
  const fire=async(name:string,event:any={})=>{for(const h of handlers.get(name)??[]){try{await h(event,ctx);}catch{}}};
  const write=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
  try{await fire('agent_start');await fire('message_end',{message:{role:'assistant',stopReason:'length',content:[]}});await fire('agent_settled');
-  expect(write.mock.calls.filter(c=>String(c[0]).startsWith("pi-tuck: the last reply stopped"))).toHaveLength(1);}finally{write.mockRestore();}
+  expect(write.mock.calls.filter(c=>String(c[0]).startsWith("pi-tuck: the last reply ended"))).toHaveLength(1);}finally{write.mockRestore();}
 });
 test('a tree move or a failure before pi-tuck settles does not erase the notice', async()=>{
  // Another extension's agent_settled handler can move in the tree first; pi-tuck's run reset must not drop the operator's notice.

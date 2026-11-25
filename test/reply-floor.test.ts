@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import { branchReplyFloor, carriesPrompt } from '../src/request-capacity';
+import { requestReplyFloor, carriesPrompt } from '../src/request-capacity';
 import { drive, MODEL } from './calibration-fixture';
 import { harness, OVERFLOW_TEXT } from './budget-fixture';
 import { assertNativeToolRounds } from '../src/protocol';
@@ -15,27 +15,20 @@ const response = (output: number, stopReason = 'stop', errorMessage?: string) =>
  api: MODEL.api, provider: MODEL.provider, model: MODEL.id, timestamp: 1, stopReason, errorMessage,
  usage: { input: 0, output, cacheRead: 0, cacheWrite: 0, totalTokens: output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }) as Parameters<SessionManager['appendMessage']>[0];
 
-test('branch floor: minimum 3584, largest output across cuts, reserve cap and branch selection', () => {
+test('reply floor follows comparable observed output across cuts and branch selection', () => {
  const manager = SessionManager.inMemory('/x');
  const first = manager.appendMessage({ role: 'user', content: 'start', timestamp: 0 });
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(3_584);
- expect(branchReplyFloor(manager.getBranch(), 100)).toBe(100);
+ const floor = (reserve: number) => requestReplyFloor(manager.getBranch(), reserve, { ...MODEL, maxTokens: 32_768 });
+ expect(floor(16_384)).toBe(1);
  manager.appendMessage(response(6_000));
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(6_000);
+ expect(floor(16_384)).toBe(6_000);
  manager.appendMessage(response(12_000));
  manager.appendMessage(response(400));
  manager.appendCompaction('summary', '', 1);
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(12_000);
- expect(branchReplyFloor(manager.getBranch(), 10_000)).toBe(10_000);
+ expect(floor(16_384)).toBe(12_000);
+ expect(floor(10_000)).toBe(10_000);
  manager.branch(first);
- expect(branchReplyFloor(manager.getBranch(), 16_384)).toBe(3_584);
-});
-
-test.each(['length', 'overflow'] as const)('%s on the retained branch holds the entire reserve', kind => {
- const manager = SessionManager.inMemory('/x');
- manager.appendMessage(response(1, kind === 'length' ? 'length' : 'error', OVERFLOW_TEXT));
- manager.appendCompaction('summary', '', 1);
- expect(branchReplyFloor(manager.getBranch(), 32_768)).toBe(32_768);
+ expect(floor(16_384)).toBe(1);
 });
 
 test('prompt check handles decoded quotes, newlines, images, whole summary quotes and rejects partial or assistant-only copies', () => {
@@ -137,9 +130,9 @@ test.each(['pi-tuck-capacity', 'pi-tuck-calibration'])('%s receipts cannot enter
 });
 
 test('a prompt cut that keeps only its summary survives guard receipts and saves a boundary that keeps the user', async () => {
- // Still require a cut with the smaller 3,584 floor; the old incoming size now fits without one.
+ // Incoming context plus the old summary exceeds the planning budget.
  const h = await harness({ at: 'prompt', complete: 76_000, summary: true, summaryOnly: true, summaryTokens: 12_000,
-  incoming: 63_000, host: 200, systemTokens: 800, limits: { contextWindow: 81_920, maxTokens: 8_192 }, reserveTokens: 32_768,
+  incoming: 63_000, host: 200, archivedReplyOutput: 3_584, systemTokens: 800, limits: { contextWindow: 81_920, maxTokens: 8_192 }, reserveTokens: 32_768,
   compaction: { requestReserve: undefined }, persist: true });
  try {
   const r = await h.run();

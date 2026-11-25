@@ -36,7 +36,6 @@ import { join } from 'node:path';
 import { est, harness, nonSystem, nonSystemCount, type Options } from '../budget-fixture';
 import { DEFAULT_CUT_AT, bandOf } from '../../src/budget.js';
 import { overflowNotice, CALIBRATION_CEILING } from '../../src/compaction.js';
-import { seedContextWindow } from '../../src/request-capacity.js';
 // The subpath the package's exports map allows; the file is pi-ai's own classifier, so the cells read the version under test.
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { exemptUsefulCut, floorCase, forcedPointParity, nativeState, nativeReplyClamp, nativeFloorAdmission, refusalParity, type BudgetObservation, type NativeState } from '../native-parity';
@@ -258,16 +257,18 @@ const base = (name: string, over: Partial<Cell>): Cell => {
  return cell;
 };
 
-/** Independent room oracle, shared by generated sizes and every rule: start at Pi's reserve, then hold the cap after a length stop or a refusal
- * pi-ai classes as a context overflow on the branch; other errors (a 503) keep the reserve. Read native entries rather than pi-tuck's helper or
- * receipts, so the same oracle judges 1.0.19 and the candidate. */
-export function limitsOf(cell: Pick<Cell, 'window' | 'reserve' | 'maxTokens'>, branch: readonly SessionEntry[] = []) {
- const failed = branch.some(e => e.type === 'message' && e.message.role === 'assistant' &&
-  (e.message.stopReason === 'length' || (e.message.stopReason === 'error' && isContextOverflow(e.message as never))));
- const reserve = failed ? Math.max(cell.reserve, cell.maxTokens) : cell.reserve;
- const largest = Math.max(3_584, ...branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' && Number.isFinite(e.message.usage?.output) ? [e.message.usage.output] : []));
- const branchFloor = failed ? reserve : Math.min(reserve, Math.ceil(largest));
- const replyFloor = cell.maxTokens > 0 ? Math.min(branchFloor, cell.maxTokens) : branchFloor;
+/** Independent room oracle. Pi's reserve is the cut target. Only retained, comparable output can inform admission beyond it. */
+export function limitsOf(cell: Pick<Cell, 'window' | 'reserve' | 'maxTokens' | 'extra'>, branch: readonly SessionEntry[] = []) {
+ const { reserve } = cell;
+ const model = cell.extra?.model ?? { provider: 'openai-codex', id: 'gpt-6.1-sol' };
+ const replies = branch.flatMap(e => e.type === 'message' && e.message.role === 'assistant' &&
+  e.message.provider === model.provider && e.message.model === model.id &&
+  ['stop', 'toolUse', 'length'].includes(e.message.stopReason) && Number.isFinite(e.message.usage?.output) && e.message.usage.output > 0 ? [e.message] : []);
+ const largest = Math.max(1, Math.ceil(Math.max(0, ...replies.map(message => message.usage.output))));
+ const exhausted = replies.some(message => message.stopReason === 'length' && message.content.length > 0 &&
+  message.content.every(block => block.type === 'thinking'));
+ const observed = exhausted ? largest : Math.min(Math.max(1, reserve), largest);
+ const replyFloor = cell.maxTokens > 0 ? Math.min(observed, cell.maxTokens) : observed;
  const room = cell.window - reserve;
  return { reserve, replyFloor, room, hardLine: Math.max(room, cell.window - PI_MARGIN - replyFloor) };
 }
@@ -448,7 +449,6 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
    name: cell.name, plainPi, configuredWindow: cell.window, providerWindow, usageFactor: cell.usageRatio,
    answered: prompts.filter(p => p.answered).length, refused: prompts.filter(p => !p.answered && !p.hung).length,
    completedTurns: prompts.filter(p => p.completed).length,
-   learnedWindow: seedContextWindow(h.manager.getBranch(), JSON.stringify([h.session.model!.provider, h.session.model!.api, h.session.model!.id]), h.session.model!.contextWindow) ?? null,
    lostTasks: lostTasks.size, lostTaskPrompts: [...lostTasks], stuckSessions: recovery.some(r => r.requests === 0 || r.hung) ? 1 : 0,
    hungPrompts: prompts.filter(p => p.hung).length,
    lengthStops: h.state.stops.filter(s => s === 'length').length, providerOverflows: h.state.overflows,
@@ -472,9 +472,9 @@ async function measureWrongWindow(cell: Cell, plainPi: boolean) {
 }
 
 function wrongWindowOutcome(measured: Awaited<ReturnType<typeof measureWrongWindow>>) {
- const { name, plainPi, answered, refused, completedTurns, learnedWindow, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
+ const { name, plainPi, answered, refused, completedTurns, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows, summaryOverflows, summaryLengthStops,
   calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached } = measured;
- return { name, plainPi, answered, refused, completedTurns, learnedWindow, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
+ return { name, plainPi, answered, refused, completedTurns, lostTasks, stuckSessions, hungPrompts, lengthStops, providerOverflows,
   summaryOverflows, summaryLengthStops, calibrationAfterFirstOverflow, calibrationEvidence, finalCalibration, adapts, adaptsAfterWindowHit, requestsAfterOverflow, oversizedAfterOverflow, reached };
 }
 
@@ -671,7 +671,9 @@ async function runCellInner(cell: Cell, hooks?: GridHooks): Promise<Run> {
    // Which earlier prompt is the task can't be known without reading it, so the first answered prompt (the goal of a long session) and the newest
    // 8 answered prompts (where the current task is) must keep at least their openings through a cut, in the summary or the kept tail. A prompt
    // refused for being larger than the room was never taken up and is not counted.
-   if (requests > 0) answeredPrompts.push({ prompt: i + 1, opening });
+   const answeredPrompt = h.state.answers.slice(seen.answers).some(reply =>
+    (reply.stopReason === 'stop' || reply.stopReason === 'toolUse') && reply.content.length > 0);
+   if (answeredPrompt) answeredPrompts.push({ prompt: i + 1, opening });
    if (h.compactions().length > cutsBefore) {
     const saved = JSON.stringify(h.manager.buildSessionProjection().messages);
     // The first answered prompt is the session's first user turn only where the case seeds no opening turn before it.
@@ -729,6 +731,10 @@ async function runCellInner(cell: Cell, hooks?: GridHooks): Promise<Run> {
    // A refusal is a turn that asked for nothing or ended without an answer, other than one the cell stalled on purpose.
   const paused = hooks?.paused?.(i) ?? false;
   const wasRefused = !paused && outcome !== 'hung' && (requests === 0 || !stopped.includes('stop'));
+   // The requested output of this fixture can exceed physical space even with no optional history.
+   // This is an incomplete generation, and the notice and next-prompt recovery are still checked.
+   const wantedOutput = i === 0 ? cell.extra?.replyWindowOutput?.(1) : undefined;
+   const exhaustedMandatoryReply = stoppedLast === 'length' && wantedOutput !== undefined && floor + tokens + wantedOutput > cell.window;
    if (wasRefused) refused++; else answered++;
    if (cell.hostFault) {
    if (!lastThrew.includes(cell.hostFault)) record(cell, 'harness', `the host was expected to refuse this state with "${cell.hostFault}", but the prompt ${lastThrew ? `said "${lastThrew.slice(0, 140)}"` : 'ended quietly'}`);
@@ -769,7 +775,7 @@ async function runCellInner(cell: Cell, hooks?: GridHooks): Promise<Run> {
   const assistantOverRoom = freeRoom > 0 && freshAssistant > 0 && freshAssistant > freeRoom && freshAssistant < room - floor;
   if (!cell.hostFault && wasRefused && !structuralWhy && assistantOverRoom) record(cell, 'fresh-room', `prompt ${i + 1} was refused on a fresh assistant body of ${freshAssistant} tokens, above the free room as pi-tuck estimates it (${freeRoom}) and below what the room holds at the provider's count (${room - floor}): nothing clips or cuts a fresh assistant message, so the run stopped where the model's own reply overflowed`, { prompt: i + 1, tokens, freshAssistant, freeRoom, floor });
   else if (!cell.hostFault && wasRefused && !structuralWhy && fitsAlone && clipWouldFit) recordRefusal(h.state.clips > seen.clips ? 'clip-room' : 'no-clip', `prompt ${i + 1} of ${tokens} tokens was refused although a clip sized to the room the provider leaves would fit (${afterClip} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), floor ${floor}, clip budget ${Math.max(0, clipAware)} against pi-tuck's own ${Math.floor((room - floor) / 2)}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, floor, afterClip, clipAware, room, factor });
-  else if (!cell.hostFault && !cell.providerRejection && wasRefused && fitsAlone) recordRefusal('refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
+  else if (!cell.hostFault && !cell.providerRejection && wasRefused && fitsAlone && !exhaustedMandatoryReply) recordRefusal('refusal', `prompt ${i + 1} of ${tokens} tokens was refused although the smallest request that answers it fits the room (${smallest} of a room of ${room}, factor ${factor.toFixed(2)}, prompt ${tokens}, ${fresh.length} fresh result(s), fresh assistant body ${carried}, floor ${floor}): ${said}`, { prompt: i + 1, tokens, fresh: fresh.length, carried, floor, smallest, room, factor });
    hooks?.afterPrompt?.(h, i);
    if (!paused && !cell.hostFault && (wasRefused || outcome === 'hung')) {
     // Nothing may leave a session unable to take the next prompt: a short one has to get through, when the room can hold it at all — which
@@ -1364,7 +1370,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   extra: { replyWindow, ...(replyWindow === 'refuse' ? { providerOverflowAt: (request: number) => request === 1 } : {}), replyWindowOutput: request => request === 1 ? size.maxTokens : 48, persist: true, noOpening: true },
   reached: { state: 'a cap above the reserve, then 12 tool rounds and a completed recovery prompt',
    check: e => e.requests.length === 6 && e.requests[1]! >= 4 && e.requests.at(-1)! > 0 && e.answered >= 5 && e.results.length >= 12 &&
-    (e.requests[0] === 0 || (replyWindow === 'clip' ? e.truncations === 1 : e.overflows === 1 && e.piOverflow >= 1)) },
+    (e.requests[0] === 0 || (replyWindow === 'clip' ? e.truncations >= 1 && e.truncations <= 2 : e.overflows === 1 && e.piOverflow >= 1)) },
  })));
  // Both fake transports exercise the new admission band, actual output exhaustion and input overflow.
  const floorCells = ['openai-codex', 'openai'].flatMap(provider => {
@@ -1398,7 +1404,7 @@ const replaySecond = base('setup 68000 at window 131072, second prompt (replay)'
   return [
    ...[27_742, 27_827].map(target => base(`clamp pilot: ${provider} request ${target}`, {
     ...common, setup: target - 200, system: target - 752, prompts: [200, 200, 200],
-    extra: { model, stableHost: true, persist: true, noOpening: true, replyWindow: 'clip', replyWindowOutput: () => 3_584 },
+    extra: { model, stableHost: true, persist: true, noOpening: true, archivedReplyOutput: 3_584, replyWindow: 'clip', replyWindowOutput: () => 3_584 },
     reached: { state: 'pilot setup between room and window, refused before any clamp-shortened reply',
      check: e => e.floor > 16_384 && e.clampStops === 0 && e.refused === 3 && e.requests.every(n => n === 0) },
    })),

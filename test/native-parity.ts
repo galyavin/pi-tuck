@@ -4,15 +4,19 @@ import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-option
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
 
+function nativeRequestMargin(model: Model<Api>): number {
+ const empty = normalizeContext({ messages: [] }), window = 1_000_000;
+ return window - estimateContextTokens(empty).tokens - clampMaxTokensToContext({ ...model, contextWindow: window, maxTokens: window }, empty, window);
+}
+
 /** Independently validate a refusal-path admission against the installed Pi, on the exact request it admitted. */
 export function nativeFloorAdmission(model: Model<Api>, messages: Parameters<typeof convertToLlm>[0], branch: readonly SessionEntry[]): boolean {
  const leaf = branch.at(-1);
  if (leaf?.type !== 'custom' || leaf.customType !== 'pi-tuck-capacity') return false;
  const data = leaf.data as { kind?: string; piCap?: number; piEstimateTokens?: number };
  if (data?.kind !== 'native-floor') return false;
- const context = normalizeContext({ messages: convertToLlm(messages) }), empty = normalizeContext({ messages: [] });
- const window = 1_000_000;
- const margin = window - estimateContextTokens(empty).tokens - clampMaxTokensToContext({ ...model, contextWindow: window, maxTokens: window }, empty, window);
+ const context = normalizeContext({ messages: convertToLlm(messages) });
+ const margin = nativeRequestMargin(model);
  const estimate = estimateContextTokens(context).tokens, cap = clampMaxTokensToContext(model, context, model.maxTokens);
  return cap > 0 && estimate + margin + cap <= model.contextWindow && data.piCap === cap && data.piEstimateTokens === estimate;
 }
@@ -42,9 +46,8 @@ export function nativeCompactionPoint(window: number, settings: ReturnType<Setti
  return low;
 }
 
-/** A reply that did not fit, after which the reply needs the whole reserve: a length stop that wrote text or a tool call, or a context overflow.
- * A thinking-only length stop is not one (1.0.25): the session retries it with the largest reply as its floor, so a later refusal is judged
- * by the clamp oracle, not exempted here. Written from the branch alone, not from pi-tuck's helper. */
+/** The parity oracle exempts branches with context overflow or a length stop. Thinking-only length stops
+ * remain subject to the clamp oracle. Read independently from the branch. */
 export function failedReply(branch: readonly SessionEntry[]): boolean {
  return branch.some(e => {
   if (e.type !== 'message' || e.message.role !== 'assistant') return false;
@@ -79,7 +82,11 @@ export function nativeReplyClamp(model: Model<Api>, system: Message[], prompt: U
  const messages = [...system, ...convertToLlm([summary]), ...fresh.map(message => message.role === 'toolResult'
   ? { ...message, content: [{ type: 'text' as const, text: message.content.map(block => block.type === 'text' ? block.text : '').join('\n').slice(0, 800).padEnd(800, ' ') }] }
   : message)];
- return clampMaxTokensToContext(model, normalizeContext({ messages }), model.maxTokens);
+ const context = normalizeContext({ messages });
+ const cap = clampMaxTokensToContext(model, context, model.maxTokens);
+ // A saturated one-token return does not prove that the estimate left one token.
+ const margin = nativeRequestMargin(model);
+ return estimateContextTokens(context).tokens + margin + cap <= model.contextWindow ? cap : 0;
 }
 
 export function refusalParity(state: NativeState): { violation: boolean; exception?: 'past-window' | 'failed-reply' | 'reply-floor' } {

@@ -33,11 +33,7 @@ This folder holds the plans, the results and the code behind the numbers in the 
 | [`RESULTS-PILOT.md`](RESULTS-PILOT.md) | A thinking-level pilot, `medium` against `xhigh` | a 1.0.11 candidate (`22043bb`) | A coarse screen; the file says it is not a gate of any build |
 | [`RESULTS-REMEASURE.md`](RESULTS-REMEASURE.md) | A re-measure of retention that was stopped early | pi-tuck 1.0.11 | Closed with no result. The file says why |
 
-The README's table uses numbers from `RESULTS-MAIN.md` and `RESULTS-32K-ACCEPT.md`. Every other row is in the section "Result rows" below.
-
 ## Result rows
-
-Each row says what was measured, under which conditions, and where the data is. The rows are in the order the README had them, newest first for the gates. Rows that did not favour pi-tuck are here in full: the 1.0.8 defaults check, the 1.0.5 acceptance bar missed by one task, the 1.0.10 gate that failed by one task, the 1.0.16 cost, and the dropped prompts of 1.0.10 and 1.0.11.
 
 | What | Result | Conditions | Source |
 |---|---|---|---|

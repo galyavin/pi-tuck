@@ -16,7 +16,7 @@ const cases: { point: string; reason: string; requests: number; options: Omit<Op
 ];
 
 test.each(cases)('$point replans above the room until Pi leaves the reply floor', async ({ options, reason, requests }) => {
- const h = await harness({ ...options, host: 200, limits: { contextWindow: 32_768, maxTokens: 8_192 },
+ const h = await harness({ ...options, host: 200, archivedReplyOutput: 3_584, limits: { contextWindow: 32_768, maxTokens: 8_192 },
   reserveTokens: 16_384, usageRatio: 0.873, piRequestPath: true, compaction: { requestReserve: undefined } });
  try {
   const r = await h.run();
