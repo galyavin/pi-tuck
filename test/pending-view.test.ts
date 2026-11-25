@@ -13,7 +13,7 @@ vi.mock('../src/budget', async original => {
   return { ...real, bandOf: (...args: Parameters<typeof real.bandOf>) => { const band = real.bandOf(...args); bands.push(band); return band; } };
 });
 
-async function fixture(compactAll = false) {
+async function fixture(compactAll = false, continuation = false) {
   const manager = SessionManager.inMemory('/virtual/pi-tuck-test/pending-view');
   const runtime = await scriptedModelRuntime({ contextWindow: 32768, maxTokens: 4096 });
   const model = runtime.getModel('openai-codex', 'gpt-6.1-sol')!;
@@ -34,7 +34,7 @@ async function fixture(compactAll = false) {
     isIdle: () => true, getSystemPrompt: () => 'Follow the current task.', abort: () => {}, ui: { notify: (message: string) => { notices.push(message); } },
   } as unknown as ExtensionContext;
   const handle = await installCompaction(pi, { settings: SettingsManager.inMemory({ compaction: { enabled: true, reserveTokens: 4096, keepRecentTokens: 0 } }),
-    requestReserve: () => ({ response: 4096, responseExact: true }), fail: error => faults.push(error) });
+    requestReserve: () => ({ response: 4096, responseExact: true }), fail: error => faults.push(error), ...(continuation ? { continuationModel: `${model.provider}/${model.id}` } : {}) });
   const emit = async (name: string, event: any = {}) => {
     let result: any;
     for (const handler of handlers.get(name) ?? []) { const value = await handler(event, ctx); if (value !== undefined) result = value; }
@@ -63,8 +63,11 @@ test('switching to an unknown window discards a pending cut and preserves the na
   } finally { await h.handle.close(); }
 });
 
-test.each([false, true])('a stopped length response checks whether its pending cut was committed (saved=%s)', async saved => {
-  const h = await fixture();
+test.each([
+  { saved: false, continuation: false }, { saved: true, continuation: false },
+  { saved: false, continuation: true }, { saved: true, continuation: true },
+])('a stopped length response checks whether its pending cut was committed (saved=$saved, llama continuation=$continuation)', async ({ saved, continuation }) => {
+  const h = await fixture(false, continuation);
   try {
     await h.emit('before_agent_start', { messageType: 'user', prompt: h.prompt, systemPrompt: h.ctx.getSystemPrompt(), systemPromptOptions: { selectedTools: [] } });
     await h.emit('agent_start');
@@ -75,8 +78,9 @@ test.each([false, true])('a stopped length response checks whether its pending c
     const messageEntryId = h.manager.appendMessage(message);
     const context = { contextMessages: h.manager.buildSessionProjection().messages, pendingMessages: [], canContinue: true };
     const retry = await h.emit('turn_end', { message, messageEntryId, entries: [], toolResults: [], outcome: 'completed', context });
-    expect(retry.continue).toBe(false);
-    expect(retry.entries.find((entry: any) => entry.customType === 'pi-tuck-capacity')).toBeUndefined();
+    expect(retry.continue).toBe(!continuation);
+    const receipt = retry.entries.find((entry: any) => entry.customType === 'pi-tuck-capacity');
+    if (continuation) expect(receipt).toBeUndefined(); else expect(receipt?.data).toMatchObject({ kind: 'retry', cut: false });
     const cut = retry.entries.find((entry: any) => entry.type === 'compaction');
     expect(cut).toBeDefined();
     if (saved) h.manager.appendCompaction(cut.summary, cut.firstKeptEntryId, 0, cut.details, true);
@@ -84,6 +88,27 @@ test.each([false, true])('a stopped length response checks whether its pending c
     await h.emit('agent_before_settle', { outcome: 'error', entries: [], context });
     if (saved) expect(h.faults).toEqual([]);
     else expect(h.faults.map(String).join(' ')).toContain('Native tool-loop boundary cut was not saved in the session file');
+  } finally { await h.handle.close(); }
+});
+
+test('a full-allowance stop still saves the pending cut at the run end', async () => {
+  const h = await fixture();
+  try {
+    await h.emit('before_agent_start', { messageType: 'user', prompt: h.prompt, systemPrompt: h.ctx.getSystemPrompt(), systemPromptOptions: { selectedTools: [] } });
+    await h.emit('agent_start');
+    h.manager.appendMessage({ role: 'user', content: h.prompt, timestamp: 123 });
+    const output = h.ctx.model!.maxTokens;
+    const message = { role: 'assistant' as const, content: [{ type: 'thinking' as const, thinking: 'unfinished' }],
+      api: h.ctx.model!.api, provider: h.ctx.model!.provider, model: h.ctx.model!.id, stopReason: 'length' as const, timestamp: 124,
+      usage: { input: 0, output, cacheRead: 0, cacheWrite: 0, totalTokens: output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    await h.emit('message_end', { message });
+    const messageEntryId = h.manager.appendMessage(message);
+    const context = { contextMessages: h.manager.buildSessionProjection().messages, pendingMessages: [], canContinue: true };
+    const stop = await h.emit('turn_end', { message, messageEntryId, entries: [], toolResults: [], outcome: 'completed', context });
+    expect(stop).toEqual({ entries: [], continue: false });
+    const end = await h.emit('agent_before_settle', { outcome: 'completed', entries: [], context });
+    expect(end.entries.filter((entry: any) => entry.type === 'compaction')).toHaveLength(1);
+    expect(h.faults).toEqual([]);
   } finally { await h.handle.close(); }
 });
 

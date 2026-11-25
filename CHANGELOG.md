@@ -19,7 +19,9 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 
 ### Fixed
 
-- Preserve reasoning-only output exhaustion and allow at most one pi-tuck capacity retry per run when a cut increases the estimated reply cap.
+- Preserve reasoning-only output exhaustion at the model's output limit. Below it, retry once, re-armed as Pi's overflow recovery is, and uncut
+  when a cut adds no reply room. A model with llama.cpp continuation retries at most once per run, and only when a cut increases the estimated
+  reply cap.
 - Require standalone overflow recovery cuts to lower estimated input and combined request size when the failed request has a paired estimate.
 - Stop inferring a smaller context window from an ambiguous length stop. Windows inferred by earlier versions no longer constrain requests.
 - Reject invalid run transitions and discard pending cuts when their branch or model budget changes.

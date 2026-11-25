@@ -140,6 +140,9 @@ export class Run {
     finishLengthRetry() {
         if (this.lengthRecovery === 'pending') this.lengthRecovery = 'used';
     }
+    /** Pi grants another recovery after a good reply or a new user message. */
+    rearmLengthRetry() { this.lengthRecovery = 'available';
+    }
     /** A refusal-path floor carried by cut; the complete request must still pass Pi's window check. */
     nativeFloorPending = false;
     refusalReceipted = false;

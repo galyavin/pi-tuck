@@ -145,6 +145,8 @@ export interface CompactionOptions {
 	cutAt?: number;
 	/** Models where a usable cached prefix is more valuable than an early cut. */
 	cacheSensitiveModels?: readonly string[];
+	/** provider/model with provider-native continuation; it keeps one length recovery per run, and only where a cut adds reply room. */
+	continuationModel?: string;
 	/** Host response reserve. `responseExact: true` uses it as declared. Otherwise the SDK
 	 * keeps the catalogue maximum as a floor for existing callers. Standalone uses Pi’s soft reserve. */
 	requestReserve?: (ctx: ExtensionContext) => { response: number; responseExact?: true };
@@ -295,8 +297,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
     let lengthStop: { kind: "thinking" | "output"; cacheMiss: boolean } | undefined;
     pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted"); lengthStop = undefined; calibration.pending = undefined; });
-    pi.on("message_end", event => {
+    // Pi's overflow-recovery rule: a new user message or a good reply grants another recovery.
+    const rearmLengthRetry = (ctx: ExtensionContext) => {
+        if (ctx.model && `${ctx.model.provider}/${ctx.model.id}` !== options.continuationModel) run?.rearmLengthRetry();
+    };
+    pi.on("message_start", (event, ctx) => { if (event.message.role === "user") rearmLengthRetry(ctx); });
+    pi.on("message_end", (event, ctx) => {
         if (event.message.role !== "assistant") return;
+        if (event.message.stopReason !== "error" && event.message.stopReason !== "length") rearmLengthRetry(ctx);
         lengthStop = event.message.stopReason === "length" ? {
             kind: event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output",
             cacheMiss: event.message.errorMessage === CONTINUATION_CACHE_MISS,
@@ -947,9 +955,21 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             messages: projectedRequest(decision.plan.messages, view, hostInput, event.context.pendingMessages, ctx.getSystemPrompt(), pi.getActiveTools(), true),
         } : undefined;
         const check = cut && requestClamp(cut.messages, view);
-        // An unchanged allowance would repeat the same failed generation. If the
+        const continuation = `${ctx.model.provider}/${ctx.model.id}` === options.continuationModel;
+        // A cut that adds no reply room gives up history for nothing: retry the request uncut.
+        if (!continuation && asIsCheck.cap !== undefined && asIsCheck.leavesFloor && (check?.cap === undefined || check.cap <= asIsCheck.cap)) {
+            restoreClips(previousClips);
+            const { room, hardLine } = limits(view);
+            run!.requestLengthRetry();
+            const drafts = [...entries, { type: "custom" as const, customType: "pi-tuck-capacity", data: { kind: "retry", stoppedReplyEntryId: event.messageEntryId,
+                stoppedOutputTokens: stoppedOutput ?? 0, cut: false,
+                piEstimateTokens: asIsCheck.estimate, piCap: asIsCheck.cap, room, hardLine, buildId: BUILD_ID } }];
+            markBoundary(drafts);
+            return { entries: drafts, continue: true };
+        }
+        // With a continuation model an unchanged allowance would repeat the same failed generation. If the
         // planner found no history to cut, there is no capacity diagnosis to make.
-        if (!cut || check?.cap === undefined || asIsCheck.cap === undefined || check.cap <= Math.max(asIsCheck.cap, stoppedOutput ?? 0)) {
+        if (!cut || check?.cap === undefined || asIsCheck.cap === undefined || check.cap <= (continuation ? Math.max(asIsCheck.cap, stoppedOutput ?? 0) : asIsCheck.cap)) {
             restoreClips(previousClips);
             if (!asIsCheck.leavesFloor) {
                 if (check && !check.leavesFloor) throw new CapacityError(clampMessage);

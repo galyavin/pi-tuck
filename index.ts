@@ -33,7 +33,7 @@ export default async function (pi: ExtensionAPI) {
 		return;
 	}
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
-	const handle = await installCompaction(pi, { cutAt: settings.cutAt, cacheSensitiveModels: settings.cacheSensitiveModels });
+	const handle = await installCompaction(pi, { cutAt: settings.cutAt, cacheSensitiveModels: settings.cacheSensitiveModels, continuationModel: settings.llamaContinuation?.model });
 	const continuation = settings.llamaContinuation;
 	let continuationError: string | undefined;
 	if (continuation) {
