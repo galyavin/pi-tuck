@@ -12,6 +12,10 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   exactly that text, so a change by any means (an edit, a shell command, a generator) keeps it out. They are paid for from the summary
   (at most two thirds of it beyond the protected prompts), never from the kept recent messages. The "re-read a file before editing it"
   rule no longer applies to carried files; it stays for every other file.
+- Thrash-adaptive trigger: when a session's trims keep dropping files the agent then reads again unchanged within three replies (half a
+  re-read or more per trim), the trim point moves to native Pi's line, the larger of the band and `keepRecentTokens`, capped so the next
+  reply keeps its room (at least 3,584 tokens, or 1.7.0's raised room after a length stop). Trims still cut to the band. Sessions without
+  such re-reads, an explicit `cutAt`, or a host reserve keep 1.7.0's trim point. Admission is unchanged.
 
 ## [1.7.0]
 

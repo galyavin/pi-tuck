@@ -12,7 +12,7 @@ import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
 import { projectedMessages } from "./omissions.js";
 import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
-import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, systemPart, validCutAt,
+import { DEFAULT_CUT_AT, TRIGGER_MARGIN_FRACTION, bandOf, chooseCut, conversationTokens, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, systemPart, validCutAt,
     type AgentMessage, type Decision, type Messages, type Plan, type Target } from "./budget.js";
 import { getCurrentSystemMessage, isContextOverflow, normalizeContext, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, convertToLlm, estimateTokens, getAgentDir, shouldCompact, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry, type SessionBoundaryDraft, type TurnEndEvent } from "@earendil-works/pi-coding-agent";
@@ -22,6 +22,7 @@ import type { RecallPolicy } from "./recall.js";
 import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY_CHARACTERS } from "./recall.js";
 
 import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
+import { thrashing } from "./thrash.js";
 import { CONTINUATION_CACHE_MISS, LOADED_VERSION, statusText } from "./status.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { notify } from "./notify.js";
@@ -376,10 +377,24 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const preservePrefix = (ctx: ExtensionContext) => ctx.model !== undefined &&
         options.cacheSensitiveModels?.includes(`${ctx.model.provider}/${ctx.model.id}`);
     const decisionBand = (ctx: ExtensionContext, room: number) => preservePrefix(ctx) ? room : bandOf(room, cutAt);
+    // Thrash-adaptive trigger. Only in a branch whose cuts drop files the agent then re-reads unchanged (thrash.ts): there the trigger moves
+    // to native's line, max(window - reserve, keepRecentTokens + the oldest turn), mirrored as max(band, keepRecentTokens) (parked 4302e2c).
+    // Its cap keeps the reply room a cut aims for (the reply floor, at least CUT_REPLY_FLOOR) and, after a length stop, 1.7.0's raised reply
+    // room: window - Pi's margin - the largest of these, less the trigger margin. Cuts still plan to the band. Admission (floor, hard line) is unchanged. Off with an explicit cutAt, a cache-
+    // sensitive model, or a host reserve; in a branch without thrash it returns nothing and the trigger is the band, as in 1.7.0.
+    const triggerLine = (ctx: ExtensionContext, room: number): number | undefined => {
+        if (options.cutAt !== undefined || options.requestReserve || !ctx.model || preservePrefix(ctx)) return undefined;
+        const branch = ctx.sessionManager.getBranch();
+        if (!thrashing(branch)) return undefined;
+        const { hardLine, replyFloor } = limits(ctx), raised = stoppedReplyRoom(branch, ctx.model, contextWindow(ctx), piMargin) ?? 0;
+        const reply = Math.max(replyFloor, CUT_REPLY_FLOOR, raised);
+        const cap = Math.min(hardLine, contextWindow(ctx) - piMargin - reply) - Math.ceil(Math.max(0, room) * TRIGGER_MARGIN_FRACTION);
+        return Math.min(cap, settingsFor().getCompactionSettings(ctx.model).keepRecentTokens);
+    };
     /** The cut point in tokens, for the operator (`/tuck`, the footer): the band the triggers use, from the same limits. Reads only. */
     const cutPoint = (ctx: ExtensionContext): number | undefined => {
         if (!active() || !ctx.model || stateFor(ctx).kind !== "active") return undefined;
-        try { const band = decisionBand(ctx, limits(ctx).room); return band > 0 ? band : undefined; } catch { return undefined; }
+        try { const { room } = limits(ctx), band = Math.max(decisionBand(ctx, room), triggerLine(ctx, room) ?? 0); return band > 0 ? band : undefined; } catch { return undefined; }
     };
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).
@@ -580,7 +595,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // cancel (Pi reports it as aborted), never a failure.
             let thresholdOpportunistic = false;
             if (event.reason === "threshold") {
-                const gate = gateCut({ total: before + mandatory, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+                const gate = gateCut({ total: before + mandatory, mandatory, room, band, trigger: triggerLine(ctx, room), fits: (tokens, limit) => fits(tokens, limit, ctx) });
                 if (gate.kind !== "plan") return { cancel: true };
                 thresholdOpportunistic = gate.opportunistic;
             }
@@ -731,7 +746,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             throw new CapacityError("Incoming Pi prompt and response reserve cannot fit the estimated request budget");
         // A cut removes only conversation. If the mandatory request, host input included, does not fit by itself, no cut can
         // help: leave it to the complete-context guard, which fails closed.
-        const gate = gateCut({ total: before + mandatory, mandatory, room, band, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+        const gate = gateCut({ total: before + mandatory, mandatory, room, band, trigger: triggerLine(ctx, room), fits: (tokens, limit) => fits(tokens, limit, ctx) });
         if (gate.kind === "none") return;
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
         const decide = (targetRoom: number, targetBand: number, opportunistic: boolean) => chooseCut({
@@ -868,7 +883,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             floorKept = undefined;
             const before = measure(saved);
             const gate = required && fits(mandatory, targetRoom, ctx) ? { kind: "plan" as const, opportunistic: false } :
-                gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+                gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, trigger: targetBand === band ? triggerLine(ctx, room) : undefined, fits: (tokens, limit) => fits(tokens, limit, ctx) });
             if (gate.kind !== "plan") return gate;
             return chooseCut({
             opportunistic: gate.opportunistic, mandatory, before, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,

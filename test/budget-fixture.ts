@@ -57,6 +57,9 @@ export interface Options {
  /** Exercise virtual models and truly absent catalogue windows without changing the runtime catalogue. */
  modelApi?: string;
  missingWindow?: boolean;
+ /** Open with a thrashing branch: a read, a cut, and the same unchanged read again soon after it. With `lengthStopOutput`, a reply of that
+  * many output tokens then stops at its length limit. */
+ thrash?: { lengthStopOutput?: number };
  /** Start a fresh AgentSession from a saved branch, including learned-budget receipts. */
  branch?: SessionEntry[];
  /** Capture normalized request hashes only for comparisons that need them. */
@@ -434,6 +437,18 @@ export async function harness(options: Options) {
    if (options.omitted) records.unshift({ kind: 'excerpt', role: 'user', sourceIndex: 0, text: 'o'.repeat(options.omitted) });
    manager.appendCompaction(options.foreign ? '## Goal\nA default Pi summary written by a model. ' + text(800) : serializeTranscript(records) + DIALOGUE_SUFFIX, options.summaryOnly ? '' : opening, 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
    if (options.omitted) manager.appendContextEdit(opening, null);
+  }
+  if (options.thrash) {
+   const read = (id: string) => {
+    manager.appendMessage(replyOf([{ type: 'toolCall', id, name: 'read', arguments: { path: 'src/a.ts' } }], 'toolUse'));
+    manager.appendMessage({ role: 'toolResult', toolCallId: id, toolName: 'read', isError: false, timestamp: 0, content: [{ type: 'text', text: 'export const a = 1;' }] });
+   };
+   read('thrash-1');
+   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + DIALOGUE_SUFFIX, '', 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   read('thrash-2');
+   const reply = replyOf([{ type: 'text', text: 'Read it again.' }], options.thrash.lengthStopOutput ? 'length' : 'stop');
+   if (options.thrash.lengthStopOutput) reply.usage.output = reply.usage.totalTokens = options.thrash.lengthStopOutput;
+   manager.appendMessage(reply);
   }
   if (options.seededTail) {
    const { summary, tail, cycle: cycleTokens } = options.seededTail;
