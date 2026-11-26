@@ -2,12 +2,13 @@ import { resolveSourceTime, type SourceTime } from "./tuck/core/source-time";
 import { orderByOriginalSource } from "./tuck/core/source-order";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
 import { parseRecords, serializeTranscript, serializeRecord, splitSummary, TRANSCRIPT_HEADER, type TranscriptRecord } from "./tuck/core/transcript";
-import { DIALOGUE_SUFFIX } from "./tuck/core/format";
+import { closingSuffix, DIALOGUE_SUFFIX, workingFileBlock, WORKING_FILES_HEADER, WORKING_FILES_INSTRUCTION, CLOSING_INSTRUCTION } from "./tuck/core/format";
 import { carriedTailTokens, carriedTarget, conversationTokens } from "./budget";
 import { omissionRecord, userPrefixRecords } from "./tuck/core/brief";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { MAX_ACTION_LINES, MAX_LEDGER_LINES, actionItems, actionRecords, ledgerItems, ledgerRecords } from "./ledger.js";
 import { keptReadCandidates } from "./kept-reads.js";
+import { workingSetCandidates, type WorkingFile } from "./working-set.js";
 import { keptSearchCandidates } from "./kept-searches.js";
 import { fileObservations, thinkingRecords } from "./content-observations";
 import { pathKey } from "./path-key";
@@ -31,6 +32,8 @@ type Draft = { compaction: Pick<Extract<SessionEntry, { type: "compaction" }>, "
 export interface RecallContinuation { query: string; throughEntryId: string; offset: number }
 /** Includes JSON escaping, hit metadata and continuation, not just excerpt text. */
 export const MAX_RANKED_RESPONSE_CHARACTERS = 16000;
+/** The share of the summary's own allowance (beyond protected prompts) that the working set may take. */
+export const WORKING_SET_SHARE = 2 / 3;
 /** Deliberately narrow contract with the pinned pi-tuck source exports. No standalone hooks are installed. */
 export interface Tuck {
 	buildOwnCut(entries: SessionEntry[], keep: number): Cut;
@@ -233,8 +236,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const wrapperCharacters = envelope.reduce((n, message) => n + textOf(message.content).length, 0);
     const summaryTokens = (characters: number) => Math.ceil((characters + wrapperCharacters) / 4);
     const lineCost = (records: readonly TranscriptRecord[]) => records.reduce((n, record) => n + serializeRecord(record).length + 1, 0);
-    const frameLength = (cost: number, count: number) => TRANSCRIPT_HEADER.length + DIALOGUE_SUFFIX.length + cost + (count ? 0 : 1);
-    const render = (records: TranscriptRecord[]) => (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + DIALOGUE_SUFFIX;
+    // Working files carried raw in the closing section. Chosen once the boundary is known; until then the suffix is the plain one.
+    let carried: WorkingFile[] = [], suffix = DIALOGUE_SUFFIX;
+    const frameLength = (cost: number, count: number) => TRANSCRIPT_HEADER.length + suffix.length + cost + (count ? 0 : 1);
+    const render = (records: TranscriptRecord[]) => (serializeTranscript(records) || TRANSCRIPT_HEADER + "\n") + suffix;
     type Unit = { position: number; index: number; count: number };
     const units: Record<"user" | "assistant" | "toolResult", Unit[]> = { user: [], assistant: [], toolResult: [] };
     for (const row of rows) {
@@ -362,6 +367,21 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     const lists = listsAt(boundary);
     const maxSummaryCharactersAt = (at: number) => Math.floor((target - offset - nativeAt(at)) * 4) - wrapperCharacters;
     const maxSummaryCharacters = maxSummaryCharactersAt(boundary);
+    // The working set ranks above every other summary item and is paid for from the summary, never from the native tail: up to
+    // WORKING_SET_SHARE of what the summary may spend beyond its protected prompts. Whole files only; one that does not fit is skipped.
+    const resolvable = (entry: SessionEntry) => readable(entry) !== undefined;
+    const workingSet = workingSetCandidates(entries, boundary, indices, header.cwd, resolvable);
+    if (workingSet.files.length) {
+        const allowance = Math.floor(WORKING_SET_SHARE * Math.max(0, maxSummaryCharacters - frameLength(protectedView.cost, protectedView.rows.length)));
+        let cost = WORKING_FILES_INSTRUCTION.length - CLOSING_INSTRUCTION.length + WORKING_FILES_HEADER.length;
+        for (const file of workingSet.files) {
+            const extra = workingFileBlock(file).length;
+            if (cost + extra > allowance) continue;
+            carried.push(file); cost += extra;
+        }
+        suffix = closingSuffix(carried);
+    }
+    const carriedKeys = new Set(carried.map(file => file.key));
     let ledger: TranscriptRecord[] = lists.records;
     let listedKeep = Math.max(MAX_LEDGER_LINES, MAX_ACTION_LINES);
     // List caps are existing ranking policy; only the carried target is a
@@ -381,7 +401,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         return row?.message.role === "user" && isTextOnly(row.message.content);
     }));
     const fixed = [...protectedView.kept, ...ledger], fixedCost = lineCost(fixed);
-    const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost);
+    const maxBriefChars = Math.max(0, maxSummaryCharacters - fixedCost - (suffix.length - DIALOGUE_SUFFIX.length));
     const compileInput = { messages: sourceRows.map(row => row.message), sourceIndices: sourceRows.map(row => row.index),
         sourceEntryIds: sourceRows.map(row => row.id), sourceTimes: sourceRows.map(row => resolveSourceTime(entries[row.position]!)),
         ranking: { maxBriefChars, mandatorySourceIndices: mandatory } };
@@ -443,10 +463,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     let keptResultCost = 0;
     const keptResultCap = Math.min(Math.floor(0.20 * maxSummaryCharacters), 24000);
     const counts = new Map<string, number>();
-    const prefix = [header, ...entries.slice(0, boundary)], resolvable = (entry: SessionEntry) => readable(entry) !== undefined;
+    const prefix = [header, ...entries.slice(0, boundary)];
     // Reads and searches share the lead rank, newest result first, and one
     // allowance. Keep L2's independent four-item caps and whole-item skips.
-    const candidates = [...keptReadCandidates(prefix, indices, resolvable), ...keptSearchCandidates(prefix, indices, resolvable)]
+    const candidates = [...keptReadCandidates(prefix, indices, resolvable, carriedKeys), ...keptSearchCandidates(prefix, indices, resolvable)]
         .sort((a, b) => b.sourceIndex! - a.sourceIndex! || Number(a.title === "Kept-search") - Number(b.title === "Kept-search"));
     for (const record of candidates) {
         if ((counts.get(record.title!) ?? 0) === 4) continue;
@@ -458,10 +478,10 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
     if (keptResults.length) offer = assemble(compiled.text, boundary);
     const shownActions = lists.actions.slice(0, Math.min(listedKeep, MAX_ACTION_LINES));
     const shownFiles = lists.files.slice(0, Math.min(listedKeep, MAX_LEDGER_LINES));
-    const keptReadPaths = new Set(keptResults.filter(record => record.title === "Kept-read").map(record => {
+    const keptReadPaths = new Set([...carriedKeys, ...keptResults.filter(record => record.title === "Kept-read").map(record => {
         const heading = record.text!.slice(0, record.text!.indexOf("\n"));
         return pathKey(heading.slice(5, heading.lastIndexOf(` (as recorded at #${record.sourceIndex};`)), header.cwd);
-    }));
+    })]);
     const filesWithoutKeptReads = shownFiles.filter(item => !keptReadPaths.has(pathKey(item.path, header.cwd)));
     const observations = fileObservations(new Set(filesWithoutKeptReads.map(item => item.path)), entries, indices, failedCalls);
     for (const item of shownFiles) item.definitions = observations.get(item.path);
@@ -533,12 +553,12 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
             return [{ role, missing, ends, counts, cost: lineCost([record]) }];
         });
         const baseCost = lineCost(offer.records) + lineCost(ledger) + keptResultCost, baseCount = offer.records.length + ledger.length + keptResults.length;
-        const keptResultIndices = new Set(keptResults.map(record => record.sourceIndex));
+        const keptResultIndices = new Set([...keptResults.map(record => record.sourceIndex), ...carried.map(file => file.sourceIndex)]);
         const lastKeptResultPosition = entries.findLastIndex(entry => keptResultIndices.has(indices.get(entry.id)));
         const extensionPrice = (at: number) => {
-            // Kept results already spend this extension's price. They stay in
-            // the compacted prefix, so the native tail never repeats them.
-            if (keptResults.length && at <= lastKeptResultPosition) return Infinity;
+            // Kept results and working files already spend this extension's
+            // price. They stay in the compacted prefix, so the native tail never repeats them.
+            if (keptResultIndices.size && at <= lastKeptResultPosition) return Infinity;
             let cost = baseCost - (recordCosts[compiledBoundary]! - recordCosts[at]!);
             let count = baseCount - (recordCounts[compiledBoundary]! - recordCounts[at]!);
             for (const range of ranges) {
@@ -565,7 +585,8 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         return { unavailable: "pi-tuck's draft does not reduce context within the request budget", capacityRejected: after + reserveTokens >= model.contextWindow, floorMessages: floorProjection };
     const mode: DraftMode = compiled.step === "whole" ? "dialogue" : "shrunk";
     return { compaction: { summary: offer.summary, firstKeptEntryId: entries[boundary]?.id ?? "", tokensBefore: input.tokensBefore,
-        details: { ...detailsAt(boundary), tokensAfter: after, carriedTarget: target, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode } }, after, mode };
+        details: { ...detailsAt(boundary), tokensAfter: after, carriedTarget: target, view: mode === "dialogue" ? "complete-dialogue" : "shrunk-dialogue", mode,
+            ...(workingSet.files.length || workingSet.rejected ? { workingSet: { carried: carried.map(file => file.path), offered: workingSet.files.length, rejected: workingSet.rejected } } : {}) } }, after, mode };
 }
 
 /** Numeric references use the original session index, then intersect with readable current-branch entries. */

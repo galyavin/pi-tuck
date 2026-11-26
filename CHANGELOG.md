@@ -3,6 +3,16 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Working files: at a trim, the files the agent has read more than once are carried whole, verbatim, after the summary's closing words,
+  most reads first, then the most recent. A file is carried only when its last read covered the whole file and the file on disk still holds
+  exactly that text, so a change by any means (an edit, a shell command, a generator) keeps it out. They are paid for from the summary
+  (at most two thirds of it beyond the protected prompts), never from the kept recent messages. The "re-read a file before editing it"
+  rule no longer applies to carried files; it stays for every other file.
+
 ## [1.7.0]
 
 ### Changed

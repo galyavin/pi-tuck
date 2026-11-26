@@ -7,7 +7,7 @@ import type { TranscriptRecord } from "./tuck/core/transcript";
 
 /** Whole successful text reads, newest result first. Mutations invalidate earlier calls even when they fail or have no result. */
 export function keptReadCandidates(entries: readonly (SessionEntry | SessionHeader)[], indices: ReadonlyMap<string, number>,
-	resolvable: (entry: SessionEntry) => boolean): TranscriptRecord[] {
+	resolvable: (entry: SessionEntry) => boolean, exclude: ReadonlySet<string> = new Set()): TranscriptRecord[] {
 	const cwd = entries.find((entry): entry is SessionHeader => entry.type === "session")?.cwd;
 	const reads = new Map<string, { path: string; key: string; order: number }>(), mutations = new Map<string, number>();
 	let allMutated = -1;
@@ -42,7 +42,7 @@ export function keptReadCandidates(entries: readonly (SessionEntry | SessionHead
 		const entry = entries[at]!;
 		if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError || !isTextOnly(entry.message.content)) continue;
 		const read = reads.get(entry.message.toolCallId), sourceIndex = indices.get(entry.id);
-		if (!read || seen.has(read.key) || Math.max(allMutated, mutations.get(read.key) ?? -1, mutations.get(pathKey(read.path)) ?? -1) > read.order) continue;
+		if (!read || seen.has(read.key) || exclude.has(read.key) || Math.max(allMutated, mutations.get(read.key) ?? -1, mutations.get(pathKey(read.path)) ?? -1) > read.order) continue;
 		const text = textOf(entry.message.content);
 		if (!text.length || sourceIndex === undefined || !resolvable(entry)) continue;
 		seen.add(read.key);
