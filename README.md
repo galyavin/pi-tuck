@@ -12,7 +12,7 @@ pi install npm:pi-tuck
 
 Start a new Pi process after installing or updating. pi-tuck handles automatic compaction and `/compact` by default. Run `/tuck` to see the loaded version, cut history, and active cut policy.
 
-This README describes pi-tuck 1.4.1. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.4.1` or `pi install git:github.com/galyavin/pi-tuck@v1.4.1`. To uninstall, run `pi remove` with the source you installed.
+This README describes pi-tuck 1.5.0. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.5.0` or `pi install git:github.com/galyavin/pi-tuck@v1.5.0`. To uninstall, run `pi remove` with the source you installed.
 
 ## Compaction and recall
 
@@ -34,12 +34,21 @@ Read the original by the hit's `entryId`, or use `{"index": 212}` to follow a `#
 
 Pi-tuck needs a supported Pi version and a nonvirtual model with a valid context window. Setting `"compaction": { "enabled": false }` in Pi's settings disables automatic compaction and makes pi-tuck stand down, including for `/compact` and recall. `/tuck` reports why a loaded compactor is standing down. Capacity notices go to stderr in headless runs.
 
+## Footer
+
+In Pi's terminal UI, pi-tuck replaces Pi's footer. The gauge shows the context against the window, and `┊` marks pi-tuck's cut point, the number `/tuck` reports. The line also shows the cut count, Pi's token and cost totals, the model and thinking level, the folder and git branch, and other extensions' statuses. The gauge turns yellow as the context nears the cut point. In a narrow terminal the line shortens to the gauge, the context size over the cut point, and the cut count. Right after a cut, before the next reply, the size is the cut's own estimate, shown with `~`.
+
+![pi-tuck footer](docs/footer-wide.png)
+
+When pi-tuck stops a request or a reply ends at its length limit, the notice suggests `/tuck-incident next` to record the next cut for a bug report.
+
 ## Settings
 
 Optional settings go in `pi-tuck.json` in Pi's agent directory (`~/.pi/agent` by default, or `PI_CODING_AGENT_DIR`). Restart Pi to apply changes. The input room starts at the model's context window minus Pi's `compaction.reserveTokens`. Invalid JSON uses defaults. An invalid field uses its own default, with a notice when compaction is active.
 
 - **`cutAt`** is a fraction above 0 and at most 1. By default pi-tuck cuts at the room, less a 2% margin. An explicit value fixes a fraction of the room, subject to the same margin even at `1`.
 - **`cacheSensitiveModels`** lists exact `provider/model` identifiers. For these models, the cut point is the full room, taking precedence over `cutAt`. This delays early cuts that would discard a reusable prompt prefix.
+- **`footer`** set to `false` keeps Pi's own footer.
 - **`llamaContinuation`** opts one reasoning model into a single extra request after a thinking-only response exhausts the full configured output allowance. In Pi's `models.json`, configure that model on a llama.cpp provider using the `openai-completions` API. Verify that the runtime and template support `continue_final_message: "reasoning_content"` and report reused prompt tokens through `prompt_progress`. Pi-tuck requires the first cache report to match the prefix within 15 seconds. The positive integer `extraTokens` caps the additional allowance within the remaining context. The positive integer `deadlineMs` covers both requests.
 
 ```json
