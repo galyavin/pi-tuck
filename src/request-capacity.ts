@@ -79,6 +79,23 @@ export function requestReplyFloor(branch: readonly SessionEntry[], reserve: numb
     return Math.min(limit, Math.ceil(largest));
 }
 
+/** Reply room after a length stop on this branch (1.7.0): twice the largest stopped output of this model, bounded by its maxTokens instead of
+ * the reserve, and by half of what Pi can give a request (so a small window keeps room for the conversation). Undefined with no length stop:
+ * then nothing changes. Read from the branch only; nothing carries across sessions. */
+export function stoppedReplyRoom(branch: readonly SessionEntry[], model: ReplyModel, window: number, margin: number): number | undefined {
+    let largest = 0;
+    for (const entry of branch) {
+        if (entry.type !== 'message' || entry.message.role !== 'assistant') continue;
+        const message = entry.message;
+        if (message.stopReason !== 'length' || message.model !== model.id || message.provider !== model.provider || message.api !== model.api) continue;
+        const output = message.usage?.output;
+        if (typeof output === 'number' && Number.isFinite(output) && output > largest) largest = output;
+    }
+    if (largest <= 0) return undefined;
+    const raised = Math.ceil(2 * largest), cap = model.maxTokens > 0 ? model.maxTokens : raised;
+    return Math.max(1, Math.min(raised, cap, Math.floor((window - margin) / 2)));
+}
+
 /** Check decoded starting text, native or quoted whole with its original role; never JSON-escaped substring matching. */
 export function carriesPrompt(messages: Messages, prompt: string, role: 'user' | 'custom' = 'user'): boolean {
     if (!prompt.length) return true;

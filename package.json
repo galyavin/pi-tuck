@@ -1,6 +1,6 @@
 {
   "name": "pi-tuck",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Deterministic compaction for Pi with no model call, plus exact recall of earlier history.",
   "keywords": [
     "pi-package",

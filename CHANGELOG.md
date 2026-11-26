@@ -3,6 +3,16 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.7.0]
+
+### Changed
+
+- Reply room after a length stop: once a reply on the current branch stops at its length limit, pi-tuck trims so the next request leaves
+  twice that reply's output for the reply (at most the model's `maxTokens`, and at most half the window), by Pi's own clamp math. With no
+  length stop the trim point is unchanged. Admission is unchanged: the raise never refuses a request Pi would send.
+- A reply that used the model's whole `maxTokens` while still thinking gets its own notice: it names the model, the cap and `models.json`,
+  and says a lower thinking level or a task that writes to files as it goes usually helps more than a bigger cap.
+
 ## [1.6.0]
 
 ### Added

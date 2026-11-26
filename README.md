@@ -71,7 +71,7 @@ Optional settings go in `pi-tuck.json` in Pi's agent directory (`~/.pi/agent` by
 
 ## Output exhaustion and small windows
 
-- Pi-tuck preserves thinking-only stops in session history. At the model's full output allowance, it reports exhaustion if the reply remains unfinished. Below that allowance, it retries once, re-armed as Pi's overflow recovery is.
+- Pi-tuck preserves thinking-only stops in session history. At the model's full output allowance, it reports exhaustion if the reply remains unfinished. Below that allowance, it retries once, re-armed as Pi's overflow recovery is. After any length stop on the branch, pi-tuck trims so the next reply gets twice that stop's output (at most `maxTokens` and half the window). A stop at the full `maxTokens` while still thinking names the setting and `models.json`; a lower thinking level usually helps more than a bigger cap.
 - Pi-tuck uses the context window declared in Pi's model configuration. A length stop alone does not establish a smaller window. If the server has a smaller effective limit, set that limit in Pi's model configuration.
 - Pi's compaction reserve sets the cut target. For larger requests, pi-tuck estimates reply needs from observed output on the current branch for the active model, bounded by the reserve and model output limit. A cut above the room aims to leave 3,584 reply tokens within those bounds; where no cut can, the request goes out as before. If cuts cannot leave enough room for the protected prompt and a reply, try a shorter prompt, fewer tools, or a larger window. Pi-tuck's checks use estimates. Pi handles recognized provider overflows, and silent truncation can go undetected.
 

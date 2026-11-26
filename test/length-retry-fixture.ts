@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import type { TranscriptContext } from '@earendil-works/pi-ai';
-import { INCIDENT_HINT } from '../src/compaction';
+import { INCIDENT_HINT, capStopNotice } from '../src/compaction';
 import { requestReplyFloor } from '../src/request-capacity';
 import { parseRecords, splitSummary } from '../src/tuck/core/transcript';
 import { harness } from './budget-fixture';
@@ -48,8 +48,10 @@ export function expectThinkingLengthOutcome(cell: (typeof thinkingLengthCells)[n
  expect(r.preserved).toBe(true);
  expect(r.faults).toEqual([]);
  expect(r.replyFloor).toBe(Math.max(1, ...r.outputs));
- expect(r.notices).toEqual(!cell.above || cell.twice ? [
-  "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session." + INCIDENT_HINT,
+ // A final stop exactly at the configured cap (16,384) gets the cap notice; one the context clamped gets the general one.
+ expect(r.notices).toEqual(!cell.above || cell.twice ? [r.outputs.at(-1) === 16_384
+  ? capStopNotice('openai-codex/gpt-6.1-sol', 16_384, '~/.pi/agent/models.json')
+  : "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session." + INCIDENT_HINT,
  ] : []);
 
  if (!cell.above) {

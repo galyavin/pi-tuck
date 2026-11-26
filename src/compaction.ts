@@ -1,10 +1,12 @@
 import { textOf } from "./tuck/core/content.js";
 import { PendingCut, StartingPrompt, Run, type CutEntry } from "./run.js";
-import { CUT_REPLY_FLOOR, requestReplyFloor, carriesPrompt, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath } from "./request-capacity.js";
+import { CUT_REPLY_FLOOR, requestReplyFloor, stoppedReplyRoom, carriesPrompt, thinkingOnlyLength, piContextSafetyMargin, loadPiRequestMath } from "./request-capacity.js";
 import { BUILD_ID } from "./build-id.js";
 import { DIAGNOSTIC_BUILD, IncidentRecorder, attachReceipt, permittedEntries, receiptId, findReceiptEntry, type Receipt, type RecorderOptions } from "./diagnostics.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { exportSource } from "./source-export.js";
 import { isDeepStrictEqual } from "node:util";
 import { assertNativeToolRounds, isDiscardedResponse } from "./protocol.js";
@@ -13,7 +15,7 @@ import { applyClips, clipBudgets, clipFor, type Clip } from "./clip.js";
 import { DEFAULT_CUT_AT, bandOf, chooseCut, conversationTokens, gateCut, incomingEventTokens, incomingTokens, measurableConversationTokens, planningReserve, projectedConversationTokens, systemPart, validCutAt,
     type AgentMessage, type Decision, type Messages, type Plan, type Target } from "./budget.js";
 import { getCurrentSystemMessage, isContextOverflow, normalizeContext, type ImageContent, type ToolResultMessage } from "@earendil-works/pi-ai";
-import { calculateContextTokens, convertToLlm, estimateTokens, shouldCompact, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry, type SessionBoundaryDraft, type TurnEndEvent } from "@earendil-works/pi-coding-agent";
+import { calculateContextTokens, convertToLlm, estimateTokens, getAgentDir, shouldCompact, SettingsManager, type ExtensionAPI, type ExtensionContext, type SessionEntry, type SessionBoundaryDraft, type TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
 import type { RecallPolicy } from "./recall.js";
@@ -62,6 +64,18 @@ export const overflowNotice = (contextWindow: number, bound: number, learned: bo
     `pi-tuck: the provider refused this request for context overflow. Using the configured ${contextWindow}-token window as the input limit gives a planning factor of ${bound.toFixed(2)}x.` +
     (learned ? " pi-tuck added this estimate to its calibration." : " This exceeds the calibration ceiling, so the factor is unchanged.");
 /** Appended to the operator notices at the failure points pi-tuck detects (refusals, length stops), so a report can carry a record. */
+/** The notice for a thinking-only reply that used the model's whole configured maxTokens. */
+export const capStopNotice = (model: string, maxTokens: number, file: string) =>
+    `pi-tuck: ${model} used its whole reply cap (maxTokens ${maxTokens.toLocaleString("en-US")}) while still thinking, before any answer or tool call. ` +
+    `The cap is maxTokens for this model in ${file}. A lower thinking level, or a task that writes to files as it goes, usually helps more than a bigger cap. ` +
+    "The unfinished response is saved in the session.";
+/** Pi's models.json, shown with ~ for the home folder. */
+function modelsPath(): string {
+    try {
+        const path = join(getAgentDir(), "models.json"), home = homedir();
+        return path.startsWith(home + "/") ? "~" + path.slice(home.length) : path;
+    } catch { return "~/.pi/agent/models.json"; }
+}
 export const INCIDENT_HINT = "\npi-tuck: something went wrong - run /tuck-incident next to record it for a bug report.";
 /** The most a seed or an overflow raise may set the calibration factor to. A paired reply's own ratio is not bounded by it. */
 export const CALIBRATION_CEILING = 1.5;
@@ -297,7 +311,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     });
     // The operator's length-stop notice is decided at settle and is not attempt state: a run reset before then (a tree move inside another
     // extension's agent_settled, a failure) must not erase it. Only the final assistant reply decides it; a successful retry clears it.
-    let lengthStop: { kind: "thinking" | "output"; cacheMiss: boolean } | undefined;
+    let lengthStop: { kind: "thinking" | "output"; cacheMiss: boolean; cap?: { model: string; maxTokens: number } } | undefined;
     pi.on("agent_start", (_event, ctx) => { if (standDown(ctx)) return; run ??= new Run("starting"); if (!failure()) run.transition("admitted"); lengthStop = undefined; calibration.pending = undefined; });
     // Pi's overflow-recovery rule: a new user message or a good reply grants another recovery.
     const rearmLengthRetry = (ctx: ExtensionContext) => {
@@ -310,17 +324,21 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         lengthStop = event.message.stopReason === "length" ? {
             kind: event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output",
             cacheMiss: event.message.errorMessage === CONTINUATION_CACHE_MISS,
+            cap: ctx.model && ctx.model.maxTokens > 0 && event.message.usage?.output === ctx.model.maxTokens
+                ? { model: `${ctx.model.provider}/${ctx.model.id}`, maxTokens: ctx.model.maxTokens } : undefined,
         } : undefined;
     });
     pi.on("agent_settled", (_event, ctx) => {
         try {
             if (standDown(ctx) || !lengthStop || !active()) return;
-            const { kind, cacheMiss } = lengthStop;
-            const message = kind === "thinking"
+            const { kind, cacheMiss, cap } = lengthStop;
+            // A thinking-only stop exactly at the configured cap: the cap itself, not the context, ended the reply.
+            const message = kind === "thinking" && cap ? capStopNotice(cap.model, cap.maxTokens, modelsPath())
+                : kind === "thinking"
                 ? "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session."
                 : "pi-tuck: the last reply ended with a length stop and may be cut off. Ask the agent to continue.";
             lengthStop = undefined;
-            notify(ctx, (kind === "thinking" && cacheMiss ? `${message} ${CONTINUATION_CACHE_MISS}` : message) + INCIDENT_HINT, "warning");
+            notify(ctx, (kind === "thinking" && cacheMiss ? `${message} ${CONTINUATION_CACHE_MISS}` : message) + (cap && kind === "thinking" ? "" : INCIDENT_HINT), "warning");
         } finally { resetRun(); }
     });
 	const active = () => options.active?.() ?? true;
@@ -345,9 +363,14 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // Room still owns every existing cut/clip attempt. Only final capacity admission uses the hard line.
     let floorMinimum = 1;
     const limits = (ctx: ExtensionContext) => {
-        const response = responseReserve(ctx), room = inputRoom(response, ctx);
-        const floor = options.requestReserve || !ctx.model ? response : requestReplyFloor(ctx.sessionManager.getBranch(), response, ctx.model, floorMinimum);
-        const hardLine = Math.min(Math.max(room, contextWindow(ctx) - piMargin - floor), calibration.lastCeiling ?? Infinity);
+        const reserve = responseReserve(ctx);
+        const floor = options.requestReserve || !ctx.model ? reserve : requestReplyFloor(ctx.sessionManager.getBranch(), reserve, ctx.model, floorMinimum);
+        // After a length stop the trim point moves so the next reply gets the raised room by Pi's clamp math: Pi gives a request
+        // min(maxTokens, window - input - margin), so the room is window - margin - raised. Admission (floor, hard line) stays as without a
+        // stop: the raise asks cuts for more reply room, it never refuses a request Pi would send. No stop: exactly the reserve, as before.
+        const raised = options.requestReserve || !ctx.model ? undefined : stoppedReplyRoom(ctx.sessionManager.getBranch(), ctx.model, contextWindow(ctx), piMargin);
+        const response = raised === undefined ? reserve : Math.max(reserve, raised + piMargin), room = inputRoom(response, ctx);
+        const hardLine = Math.min(Math.max(contextWindow(ctx) - reserve, contextWindow(ctx) - piMargin - floor), calibration.lastCeiling ?? Infinity);
         return { response, room, hardLine, replyFloor: floor };
     };
     const preservePrefix = (ctx: ExtensionContext) => ctx.model !== undefined &&
