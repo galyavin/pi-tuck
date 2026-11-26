@@ -6,6 +6,7 @@ import { validCutAt } from "./src/budget";
 import { notify } from "./src/notify";
 import type { LlamaContinuation } from "./src/llama-continuation";
 import { cleanupLegacyFiles } from "./src/legacy-cleanup";
+import { installFooter } from "./src/footer";
 
 export type { CompactionOptions } from "./src/compaction";
 export { installCompaction } from "./src/compaction";
@@ -34,6 +35,7 @@ export default async function (pi: ExtensionAPI) {
 	}
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
 	const handle = await installCompaction(pi, { cutAt: settings.cutAt, cacheSensitiveModels: settings.cacheSensitiveModels, continuationModel: settings.llamaContinuation?.model });
+	if (settings.footer !== false) installFooter(pi, ctx => handle.cutPoint(ctx));
 	const continuation = settings.llamaContinuation;
 	let continuationError: string | undefined;
 	if (continuation) {
@@ -62,7 +64,7 @@ export default async function (pi: ExtensionAPI) {
 	});
 }
 
-type Settings = { cutAt?: number; cacheSensitiveModels?: string[]; llamaContinuation?: LlamaContinuation; error?: string };
+type Settings = { cutAt?: number; cacheSensitiveModels?: string[]; llamaContinuation?: LlamaContinuation; footer?: boolean; error?: string };
 const modelRef = (value: unknown) => typeof value === "string" && /^[^/]+\/.+/.test(value);
 function readSettings(path: string): Settings {
 	let text: string;
@@ -82,6 +84,8 @@ function readSettings(path: string): Settings {
 			if (c && modelRef(c.model) && Number.isSafeInteger(c.extraTokens) && c.extraTokens > 0 &&
 				Number.isSafeInteger(c.deadlineMs) && c.deadlineMs > 0 && c.deadlineMs <= 2_147_483_647) settings.llamaContinuation = c;
 			else if (c !== undefined) warnings.push(`${path} llamaContinuation requires a provider/model identifier in model, a positive safe integer extraTokens, and an integer deadlineMs from 1 to 2147483647; native continuation is off.`);
+			if (typeof value.footer === "boolean") settings.footer = value.footer;
+			else if (value.footer !== undefined) warnings.push(`${path} footer must be true or false; showing pi-tuck's footer.`);
 			if (warnings.length) settings.error = warnings.join(" ");
 			return settings;
 		}

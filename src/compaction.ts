@@ -61,6 +61,8 @@ export const refusalNotice = (message: string, factor: number): string =>
 export const overflowNotice = (contextWindow: number, bound: number, learned: boolean): string =>
     `pi-tuck: the provider refused this request for context overflow. Using the configured ${contextWindow}-token window as the input limit gives a planning factor of ${bound.toFixed(2)}x.` +
     (learned ? " pi-tuck added this estimate to its calibration." : " This exceeds the calibration ceiling, so the factor is unchanged.");
+/** Appended to the operator notices at the failure points pi-tuck detects (refusals, length stops), so a report can carry a record. */
+export const INCIDENT_HINT = "\npi-tuck: something went wrong - run /tuck-incident next to record it for a bug report.";
 /** The most a seed or an overflow raise may set the calibration factor to. A paired reply's own ratio is not bounded by it. */
 export const CALIBRATION_CEILING = 1.5;
 /** How many recent paired replies (and overflow bounds, and the seed while it is among them) the calibration factor is the maximum of. */
@@ -203,7 +205,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("session_compact", (_event, ctx) => observe(ctx));
     pi.on("session_shutdown", () => { recorder.stop("session-shutdown"); });
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
-        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, cacheSensitive: preservePrefix(ctx), pending: view(ctx).pending }), "info");
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, cacheSensitive: preservePrefix(ctx), pending: view(ctx).pending, cutPoint: cutPoint(ctx) }), "info");
     } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
@@ -318,7 +320,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 ? "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session."
                 : "pi-tuck: the last reply ended with a length stop and may be cut off. Ask the agent to continue.";
             lengthStop = undefined;
-            notify(ctx, kind === "thinking" && cacheMiss ? `${message} ${CONTINUATION_CACHE_MISS}` : message, "warning");
+            notify(ctx, (kind === "thinking" && cacheMiss ? `${message} ${CONTINUATION_CACHE_MISS}` : message) + INCIDENT_HINT, "warning");
         } finally { resetRun(); }
     });
 	const active = () => options.active?.() ?? true;
@@ -351,6 +353,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const preservePrefix = (ctx: ExtensionContext) => ctx.model !== undefined &&
         options.cacheSensitiveModels?.includes(`${ctx.model.provider}/${ctx.model.id}`);
     const decisionBand = (ctx: ExtensionContext, room: number) => preservePrefix(ctx) ? room : bandOf(room, cutAt);
+    /** The cut point in tokens, for the operator (`/tuck`, the footer): the band the triggers use, from the same limits. Reads only. */
+    const cutPoint = (ctx: ExtensionContext): number | undefined => {
+        if (!active() || !ctx.model || stateFor(ctx).kind !== "active") return undefined;
+        try { const band = decisionBand(ctx, limits(ctx).room); return band > 0 ? band : undefined; } catch { return undefined; }
+    };
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).
     const measureFor = (ctx: ExtensionContext) => (messages: Messages) => projectedConversationTokens(applyClips(messages, clips()), ctx, options.recallPolicy);
@@ -459,9 +466,9 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             if (!receipted) receipt("refusal", fault.message, ctx);
             options.fail?.(error);
         } finally {
-            try { if (!receipted) notify(ctx, fault instanceof CapacityError ? refusalNotice(fault.message, calibration.factor) : fault instanceof CommitFault
+            try { if (!receipted) notify(ctx, (fault instanceof CapacityError ? refusalNotice(fault.message, calibration.factor) : fault instanceof CommitFault
                 ? `pi-tuck: ${fault.message}; the session holds a cut its file may lack, so start a new session.`
-                : `pi-tuck could not plan this request (${fault.message}); the next prompt is planned afresh.`, "error"); }
+                : `pi-tuck could not plan this request (${fault.message}); the next prompt is planned afresh.`) + INCIDENT_HINT, "error"); }
             finally { ctx.abort(); }
         }
     };
@@ -1214,7 +1221,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
 
 		} catch (error) { fail(error, ctx); }
 	});
-    return {close:async()=>{recorder.stop("caller-close");}, state: stateFor, inspectState: (ctx: ExtensionContext) => ({ run: run as Readonly<Run> | undefined, phase: run?.phase, calibrationIdentity: calibration.identity, pendingCut: view(ctx).pending })};
+    return {close:async()=>{recorder.stop("caller-close");}, state: stateFor, cutPoint, inspectState: (ctx: ExtensionContext) => ({ run: run as Readonly<Run> | undefined, phase: run?.phase, calibrationIdentity: calibration.identity, pendingCut: view(ctx).pending })};
 }
 
 function checkedInput(raw: unknown) { if (!Check(RecallInput, raw)) throw new Error("Invalid recall input"); return structuredClone(raw); }

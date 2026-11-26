@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
 import type { TranscriptContext } from '@earendil-works/pi-ai';
+import { INCIDENT_HINT } from '../src/compaction';
 import { requestReplyFloor } from '../src/request-capacity';
 import { parseRecords, splitSummary } from '../src/tuck/core/transcript';
 import { harness } from './budget-fixture';
@@ -48,7 +49,7 @@ export function expectThinkingLengthOutcome(cell: (typeof thinkingLengthCells)[n
  expect(r.faults).toEqual([]);
  expect(r.replyFloor).toBe(Math.max(1, ...r.outputs));
  expect(r.notices).toEqual(!cell.above || cell.twice ? [
-  "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session.",
+  "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session." + INCIDENT_HINT,
  ] : []);
 
  if (!cell.above) {

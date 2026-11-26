@@ -1,6 +1,6 @@
 import {expect,test,vi} from 'vitest';
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
-import {installCompaction} from '../src/compaction';
+import {INCIDENT_HINT,installCompaction} from '../src/compaction';
 
 // A reply that stops at the output limit may be cut off, and plain Pi says nothing. pi-tuck tells the operator once per run, on the operator's
 // side only, decided when the run settles: a later reply that ends normally (a retry, a continuation) clears it.
@@ -13,7 +13,7 @@ async function fixture(){
  const reply=(stopReason:string)=>fire('message_end',{message:{role:'assistant',stopReason,content:[]}});
  return {notices,fire,reply};
 }
-const NOTICE="pi-tuck: the last reply ended with a length stop and may be cut off. Ask the agent to continue.";
+const NOTICE="pi-tuck: the last reply ended with a length stop and may be cut off. Ask the agent to continue."+INCIDENT_HINT;
 test('a run that ends on a reply cut at the output limit gets one notice', async()=>{
  const f=await fixture();await f.fire('agent_start');await f.reply('length');await f.fire('agent_settled');await f.fire('agent_settled');
  expect(f.notices.filter(n=>n===NOTICE)).toHaveLength(1);

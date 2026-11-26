@@ -6,7 +6,8 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { DEFAULT_CUT_AT } from '../src/budget';
 
 // Record the options and startup warnings from the extension entry point.
-const state = vi.hoisted(() => ({ options: [] as { cutAt?: number }[] }));
+const state = vi.hoisted(() => ({ options: [] as { cutAt?: number }[], footers: 0 }));
+vi.mock('../src/footer', () => ({ installFooter: vi.fn(() => { state.footers++; }) }));
 vi.mock('../src/compaction', () => ({
 	installCompaction: vi.fn(async (_pi: unknown, options: { cutAt?: number }) => { state.options.push(options); return {}; }),
 }));
@@ -20,7 +21,7 @@ async function load(file: string | undefined) {
 	try {
 		const handlers = new Map<string, ((event: unknown, ctx: unknown) => unknown)[]>();
 		const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); } } as unknown as ExtensionAPI;
-		state.options.length = 0;
+		state.options.length = 0; state.footers = 0;
 		const { default: extension } = await import('../index');
 		await extension(pi);
 		expect(state.options).toHaveLength(1);
@@ -28,7 +29,7 @@ async function load(file: string | undefined) {
 		// The legacy setting must have no effect on startup or operator notices.
 		const ctx = { hasUI: true, cwd: join(agentDir, 'project'), ui: { notify: (message: string, level: string) => { notices.push({ message, level }); } } } as unknown as ExtensionContext;
 		for (const handler of handlers.get('session_start') ?? []) await handler({}, ctx);
-		return { cutAt: state.options[0]!.cutAt, notices, path };
+		return { cutAt: state.options[0]!.cutAt, notices, path, footers: state.footers };
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(agentDir, { recursive: true, force: true });
@@ -90,3 +91,15 @@ for (const value of [true, false, null, 0, "no", [], { enabled: true }])
 		expect(r.cutAt).toBe(0.6);
 		expect(r.notices).toEqual([]);
 	});
+
+test('the footer is on by default; {"footer": false} turns it off; anything else warns and keeps it', async () => {
+	expect((await load(undefined)).footers).toBe(1);
+	expect((await load('{"footer": true}')).footers).toBe(1);
+	const off = await load('{"footer": false, "cutAt": 0.6}');
+	expect(off.footers).toBe(0);
+	expect(off.cutAt).toBe(0.6);
+	expect(off.notices).toEqual([]);
+	const bad = await load('{"footer": "off"}');
+	expect(bad.footers).toBe(1);
+	expect(bad.notices.map(n => n.message)).toEqual([`pi-tuck: ${bad.path} footer must be true or false; showing pi-tuck's footer.`]);
+});

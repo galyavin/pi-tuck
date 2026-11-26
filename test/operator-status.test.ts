@@ -17,7 +17,7 @@ test('/tuck before any cut, adaptive', () => {
  expect(statusText(base)).toBe([
   'pi-tuck 9.9.9 (the version this session loaded; restart Pi after an update).',
   'Cuts: none yet in this session. Recall becomes available after the first pi-tuck cut on this branch.',
-  'Cut point: adapts by itself.',
+  'Cut point: the room less a 2% margin.',
   'Search: by keyword.',
  ].join('\n'));
 });
