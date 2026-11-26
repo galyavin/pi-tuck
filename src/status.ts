@@ -27,6 +27,8 @@ export function statusText(input: {
     cacheSensitive?: boolean;
     /** The trim point in tokens for the current model, the footer's full bar; absent when it cannot be computed. */
     cutPoint?: number;
+    /** The line that sets the trim point now, when it is not the default band: the lean line or the thrash line. */
+    trigger?: "lean" | "thrash";
 }): string {
     if (!input.active) return `pi-tuck ${input.version} is inactive in this host.`;
     if (input.compaction?.kind === 'standingDown') return `pi-tuck ${input.version} is standing down (${input.compaction.reason}). Pi controls compaction.`;
@@ -48,7 +50,9 @@ export function statusText(input: {
         ...(input.pending ? ["A trim is pending: requests already carry it; the first boundary saves it."] : []),
         ...(native > 0 ? [`Pi's own compaction ran ${native} time${native === 1 ? "" : "s"} in this session.`] : []),
         input.cacheSensitive ? "Trim point: preserves the active prefix while the reply reserve fits." : input.cutAt === undefined
-            ? `Trim point: the room less a 2% margin${now}.` : `Trim point: cutAt ${input.cutAt} of the room, subject to the standard margin${now}. Remove cutAt from pi-tuck.json to use the default.`,
+            ? input.trigger === "lean" ? `Trim point: this session's lean line, set by its growth per request and the size of its last trim${now}.`
+            : input.trigger === "thrash" ? `Trim point: native Pi's line, because this session's trims keep dropping files it then re-reads${now}.`
+            : `Trim point: the room less a 2% margin${now}.` : `Trim point: cutAt ${input.cutAt} of the room, subject to the standard margin${now}. Remove cutAt from pi-tuck.json to use the default.`,
         "Search: by keyword.",
         ...checkLines,
     ].join("\n");

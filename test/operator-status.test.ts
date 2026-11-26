@@ -34,6 +34,13 @@ test('/tuck names a hand-set cut point, and keyword search', () => {
  expect(statusText({ ...base, active: false })).toBe('pi-tuck 9.9.9 is inactive in this host.');
 });
 
+test('/tuck names the active trigger: lean line, thrash line, or the default band', () => {
+ expect(statusText({ ...base, trigger: 'lean' })).toContain("Trim point: this session's lean line, set by its growth per request and the size of its last trim.");
+ expect(statusText({ ...base, trigger: 'thrash' })).toContain("Trim point: native Pi's line, because this session's trims keep dropping files it then re-reads.");
+ expect(statusText(base)).toContain('Trim point: the room less a 2% margin.');
+ expect(statusText({ ...base, cutAt: 1, trigger: 'lean' })).toContain('Trim point: cutAt 1 of the room');
+});
+
 test('/tuck is a command, not a tool, and shows no JSON', async () => {
  const commands = new Map<string, (args: string, ctx: unknown) => Promise<void>>(), tools: string[] = [];
  const pi = { registerCommand: (name: string, c: { handler: (args: string, ctx: unknown) => Promise<void> }) => { commands.set(name, c.handler); },

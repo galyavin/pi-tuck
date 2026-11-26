@@ -221,7 +221,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     pi.on("session_compact", (_event, ctx) => observe(ctx));
     pi.on("session_shutdown", () => { recorder.stop("session-shutdown"); });
     pi.registerCommand("tuck", { description: "pi-tuck's state in this session: version, cuts, cut point, search", handler: async (_args, ctx) => {
-        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, cacheSensitive: preservePrefix(ctx), pending: view(ctx).pending, cutPoint: cutPoint(ctx) }), "info");
+        ctx.ui.notify(statusText({ version: LOADED_VERSION, active: active(), compaction: stateFor(ctx), branch: ctx.sessionManager.getBranch(), cutAt: options.cutAt, cacheSensitive: preservePrefix(ctx), pending: view(ctx).pending, cutPoint: cutPoint(ctx), trigger: activeTrigger(ctx) }), "info");
     } });
     // Pi's native start/settled events bracket the run and its post-turn cuts.
     let run: Run | undefined;
@@ -406,6 +406,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const cutPoint = (ctx: ExtensionContext): number | undefined => {
         if (!active() || !ctx.model || stateFor(ctx).kind !== "active") return undefined;
         try { const { room } = limits(ctx), band = Math.min(Math.max(decisionBand(ctx, room), triggerLine(ctx, room) ?? 0), leanLimit(ctx) ?? Infinity); return band > 0 ? band : undefined; } catch { return undefined; }
+    };
+    /** Which line sets the cut point now, for `/tuck`: the lean line, the thrash line, or neither (the band). Reads only. */
+    const activeTrigger = (ctx: ExtensionContext): "lean" | "thrash" | undefined => {
+        if (!active() || !ctx.model || stateFor(ctx).kind !== "active") return undefined;
+        try {
+            const { room } = limits(ctx), band = decisionBand(ctx, room), thrash = triggerLine(ctx, room), lean = leanLimit(ctx);
+            const line = Math.max(band, thrash ?? 0);
+            return lean !== undefined && lean < line ? "lean" : thrash !== undefined && thrash > band ? "thrash" : undefined;
+        } catch { return undefined; }
     };
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).

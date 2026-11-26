@@ -3,10 +3,13 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.9.0]
 
 ### Changed
 
+- At large windows pi-tuck now trims more often, to keep each request small: in a simulation of 25 sessions at a 272k window it made
+  about five times the trims of 1.8.0 (20.7 per session against 3.8) and cut simulated request cost by about 41% against native Pi. Each
+  trim drops older context, so a long session sees more summaries than before. At small windows (32k) behavior is essentially unchanged.
 - Lean trigger: once a session has trimmed and made at least five requests since, the trim point can move earlier, to K + sqrt(2(K + R)·δ / 0.1),
   where K is what the latest trim left, δ the mean growth per request and R the mean tokens of unchanged re-reads soon after each trim. It
   balances the cost of a trim against the cost of carrying a larger context each request. It never moves the trim point later than
@@ -16,6 +19,7 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   longest possible prefix, which a provider's prompt cache can serve. When the new messages do not fit whole and the carried part leaves
   them less than half of the summary's room, the carried part keeps only its prompts (and drops its oldest ones past half the room), so a
   summary still makes room for recent work. Sessions without an earlier pi-tuck summary are summarized as before.
+- `/tuck` names the line that sets the trim point when it is not the default: the lean line or the thrash line (native Pi's).
 
 ## [1.8.0]
 
