@@ -3,24 +3,18 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { tuckCuts } from "./status.js";
 
 /**
- * pi-tuck's footer in place of Pi's: the context gauge with pi-tuck's cut mark, the cut count, Pi's token and cost figures, the model, the
- * pwd/branch line and other extensions' statuses. The figures are computed only after a reply, a cut, or a model or thinking change, and
- * cached; a render reads the cache and Pi's own cached branch and statuses. It reads; it changes nothing the model sees.
+ * pi-tuck's footer in place of Pi's: the folder and branch line, then how full the context is against pi-tuck's trim point (a full bar
+ * means pi-tuck trims), the cost when there is one, and the model; other extensions' statuses below. The figures are computed only after
+ * a reply, a trim, or a model or thinking change, and cached; a render reads the cache and Pi's own cached branch and statuses. It reads;
+ * it changes nothing the model sees.
  */
 export interface FooterFigures {
-	/** Context tokens as Pi reports them, or the last cut's size (estimated) right after a cut, before the next reply. */
+	/** Context tokens as Pi reports them, or the last trim's size (estimated) right after a trim, before the next reply. */
 	tokens: number | null;
 	estimated: boolean;
-	/** pi-tuck's cut point in tokens (the band), when pi-tuck is active for this model. */
+	/** pi-tuck's trim point in tokens (the band), when pi-tuck is active for this model. */
 	cut: number | undefined;
 	window: number;
-	cuts: number;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	/** The latest reply's cache hit rate, in percent. */
-	cacheHit: number | undefined;
 	cost: number;
 	model: string;
 	pwd: string;
@@ -28,67 +22,53 @@ export interface FooterFigures {
 }
 /** The part of Pi's theme the footer uses. */
 export interface FooterTheme { fg(color: "dim" | "warning", text: string): string }
-/** Context at or above this share of the cut point shows in the warning color. */
+/** Context at or above this share of the trim point shows in the warning color. */
 export const NEAR_CUT = 0.85;
-const MARK = "┊";
+const BAR = 10;
 
 /** Pi's compact token format (its footer's formatTokens). */
 export const formatTokens = (n: number): string => n < 1000 ? `${n}` : n < 10_000 ? `${(n / 1000).toFixed(1)}k` : n < 1_000_000 ? `${Math.round(n / 1000)}k`
 	: n < 10_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1_000_000)}M`;
 
-type Usage = { input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown; cost?: { total?: unknown } };
+type Usage = { cost?: { total?: unknown } };
 const num = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : 0;
 
 /** Everything a render needs, from the session as it is now. The one place the footer reads the session. */
 export function footerFigures(ctx: ExtensionContext, cutPoint: number | undefined, thinking: string | undefined): FooterFigures {
-	const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-	let cacheHit: number | undefined;
-	// As Pi's footer: usage from all entries (every branch), including usage carried by summaries and tool results.
-	for (const entry of ctx.sessionManager.getEntries() as readonly { type: string; usage?: Usage; message?: { role?: string; usage?: Usage } }[]) {
-		const usage = entry.type === "message" ? entry.message?.usage : entry.usage;
-		if (!usage) continue;
-		totals.input += num(usage.input); totals.output += num(usage.output); totals.cacheRead += num(usage.cacheRead); totals.cacheWrite += num(usage.cacheWrite);
-		totals.cost += num(usage.cost?.total);
-		if (entry.type === "message" && entry.message?.role === "assistant") {
-			const prompt = num(usage.input) + num(usage.cacheRead) + num(usage.cacheWrite);
-			cacheHit = prompt > 0 ? num(usage.cacheRead) / prompt * 100 : undefined;
-		}
-	}
+	let cost = 0;
+	// As Pi's footer: cost from all entries (every branch), including usage carried by summaries and tool results.
+	for (const entry of ctx.sessionManager.getEntries() as readonly { type: string; usage?: Usage; message?: { usage?: Usage } }[])
+		cost += num((entry.type === "message" ? entry.message?.usage : entry.usage)?.cost?.total);
 	const ours = tuckCuts(ctx.sessionManager.getBranch() as readonly { type: string; details?: unknown }[]), usage = ctx.getContextUsage();
 	let tokens = usage?.tokens ?? null, estimated = false;
-	// Pi does not know the context size between a cut and the next reply; pi-tuck's cut recorded what it left.
+	// Pi does not know the context size between a trim and the next reply; pi-tuck's trim recorded what it left.
 	const after = (ours.at(-1)?.details as { tokensAfter?: unknown } | undefined)?.tokensAfter;
 	if (tokens === null && typeof after === "number") { tokens = after; estimated = true; }
 	const home = process.env.HOME || process.env.USERPROFILE;
 	const pwd = home && (ctx.cwd === home || ctx.cwd.startsWith(home + "/") || ctx.cwd.startsWith(home + "\\")) ? "~" + ctx.cwd.slice(home.length) : ctx.cwd;
 	const model = ctx.model ? ctx.model.reasoning ? `${ctx.model.id} · ${thinking && thinking !== "off" ? thinking : "thinking off"}` : ctx.model.id : "no-model";
-	return { tokens, estimated, cut: cutPoint, window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0, cuts: ours.length, ...totals, cacheHit, model, pwd, session: ctx.sessionManager.getSessionName?.() };
+	return { tokens, estimated, cut: cutPoint, window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0, cost, model, pwd, session: ctx.sessionManager.getSessionName?.() };
 }
 
-/** A gauge of `cells` cells for tokens over the window, with the cut mark inserted at the cut point. */
-export function gauge(f: Pick<FooterFigures, "tokens" | "cut" | "window">, cells: number): string {
-	const at = (n: number) => f.window > 0 ? Math.min(cells, Math.max(0, Math.round(n / f.window * cells))) : 0;
-	const filled = at(f.tokens ?? 0), bar = "█".repeat(filled) + "░".repeat(cells - filled);
-	if (f.cut === undefined) return bar;
-	const mark = at(f.cut);
-	return bar.slice(0, mark) + MARK + bar.slice(mark);
+/** A bar of `cells` cells that fills toward the trim point: full means pi-tuck trims. */
+export function gauge(f: Pick<FooterFigures, "tokens" | "cut">, cells: number): string {
+	const filled = f.cut && f.cut > 0 ? Math.min(cells, Math.max(0, Math.round((f.tokens ?? 0) / f.cut * cells))) : 0;
+	return "█".repeat(filled) + "░".repeat(cells - filled);
 }
 
-/** The footer's lines at this width, from the cached figures. Dim when healthy; the gauge and size turn yellow near the cut point. */
+/** The footer's lines at this width, from the cached figures. Dim when healthy; the bar and size turn yellow near the trim point. */
 export function footerLines(f: FooterFigures, width: number, theme: FooterTheme, branch: string | null, statuses: ReadonlyMap<string, string>): string[] {
 	const dim = (s: string) => theme.fg("dim", s);
 	const near = f.tokens !== null && f.cut !== undefined && f.tokens >= f.cut * NEAR_CUT;
 	const hot = (s: string) => theme.fg(near ? "warning" : "dim", s);
 	const size = f.tokens === null ? "?" : (f.estimated ? "~" : "") + formatTokens(f.tokens);
-	const cuts = `${f.cuts} cut${f.cuts === 1 ? "" : "s"}`;
-	const spend = [`in ${formatTokens(f.input)}`, `out ${formatTokens(f.output)}`,
-		...(f.cacheRead + f.cacheWrite > 0 && f.cacheHit !== undefined ? [`cache ${Math.round(f.cacheHit)}%`] : []),
-		...(f.cost > 0 ? [`$${f.cost.toFixed(2)}`] : [])].join(" ");
-	const wide = dim("context ") + hot(`${gauge(f, 12)} ${size}`) +
-		dim(`${f.cut === undefined ? "" : ` · cut ~${formatTokens(f.cut)}`} · window ${formatTokens(f.window)} · ${cuts} │ ${spend}`);
-	const narrow = hot(`${gauge(f, 9)} ${size}${f.cut === undefined ? "" : `/${formatTokens(f.cut)}`}`) + dim(` · ${cuts}`);
+	// Against the trim point; with no trim point (pi-tuck off, or no window), against the window when Pi knows it.
+	const of = f.cut ?? (f.window > 0 ? f.window : undefined);
+	const amount = (f.cut === undefined ? "" : `${gauge(f, BAR)} `) + size + (of === undefined ? "" : ` of ${formatTokens(of)}`);
+	const cost = f.cost > 0 ? ` · $${f.cost.toFixed(f.cost < 0.01 ? 3 : 2)}` : "";
+	const wide = dim("context ") + hot(amount) + dim((f.cut === undefined ? "" : " · then pi-tuck trims") + cost);
 	const room = width - visibleWidth(wide) - visibleWidth(f.model);
-	const stats = room >= 2 ? wide + dim(" ".repeat(room) + f.model) : visibleWidth(wide) <= width ? wide : truncateToWidth(narrow, width, dim("..."));
+	const stats = room >= 2 ? wide + dim(" ".repeat(room) + f.model) : visibleWidth(wide) <= width ? wide : truncateToWidth(hot(amount), width, dim("..."));
 	const pwd = f.pwd + (branch ? ` (${branch})` : "") + (f.session ? ` • ${f.session}` : "");
 	const lines = [truncateToWidth(dim(pwd), width, dim("...")), stats];
 	if (statuses.size > 0) lines.push(truncateToWidth([...statuses.entries()].sort(([a], [b]) => a.localeCompare(b))
@@ -96,7 +76,7 @@ export function footerLines(f: FooterFigures, width: number, theme: FooterTheme,
 	return lines;
 }
 
-/** Replace Pi's footer while a UI is present. `cutPoint` is the compactor's own (the number `/tuck` shows). */
+/** Replace Pi's footer while a UI is present. `cutPoint` is the compactor's own trim point (the number `/tuck` shows). */
 export function installFooter(pi: ExtensionAPI, cutPoint: (ctx: ExtensionContext) => number | undefined): void {
 	let figures: FooterFigures | undefined;
 	let redraw: (() => void) | undefined;
@@ -120,7 +100,8 @@ export function installFooter(pi: ExtensionAPI, cutPoint: (ctx: ExtensionContext
 		} catch { /* a host without a footer keeps its own */ }
 	};
 	pi.on("session_start", (_event, ctx) => show(ctx));
-	// After a reply (turn_end and agent_end run once Pi has saved it), a cut, a tree move, or a model or thinking change.
-	for (const event of ["turn_end", "agent_end", "session_compact", "session_tree", "model_select", "thinking_level_select"] as const)
-		pi.on(event as "turn_end", (_event, ctx) => refresh(ctx));
+	// After a reply, a trim, a tree move, or a model or thinking change. pi-tuck saves its trims as turn_end and agent_before_settle entries,
+	// which Pi appends after every handler has run; the next turn_start and agent_settled come after both the reply and the trim are saved.
+	for (const event of ["turn_start", "agent_settled", "session_compact", "session_tree", "model_select", "thinking_level_select"] as const)
+		pi.on(event as "turn_start", (_event, ctx) => refresh(ctx));
 }

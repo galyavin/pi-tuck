@@ -43,7 +43,7 @@ async function fixture(compactAll = false, continuation = false) {
   const prompt = 'STARTING-PROMPT ' + 'prompt text '.repeat(500);
   await emit('input', { text: prompt });
   await commands.get('tuck').handler('', ctx);
-  expect(notices.at(-1)).toContain('A cut is pending');
+  expect(notices.at(-1)).toContain('A trim is pending');
   expect(faults).toEqual([]);
   return { manager, ctx, emit, pi, tools, commands, notices, faults, prompt, handle };
 }
@@ -136,7 +136,7 @@ test('pending request, executable recall, status and boundary save share one res
     expect(plain(projectedMessages(h.manager.buildSessionProjection().messages, h.ctx))).toEqual(plain(request.messages));
     expect(h.manager.getBranch().some(entry => entry.id === promptId)).toBe(true);
     await h.commands.get('tuck').handler('', h.ctx);
-    expect(h.notices.at(-1)).not.toContain('A cut is pending');
+    expect(h.notices.at(-1)).not.toContain('A trim is pending');
     expect(h.faults).toEqual([]);
   } finally { await h.handle.close(); }
 });
@@ -251,7 +251,7 @@ for (const event of ['agent_settled', 'session_start', 'session_tree']) test(`${
   try {
     await h.emit(event);
     await h.commands.get('tuck').handler('', h.ctx);
-    expect(h.notices.at(-1)).not.toContain('A cut is pending');
+    expect(h.notices.at(-1)).not.toContain('A trim is pending');
     expect(h.pi.getActiveTools()).toEqual([]);
     const saved = h.manager.buildSessionProjection().messages;
     expect(await h.emit('context', { messages: saved })).toBeUndefined();
@@ -265,7 +265,7 @@ test('fail drops a pending cut and keeps the failed attempt blocked until settle
     await h.emit('context', { messages: [{ role: 'user', content: 'not the saved conversation', timestamp: 0 }] });
     expect(h.faults).toHaveLength(1);
     await h.commands.get('tuck').handler('', h.ctx);
-    expect(h.notices.at(-1)).not.toContain('A cut is pending');
+    expect(h.notices.at(-1)).not.toContain('A trim is pending');
     await h.emit('agent_start');
     await h.emit('context_with_system', { messages: h.manager.buildSessionProjection().messages });
     expect(h.faults).toHaveLength(2); // a fresh native controller still cannot submit this failed attempt

@@ -7,15 +7,19 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 
 ### Added
 
-- Footer: pi-tuck replaces Pi's footer in the terminal UI with a context gauge that marks pi-tuck's cut point, the cut count, Pi's token
-  and cost totals, the model and thinking level, the folder and branch line, and other extensions' statuses. It turns yellow near the cut
-  point instead of at Pi's 70% and 90% of the window. Its figures are recomputed only after a reply, a cut, or a model or thinking change.
-  `"footer": false` in `pi-tuck.json` keeps Pi's footer.
-- Refusal and length-stop notices suggest `/tuck-incident next` to record the next cut for a bug report.
+- Footer: pi-tuck replaces Pi's footer in the terminal UI. Under the folder and branch line, a bar fills toward pi-tuck's trim point
+  (full means pi-tuck trims), with the context size, the trim point, the cost when above $0, and the model and thinking level; other
+  extensions' statuses stay below. It turns yellow at 85% of the trim point instead of at Pi's 70% and 90% of the window. Its figures are
+  recomputed only after a reply, a trim, or a model or thinking change. `"footer": false` in `pi-tuck.json` keeps Pi's footer.
+- Refusal and length-stop notices suggest `/tuck-incident next` to record the next trim for a bug report.
+
+### Changed
+
+- `/tuck` says "trim" where it said "cut", the word the footer uses. The `cutAt` setting keeps its name.
 
 ### Fixed
 
-- `/tuck` no longer says the cut point adapts by itself: it names the default (the room less a 2% margin) and the cut point in tokens for
+- `/tuck` no longer says the cut point adapts by itself: it names the default (the room less a 2% margin) and the trim point in tokens for
   the current model.
 
 ## [1.4.1]

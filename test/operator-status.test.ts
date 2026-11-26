@@ -16,20 +16,20 @@ test('the loaded version is the package version', () => {
 test('/tuck before any cut, adaptive', () => {
  expect(statusText(base)).toBe([
   'pi-tuck 9.9.9 (the version this session loaded; restart Pi after an update).',
-  'Cuts: none yet in this session. Recall becomes available after the first pi-tuck cut on this branch.',
-  'Cut point: the room less a 2% margin.',
+  'Trims: none yet in this session. Recall becomes available after the first pi-tuck trim on this branch.',
+  'Trim point: the room less a 2% margin.',
   'Search: by keyword.',
  ].join('\n'));
 });
 
 test('/tuck counts pi-tuck cuts on the branch, gives the last one, and names Pi\'s own cuts apart', () => {
  const text = statusText({ ...base, branch: [{ type: 'compaction', details: null }, ours(40722, 4484), { type: 'message' }, ours(37800, 5100)] });
- expect(text).toContain('Cuts: 2 by pi-tuck in this session, the last from 37,800 to 5,100 tokens.');
- expect(text).toContain("Pi's own compaction cut 1 time in this session.");
+ expect(text).toContain('Trims: 2 by pi-tuck in this session, the last from 37,800 to 5,100 tokens.');
+ expect(text).toContain("Pi's own compaction ran 1 time in this session.");
 });
 
 test('/tuck names a hand-set cut point, and keyword search', () => {
- expect(statusText({ ...base, cutAt: 1 })).toContain('Cut point: cutAt 1 of the room, subject to the standard margin.');
+ expect(statusText({ ...base, cutAt: 1 })).toContain('Trim point: cutAt 1 of the room, subject to the standard margin.');
  expect(statusText(base)).toContain('Search: by keyword.');
  expect(statusText({ ...base, active: false })).toBe('pi-tuck 9.9.9 is inactive in this host.');
 });
@@ -45,7 +45,7 @@ test('/tuck is a command, not a tool, and shows no JSON', async () => {
  await commands.get('tuck')!('', { sessionManager: { getBranch: () => [ours(1000, 200)] }, ui: { notify: (message: string) => { notices.push(message); } } });
  expect(notices).toHaveLength(1);
  expect(notices[0]).toContain(`pi-tuck ${LOADED_VERSION} `);
- expect(notices[0]).toContain('Cuts: 1 by pi-tuck in this session, the last from 1,000 to 200 tokens.');
+ expect(notices[0]).toContain('Trims: 1 by pi-tuck in this session, the last from 1,000 to 200 tokens.');
  expect(notices[0]).not.toContain('{');
 });
 

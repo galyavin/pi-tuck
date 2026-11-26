@@ -29,18 +29,18 @@ Read the original by the hit's `entryId`, or use `{"index": 212}` to follow a `#
 | Command | Purpose |
 |---|---|
 | `/compact` | Request a cut. pi-tuck builds the summary from the session and ignores any appended instructions. |
-| `/tuck` | Inspect the loaded version, saved cuts, and cut point. |
+| `/tuck` | Inspect the loaded version, saved trims, and trim point. |
 | `/tuck-incident on\|next\|off\|status` | Control diagnostic recording. The default directory is `~/.local/state/pi-tuck-incidents`. |
 
 Pi-tuck needs a supported Pi version and a nonvirtual model with a valid context window. Setting `"compaction": { "enabled": false }` in Pi's settings disables automatic compaction and makes pi-tuck stand down, including for `/compact` and recall. `/tuck` reports why a loaded compactor is standing down. Capacity notices go to stderr in headless runs.
 
 ## Footer
 
-In Pi's terminal UI, pi-tuck replaces Pi's footer. The gauge shows the context against the window, and `┊` marks pi-tuck's cut point, the number `/tuck` reports. The line also shows the cut count, Pi's token and cost totals, the model and thinking level, the folder and git branch, and other extensions' statuses. The gauge turns yellow as the context nears the cut point. In a narrow terminal the line shortens to the gauge, the context size over the cut point, and the cut count. Right after a cut, before the next reply, the size is the cut's own estimate, shown with `~`.
+In Pi's terminal UI, pi-tuck replaces Pi's footer. Under the folder and git branch, the bar fills toward pi-tuck's trim point, the number `/tuck` reports: a full bar means pi-tuck trims. Next to it are the context size and the trim point, the cost when it is above $0, and the model with its thinking level. Other extensions' statuses stay below. The bar turns yellow at 85% of the trim point. A narrow terminal shows only the bar and the two sizes. Right after a trim, before the next reply, the size is the trim's own estimate, shown with `~`. When pi-tuck is not trimming for the model, the line shows the context against the window. `/tuck` shows the trim history.
 
 ![pi-tuck footer](docs/footer-wide.png)
 
-When pi-tuck stops a request or a reply ends at its length limit, the notice suggests `/tuck-incident next` to record the next cut for a bug report.
+When pi-tuck stops a request or a reply ends at its length limit, the notice suggests `/tuck-incident next` to record the next trim for a bug report.
 
 ## Settings
 

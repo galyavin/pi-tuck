@@ -25,7 +25,7 @@ export function statusText(input: {
     pending?: boolean;
     cutAt: number | undefined;
     cacheSensitive?: boolean;
-    /** The cut point in tokens for the current model, as the footer marks it; absent when it cannot be computed. */
+    /** The trim point in tokens for the current model, the footer's full bar; absent when it cannot be computed. */
     cutPoint?: number;
 }): string {
     if (!input.active) return `pi-tuck ${input.version} is inactive in this host.`;
@@ -33,8 +33,8 @@ export function statusText(input: {
     const cuts = input.branch.filter(e => e.type === "compaction"), ours = tuckCuts(input.branch);
     const last = ours.at(-1), before = last?.tokensBefore, after = (last?.details as { tokensAfter?: unknown } | undefined)?.tokensAfter;
     const count = (n: number) => n.toLocaleString("en-US");
-    const cutLine = ours.length === 0 ? input.pending ? "Cuts: none saved yet in this session." : "Cuts: none yet in this session. Recall becomes available after the first pi-tuck cut on this branch."
-        : `Cuts: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
+    const cutLine = ours.length === 0 ? input.pending ? "Trims: none saved yet in this session." : "Trims: none yet in this session. Recall becomes available after the first pi-tuck trim on this branch."
+        : `Trims: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
     const native = cuts.length - ours.length;
     const now = input.cutPoint === undefined ? "" : ` (about ${count(input.cutPoint)} tokens with this model)`;
     const retries = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity" &&
@@ -43,10 +43,10 @@ export function statusText(input: {
         `pi-tuck ${input.version} (the version this session loaded; restart Pi after an update).`,
         cutLine,
         ...(retries ? [`Capacity retries on this branch: ${retries}.`] : []),
-        ...(input.pending ? ["A cut is pending: requests already carry it; the first boundary saves it."] : []),
-        ...(native > 0 ? [`Pi's own compaction cut ${native} time${native === 1 ? "" : "s"} in this session.`] : []),
-        input.cacheSensitive ? "Cut point: preserves the active prefix while the reply reserve fits." : input.cutAt === undefined
-            ? `Cut point: the room less a 2% margin${now}.` : `Cut point: cutAt ${input.cutAt} of the room, subject to the standard margin${now}. Remove cutAt from pi-tuck.json to use the default.`,
+        ...(input.pending ? ["A trim is pending: requests already carry it; the first boundary saves it."] : []),
+        ...(native > 0 ? [`Pi's own compaction ran ${native} time${native === 1 ? "" : "s"} in this session.`] : []),
+        input.cacheSensitive ? "Trim point: preserves the active prefix while the reply reserve fits." : input.cutAt === undefined
+            ? `Trim point: the room less a 2% margin${now}.` : `Trim point: cutAt ${input.cutAt} of the room, subject to the standard margin${now}. Remove cutAt from pi-tuck.json to use the default.`,
         "Search: by keyword.",
     ].join("\n");
 }
