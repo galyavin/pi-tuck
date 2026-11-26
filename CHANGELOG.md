@@ -3,6 +3,15 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.0]
+
+### Added
+
+- Model config check: once per Pi start, in the background, for a model whose provider is defined in `models.json`, pi-tuck compares the
+  context window and thinking levels with the server's `/models` reply. With a UI it asks before changing `models.json` (dated backup,
+  only the reported fields; a file with comments gets the exact edit instead) and remembers a "no" in `pi-tuck.json` for that server
+  value. Without a UI it prints nothing; `/tuck` lists the findings.
+
 ## [1.5.0]
 
 ### Added

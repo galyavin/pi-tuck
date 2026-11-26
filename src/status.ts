@@ -37,6 +37,8 @@ export function statusText(input: {
         : `Trims: ${ours.length} by pi-tuck in this session` + (typeof before === "number" && typeof after === "number" ? `, the last from ${count(before)} to ${count(after)} tokens.` : ".");
     const native = cuts.length - ours.length;
     const now = input.cutPoint === undefined ? "" : ` (about ${count(input.cutPoint)} tokens with this model)`;
+    const check = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-config-check").at(-1)?.data as { model?: unknown; lines?: unknown; outcome?: unknown } | undefined;
+    const checkLines = Array.isArray(check?.lines) ? [`models.json check for ${String(check!.model)} (${String(check!.outcome)}):`, ...check!.lines.map(line => `  ${String(line)}`)] : [];
     const retries = input.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity" &&
         (entry.data as { kind?: unknown } | null | undefined)?.kind === "retry").length;
     return [
@@ -48,5 +50,6 @@ export function statusText(input: {
         input.cacheSensitive ? "Trim point: preserves the active prefix while the reply reserve fits." : input.cutAt === undefined
             ? `Trim point: the room less a 2% margin${now}.` : `Trim point: cutAt ${input.cutAt} of the room, subject to the standard margin${now}. Remove cutAt from pi-tuck.json to use the default.`,
         "Search: by keyword.",
+        ...checkLines,
     ].join("\n");
 }

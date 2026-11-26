@@ -12,7 +12,7 @@ pi install npm:pi-tuck
 
 Start a new Pi process after installing or updating. pi-tuck handles automatic compaction and `/compact` by default. Run `/tuck` to see the loaded version, cut history, and active cut policy.
 
-This README describes pi-tuck 1.5.0. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.5.0` or `pi install git:github.com/galyavin/pi-tuck@v1.5.0`. To uninstall, run `pi remove` with the source you installed.
+This README describes pi-tuck 1.6.0. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.6.0` or `pi install git:github.com/galyavin/pi-tuck@v1.6.0`. To uninstall, run `pi remove` with the source you installed.
 
 ## Compaction and recall
 
@@ -44,6 +44,10 @@ context ████████░░ 19k of 24k · 2 trims                    
 ```
 
 When pi-tuck stops a request or a reply ends at its length limit, the notice suggests `/tuck-incident next` to record the next trim for a bug report.
+
+## Model config check
+
+Once per Pi start, in the background, pi-tuck reads the server's own model list (`{baseUrl}/models`, with Pi's auth for that provider) for the session's model, when that model's provider is defined in Pi's `models.json`. It compares the context window (`max_model_len`, `context_length`, `context_window` or `n_ctx`; never the training length `n_ctx_train`) and the thinking levels (`reasoning.efforts`, matched only by identical names) with `models.json`. In the terminal UI each difference is a yes/no question; yes backs up `models.json` next to it with the date in the name and changes only those fields (restart Pi to use them), and no is remembered in `pi-tuck.json` until the server reports a different value. A `models.json` with comments is not rewritten; pi-tuck shows the exact edit instead. Without a UI, nothing is printed: the findings go to the session and to `/tuck`. Tested with a server whose `/v1/models` entry reports `max_model_len` and `reasoning.efforts`; other servers, including llama.cpp's, are not verified yet.
 
 ## Settings
 

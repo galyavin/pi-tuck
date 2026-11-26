@@ -1,1 +1,1 @@
-export const BUILD_ID = "afdb81c50c0608b05013bc64aee8a7ff9f4100d7f7e3da9784a7ac789f92aff3";
+export const BUILD_ID = "724e52323e3ef4f1359322bf874dc8d069782f67d505ea6217c3f00a71c52166";

@@ -7,6 +7,7 @@ import { notify } from "./src/notify";
 import type { LlamaContinuation } from "./src/llama-continuation";
 import { cleanupLegacyFiles } from "./src/legacy-cleanup";
 import { installFooter } from "./src/footer";
+import { installConfigCheck } from "./src/config-check";
 
 export type { CompactionOptions } from "./src/compaction";
 export { installCompaction } from "./src/compaction";
@@ -36,6 +37,7 @@ export default async function (pi: ExtensionAPI) {
 	const settings = readSettings(join(getAgentDir(), "pi-tuck.json"));
 	const handle = await installCompaction(pi, { cutAt: settings.cutAt, cacheSensitiveModels: settings.cacheSensitiveModels, continuationModel: settings.llamaContinuation?.model });
 	if (settings.footer !== false) installFooter(pi, ctx => handle.cutPoint(ctx));
+	installConfigCheck(pi, { agentDir: getAgentDir() });
 	const continuation = settings.llamaContinuation;
 	let continuationError: string | undefined;
 	if (continuation) {

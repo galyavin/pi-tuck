@@ -1,0 +1,30 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "main",
+      "object": "model",
+      "created": 0,
+      "owned_by": "splash",
+      "display_name": "Splash-Q4",
+      "max_model_len": 131072,
+      "max_concurrent_requests": 4,
+      "max_gpu_batch": 4,
+      "waiting_places": 4,
+      "engine": "four",
+      "reasoning": {
+        "thinks": true,
+        "efforts": [
+          "xhigh"
+        ],
+        "default": "xhigh"
+      },
+      "capabilities": [
+        "chat",
+        "vision",
+        "tools",
+        "json_schema"
+      ]
+    }
+  ]
+}
