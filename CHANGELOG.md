@@ -3,6 +3,13 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.1]
+
+### Fixed
+
+- The release workflow fetches full history, so the Part 6 reference test runs before publishing. 1.4.0 was tagged but never
+  published; 1.4.1 ships the same code.
+
 ## [1.4.0]
 
 ### Added

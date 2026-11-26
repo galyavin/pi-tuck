@@ -12,7 +12,7 @@ pi install npm:pi-tuck
 
 Start a new Pi process after installing or updating. pi-tuck handles automatic compaction and `/compact` by default. Run `/tuck` to see the loaded version, cut history, and active cut policy.
 
-This README describes pi-tuck 1.4.0. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.4.0` or `pi install git:github.com/galyavin/pi-tuck@v1.4.0`. To uninstall, run `pi remove` with the source you installed.
+This README describes pi-tuck 1.4.1. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.4.1` or `pi install git:github.com/galyavin/pi-tuck@v1.4.1`. To uninstall, run `pi remove` with the source you installed.
 
 ## Compaction and recall
 
