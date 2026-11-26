@@ -1,5 +1,4 @@
 import { expect, test } from 'vitest';
-import type { Context } from '@earendil-works/pi-ai';
 import { estimateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
 import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { harness, receiptOf } from './budget-fixture';
@@ -9,8 +8,8 @@ import { harness, receiptOf } from './budget-fixture';
 test('a mid-run cut makes Pi clamp the next request without the pre-cut usage', async () => {
  const h = await harness({ at: 'tool', complete: 28_000, systemTokens: 18_000, history: 1_000, fresh: 7_000, host: 200,
   limits: { contextWindow: 32_768, maxTokens: 8_192 }, archivedReplyOutput: 3_584, reserveTokens: 16_384, usageRatio: 0.873, piRequestPath: true, compaction: { requestReserve: undefined } });
- const sent: Context[] = [];
  const stream = h.session.agent.streamFunction;
+ const sent: Parameters<typeof stream>[1][] = [];
  h.session.agent.streamFunction = ((...args: Parameters<typeof stream>) => { sent.push(structuredClone(args[1])); return stream(...args); }) as typeof stream;
  try {
   const r = await h.run();
