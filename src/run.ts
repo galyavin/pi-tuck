@@ -20,6 +20,8 @@ export class PendingCut {
         this.preview = undefined;
     }
     clear() { this.proposal = undefined; this.preview = undefined; }
+    /** Puts the plan back after a check that read a preview session (a read from another session clears it). */
+    hold() { const proposal = this.proposal; return () => { this.proposal = proposal; this.preview = undefined; }; }
     take(ctx: Context) {
         if (!this.view(ctx).pending) return;
         const cut = this.proposal?.cut;

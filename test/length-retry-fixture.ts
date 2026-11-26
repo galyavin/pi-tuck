@@ -49,15 +49,16 @@ export function expectThinkingLengthOutcome(cell: (typeof thinkingLengthCells)[n
  expect(r.faults).toEqual([]);
  expect(r.replyFloor).toBe(Math.max(1, ...r.outputs));
  // A final stop exactly at the configured cap (16,384) gets the cap notice; one the context clamped gets the general one.
- expect(r.notices).toEqual(!cell.above || cell.twice ? [r.outputs.at(-1) === 16_384
+ // Below the room the stall gets an act-now turn, which answers: no notice. A retried reply that stalls again gets the notice.
+ expect(r.notices).toEqual(cell.twice ? [r.outputs.at(-1) === 16_384
   ? capStopNotice('openai-codex/gpt-6.1-sol', 16_384, '~/.pi/agent/models.json')
   : "pi-tuck: the model exhausted its output allowance before producing an answer or tool call. The unfinished response is saved in the session." + INCIDENT_HINT,
  ] : []);
 
  if (!cell.above) {
-  expect(r.requests).toBe(1);
+  expect(r.requests).toBe(2);
   expect(r.retries).toBe(0);
-  expect(r.stops).toEqual(['length']);
+  expect(r.stops).toEqual(['length', 'stop']);
   return;
  }
 

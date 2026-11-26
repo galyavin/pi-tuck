@@ -71,6 +71,10 @@ export const capStopNotice = (model: string, maxTokens: number, file: string) =>
     `pi-tuck: ${model} used its whole reply cap (maxTokens ${maxTokens.toLocaleString("en-US")}) while still thinking, before any answer or tool call. ` +
     `The cap is maxTokens for this model in ${file}. A lower thinking level, or a task that writes to files as it goes, usually helps more than a bigger cap. ` +
     "The unfinished response is saved in the session.";
+/** The follow-up turn sent after a reply that spent its whole output on thinking, with no text or tool call. */
+export const ACT_NOW = "Your last reply used the whole output budget on thinking. Act now: make the next tool call or give the answer, with brief reasoning.";
+/** At most this many act-now turns in a row; after that a stall gets the cap-stop notice until a reply is not a stall. */
+export const ACT_NOW_LIMIT = 2;
 /** Pi's models.json, shown with ~ for the home folder. */
 function modelsPath(): string {
     try {
@@ -319,9 +323,13 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     const rearmLengthRetry = (ctx: ExtensionContext) => {
         if (ctx.model && `${ctx.model.provider}/${ctx.model.id}` !== options.continuationModel) run?.rearmLengthRetry();
     };
-    pi.on("message_start", (event, ctx) => { if (event.message.role === "user") rearmLengthRetry(ctx); });
+    // The act-now turn is pi-tuck's own, not the operator's: it grants no retry.
+    pi.on("message_start", (event, ctx) => { if (event.message.role === "user" && textOf(event.message.content) !== ACT_NOW) rearmLengthRetry(ctx); });
+    // Act-now turns sent since the last reply that was not a stall.
+    let actNows = 0;
     pi.on("message_end", (event, ctx) => {
         if (event.message.role !== "assistant") return;
+        if (event.message.stopReason !== "error" && event.message.stopReason !== "aborted" && !(event.message.content && thinkingOnlyLength(event.message))) actNows = 0;
         if (event.message.stopReason !== "error" && event.message.stopReason !== "length") rearmLengthRetry(ctx);
         lengthStop = event.message.stopReason === "length" ? {
             kind: event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output",
@@ -1015,6 +1023,31 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const saved = { ...cut, firstKeptEntryId: current.keptFromId! };
         return { entries: [...event.entries as CutEntry[], saved, ...(more?.entries ?? [])] };
     };
+    // After a stall that is not retried: leave the stalled reply out of the context (it stays saved, with its output usage, so the next
+    // request keeps the raised reply room) and queue one act-now turn, if that request fits as it stands. Otherwise the notice stands.
+    const actNow = (event: TurnEndEvent, ctx: ExtensionContext, result: { entries: readonly SessionBoundaryDraft[] } | undefined) => {
+        if (actNows >= ACT_NOW_LIMIT || !ctx.model) return undefined;
+        const edit: SessionBoundaryDraft = { type: "context_edit", targetId: event.messageEntryId, replacement: null };
+        // The cap path returns before taking a pending cut: preview it in place, and take it only if the turn is queued.
+        const untaken = !result || result.entries === event.entries;
+        const base = result?.entries ?? event.entries;
+        let entries: SessionBoundaryDraft[] = base.some(entry => entry.type === "context_edit" && entry.targetId === event.messageEntryId) ? [...base] : [...base, edit];
+        const restore = untaken ? run?.cut.hold() : undefined;
+        try {
+            const preview = (untaken ? run?.cut ?? liveCut : liveCut).view(ctx, entries).session;
+            const view: ExtensionContext = Object.create(ctx, { sessionManager: { value: preview } });
+            const turn = { role: "user" as const, content: [{ type: "text" as const, text: ACT_NOW }], timestamp: 0 };
+            const messages = projectedRequest(preview.buildSessionProjection().messages, view, hostMessages(ctx), [...event.context.pendingMessages, turn], ctx.getSystemPrompt(), pi.getActiveTools(), false);
+            const tokens = requestSystemPart(ctx.getSystemPrompt(), pi.getActiveTools(), messages, ctx.getSystemPrompt()) + conversationTokens(messages);
+            const { room, hardLine } = limits(view);
+            if (!fits(tokens, hardLine, view) || !options.requestReserve && corrected(tokens, view) > room && piClamp && !requestClamp(messages, view).leavesFloor) return undefined;
+        } finally { restore?.(); }
+        try { pi.sendUserMessage(ACT_NOW, { deliverAs: "followUp" }); } catch { return undefined; }
+        if (untaken) entries = [...(atBoundary(event, ctx, "run-end", false)?.entries ?? event.entries), edit];
+        actNows++;
+        markBoundary(entries);
+        return { entries, continue: false };
+    };
     const retryLength = (event: TurnEndEvent, ctx: ExtensionContext) => {
         // Exhausting the full per-request allowance is not evidence that input is too large.
         // Preserve the unfinished response; provider-native continuation owns this case.
@@ -1084,8 +1117,11 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         try {
             if (standDown(ctx)) return;
             if (!active() || run?.phase !== "admitted") return;
-            if (thinkingOnlyLength(event.message) && !ctx.signal?.aborted && settingsFor().getCompactionSettings(ctx.model).enabled)
-                return retryLength(event, ctx);
+            if (thinkingOnlyLength(event.message) && !ctx.signal?.aborted && settingsFor().getCompactionSettings(ctx.model).enabled) {
+                // A stall that is not retried gets one follow-up turn asking the model to act; its reply replaces the cap-stop notice.
+                const result = retryLength(event, ctx);
+                return result?.continue ? result : actNow(event, ctx, result) ?? result;
+            }
             run.finishLengthRetry();
             const decide = event.outcome === "completed" && !ctx.signal?.aborted && event.context.canContinue && event.toolResults.length > 0 &&
                 settingsFor().getCompactionSettings(ctx.model).enabled;

@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { requestReplyFloor, thinkingOnlyLength } from '../src/request-capacity';
+import { ACT_NOW, capStopNotice } from '../src/compaction';
 import { statusText } from '../src/status';
 import { MODEL } from './calibration-fixture';
 import { harness } from './budget-fixture';
@@ -13,17 +14,21 @@ test.each(thinkingLengthCells)('thinking-only length recovery: $name', async cel
 test('a full-cap thinking stop leaves room for a fresh prompt and a later long tool turn', async () => {
  const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 800,
   limits: { contextWindow: 65_536, maxTokens: 32_768 }, reserveTokens: 16_384, piRequestPath: true,
-  compaction: { requestReserve: undefined }, thinkingOnlyLength: n => n === 1, toolCalls: n => n === 3,
+  compaction: { requestReserve: undefined }, thinkingOnlyLength: n => n === 1, toolCalls: n => n === 4,
   replyTokens: () => 20_000 });
  try {
   await h.session.prompt('Initial task');
-  expect(h.state.answers.map(a => [a.stopReason, a.usage.output])).toEqual([['length', 32_768]]);
+  // 1.10.0: the stall gets one act-now turn in the same run, and that request gets the raised reply room.
+  expect(h.state.answers.map(a => a.stopReason)).toEqual(['length', 'stop']);
+  expect(h.state.answers[0]!.usage.output).toBe(32_768);
+  expect(h.state.requestOptions[1]!.maxTokens).toBe(32_768);
   expect(requestReplyFloor(h.manager.getBranch(), 16_384, h.session.model!)).toBe(16_384);
   await h.session.prompt('Fresh task');
   await h.session.prompt('Task with a long tool turn');
-  expect(h.state.answers.map(a => a.stopReason)).toEqual(['length', 'stop', 'toolUse', 'stop']);
+  expect(h.state.answers.map(a => a.stopReason)).toEqual(['length', 'stop', 'stop', 'toolUse', 'stop']);
   expect(h.state.effects).toBe(1);
-  expect(h.state.requestOptions[2]!.maxTokens).toBeGreaterThan(20_000);
+  expect(h.state.requestOptions[3]!.maxTokens).toBeGreaterThan(20_000);
+  expect(h.notices).toEqual([]);
   expect(h.faults).toEqual([]);
  } finally { await h.cleanup(); }
 });
@@ -118,4 +123,33 @@ test('/tuck counts retry receipts on the current branch', () => {
   { type: 'custom', customType: 'pi-tuck-capacity', data: { kind: 'retry' } },
   { type: 'custom', customType: 'pi-tuck-capacity', data: { kind: 'above-room' } },
  ], cutAt: undefined })).toContain('Capacity retries on this branch: 1.');
+});
+
+// After-cap act-now: a thinking-only stall that is not retried gets one follow-up turn; at most two in a row, then the cap-stop notice,
+// until a reply is not a stall. The stalled reply stays saved but leaves the request context.
+test('act-now: two in a row at most, then the notice; a reply that is not a stall re-arms it', async () => {
+ const wire: { messages: { role: string; stopReason?: string; content: unknown }[] }[] = [];
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 800,
+  limits: { contextWindow: 65_536, maxTokens: 32_768 }, reserveTokens: 16_384, piRequestPath: true,
+  compaction: { requestReserve: undefined }, thinkingOnlyLength: n => [1, 2, 3, 5].includes(n), replyTokens: () => 2_000,
+  onWire: context => wire.push(structuredClone(context as never)) });
+ try {
+  await h.session.prompt('Initial task');
+  expect(h.state.answers.map(a => a.stopReason)).toEqual(['length', 'length', 'length']);
+  expect(h.notices).toEqual([capStopNotice('openai-codex/gpt-6.1-sol', 32_768, '~/.pi/agent/models.json')]);
+  const text = (m: { content: unknown }) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+  for (const request of wire.slice(1, 3)) {
+   expect(text(request.messages.at(-1)!)).toContain(ACT_NOW);
+   expect(request.messages.some(m => m.role === 'assistant' && m.stopReason === 'length')).toBe(false);
+  }
+  // The stalled replies stay in the session.
+  expect(h.manager.getBranch().filter(e => e.type === 'message' && e.message.role === 'assistant' && e.message.stopReason === 'length')).toHaveLength(3);
+  await h.session.prompt('Fresh task');
+  expect(h.state.answers.at(-1)!.stopReason).toBe('stop');
+  await h.session.prompt('Another task');
+  expect(h.state.answers.slice(4).map(a => a.stopReason)).toEqual(['length', 'stop']);
+  expect(text(wire[5]!.messages.at(-1)!)).toContain(ACT_NOW);
+  expect(h.notices).toHaveLength(1);
+  expect(h.faults).toEqual([]);
+ } finally { await h.cleanup(); }
 });

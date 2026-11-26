@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import type { Context } from '@earendil-works/pi-ai';
 import { harness, HOST, ROOM } from './budget-fixture';
 
-// Choice 5: a run that stops at the model's whole allowance still saves its cut, and the next prompt is cut before its first request.
+// Choice 5: a run that stops at the model's whole allowance still saves its cut (with its act-now turn), and the next prompt is cut before its first request.
 test('after a full-allowance stop the cut is saved and the next prompt is cut in time', async () => {
  const h = await harness({ at: 'prompt', complete: ROOM + 3000, host: HOST, piRequestPath: true, thinkingOnlyLength: n => n === 1 });
  try {
@@ -10,11 +10,15 @@ test('after a full-allowance stop the cut is saved and the next prompt is cut in
   expect(first.faults).toEqual([]);
   const last = h.state.answers[0]!;
   expect([last.stopReason, last.usage.output]).toEqual(['length', h.session.model!.maxTokens]);
-  expect(h.state.answers).toHaveLength(1);
+  // The act-now turn answers; the pending cut is saved with it.
+  expect(h.state.answers.map(answer => answer.stopReason)).toEqual(['length', 'stop']);
   const cuts = () => h.manager.getBranch().filter(entry => entry.type === 'compaction').length;
   expect(cuts()).toBe(1);
+  // Grow the branch past the room again (the act-now request may already have cut it).
+  const uncutNow = () => Math.ceil(JSON.stringify(h.manager.buildSessionProjection().messages).length / 4) + 6_000;
   h.cycle(4_000); h.cycle(4_000); h.cycle(4_000);
-  const uncut = Math.ceil(JSON.stringify(h.manager.buildSessionProjection().messages).length / 4) + 6_000;
+  while (uncutNow() <= ROOM) h.cycle(4_000);
+  const uncut = uncutNow();
   const before = h.state.requests;
   let sent: Context | undefined;
   const stream = h.session.agent.streamFunction;

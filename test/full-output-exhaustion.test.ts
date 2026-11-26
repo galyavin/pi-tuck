@@ -10,11 +10,13 @@ test("a fresh thinking-only response at the full output allowance is preserved w
     });
     try {
         await h.session.prompt("Build a procedural office simulator.");
-        expect(h.state.requestOptions.map(request => request.baseMaxTokens)).toEqual([32_768]);
+        // No retry: the next request is the act-now turn, at the same allowance, with the stalled reply left out of its context.
+        expect(h.state.requestOptions.map(request => request.baseMaxTokens)).toEqual([32_768, 32_768]);
         expect(h.faults).toEqual([]);
         const branch = h.manager.getBranch();
-        expect(branch.some(entry => entry.type === "context_edit" || entry.type === "compaction")).toBe(false);
-        expect(branch.findLast(entry => entry.type === "message" && entry.message.role === "assistant"))
+        expect(branch.some(entry => entry.type === "compaction")).toBe(false);
+        expect(branch.some(entry => entry.type === "custom" && entry.customType === "pi-tuck-capacity")).toBe(false);
+        expect(branch.find(entry => entry.type === "message" && entry.message.role === "assistant"))
             .toMatchObject({ message: { stopReason: "length", content: [{ type: "thinking" }] } });
     } finally {
         await h.cleanup();

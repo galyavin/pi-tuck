@@ -13,9 +13,10 @@ const receipts = (h: Awaited<ReturnType<typeof build>>) => h.manager.getBranch()
 
 test.each([
  { name: 'a stop that no cut can help is retried uncut', stops: [1], tools: [], prompts: 1, replies: ['length', 'stop'], retries: 1 },
- { name: 'a second stop in a row is final', stops: [1, 2, 3], tools: [], prompts: 1, replies: ['length', 'length'], retries: 1 },
+ // A stop that is not retried gets an act-now turn, at most two in a row.
+ { name: 'a second stop in a row is not retried; act-now turns follow', stops: [1, 2, 3], tools: [], prompts: 1, replies: ['length', 'length', 'length', 'stop'], retries: 1 },
  { name: 'a good reply re-arms the retry', stops: [1, 3], tools: [2], prompts: 1, replies: ['length', 'toolUse', 'length', 'stop'], retries: 2 },
- { name: 'a new prompt re-arms the retry', stops: [1, 2, 3], tools: [], prompts: 2, replies: ['length', 'length', 'length', 'stop'], retries: 2 },
+ { name: 'a new prompt re-arms the retry', stops: [1, 2, 3, 4, 5], tools: [], prompts: 2, replies: ['length', 'length', 'length', 'length', 'length', 'stop'], retries: 2 },
 ])('$name', async cell => {
  const h = await build(cell.stops, { tools: cell.tools });
  try {
@@ -28,12 +29,12 @@ test.each([
  } finally { await h.cleanup(); }
 });
 
-test('the llama continuation model keeps one recovery per run and no uncut retry', async () => {
+test('the llama continuation model gets no uncut retry; its stall gets the act-now turn', async () => {
  const h = await build([1], { continuation: true });
  try {
   await h.session.prompt('Task');
   expect(h.faults).toEqual([]);
-  expect(h.state.answers.map(answer => answer.stopReason)).toEqual(['length']);
+  expect(h.state.answers.map(answer => answer.stopReason)).toEqual(['length', 'stop']);
   expect(receipts(h)).toEqual([]);
  } finally { await h.cleanup(); }
 });
@@ -50,17 +51,18 @@ test('a steering message re-arms the retry', async () => {
  } finally { await h.cleanup(); }
 });
 
-test('a stop at the model allowance is final', async () => {
+test('a stop at the model allowance is not retried; the act-now turn follows', async () => {
  const h = await build([1], { systemTokens: 800 });
  try {
   await h.session.prompt('Task');
   expect(h.faults).toEqual([]);
-  expect(h.state.answers.map(answer => [answer.stopReason, answer.usage.output])).toEqual([['length', 16_384]]);
+  expect(h.state.answers.map(answer => [answer.stopReason, answer.usage.output])).toEqual([['length', 16_384], ['stop', 0]]);
   expect(receipts(h)).toEqual([]);
  } finally { await h.cleanup(); }
 });
 
 // Pi's own retry decisions, with only its cut replaced: every reply order of two prompts, each compared with pi-tuck's.
+// The act-now turn is pi-tuck's own addition, with no native counterpart: it is off here (Pi refuses the queued turn).
 const orders = Array.from({ length: 3 ** 5 }, (_, n) => [...n.toString(3).padStart(5, '0')].map(Number));
 test('retry decisions match native Pi for every order of length stop, tool call and finished reply', async () => {
  let nativeRetries = 0;
@@ -68,6 +70,7 @@ test('retry decisions match native Pi for every order of length stop, tool call 
   const at = (kind: number) => order.flatMap((value, index) => value === kind ? [index + 1] : []);
   const h = await build(at(1), { tools: at(2) });
   try {
+   if (!native) (h.extension() as any).sendUserMessage = () => { throw new Error('act-now off for the parity check'); };
    if (native) {
     const session = h.session as any;
     session._extensionRunner.extensions.length = 0;
