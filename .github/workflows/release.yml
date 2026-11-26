@@ -90,11 +90,13 @@ jobs:
         # Last step, tag releases only; it can never fail or block the release.
         if: github.event_name == 'push' && env.LATEST == 'true'
         continue-on-error: true
-        timeout-minutes: 1
+        timeout-minutes: 6
         env:
           HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
         run: |
           [ -n "$HOOK" ] || { echo "PAGES_DEPLOY_HOOK not set; skipped"; exit 0; }
+          # Wait until npm serves this version, so the site rebuild reads it.
+          for i in $(seq 1 20); do [ "$(npm view pi-tuck version)" = "${GITHUB_REF_NAME#v}" ] && break; sleep 15; done
           curl -fsS --max-time 20 -X POST "$HOOK" >/dev/null || echo "::warning::galyavin.com deploy hook failed; the row updates at the next site deploy"
 
   exchange-check:
