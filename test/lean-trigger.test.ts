@@ -82,3 +82,11 @@ test('an explicit cutAt turns the lean line off', async () => {
  expect(r.faults, r.probe).toEqual([]);
  expect(r.cuts, r.probe).toBe(0);
 });
+
+test('a cache-sensitive model never gets a lean cut', async () => {
+ const r = await scenario({ ...large, ...lean, compaction: { requestReserve: undefined, cacheSensitiveModels: ['openai-codex/gpt-6.1-sol'] }, complete: 12_000 });
+ expect(r.faults, r.probe).toEqual([]);
+ expect(r.cuts, r.probe).toBe(0);
+ // The same session without the list cuts at its lean line.
+ expect((await scenario({ ...large, ...lean, complete: 12_000 })).cuts).toBe(1);
+});
