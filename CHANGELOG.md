@@ -3,6 +3,20 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.10.0]
+
+### Added
+
+- Act-now turn: when a reply stops at its output limit while still thinking (no text, no tool call) and pi-tuck does not retry it, pi-tuck
+  queues one more user turn asking the model to act now, with the next tool call or the answer. The stopped reply stays saved but leaves
+  that request's context, and the request gets the raised reply room. At most two such turns go out in a row, and only when the request
+  fits; if the second also stops, the exhaustion notice shows as before. A reply that is not such a stop re-arms it. The act-now turn
+  does not re-arm the length retry.
+
+### Changed
+
+- README: `cacheSensitiveModels` also turns off the lean line (as in 1.9.0); a local server with a strong prompt cache belongs in it.
+
 ## [1.9.0]
 
 ### Changed
