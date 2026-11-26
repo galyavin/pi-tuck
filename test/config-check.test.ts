@@ -5,19 +5,19 @@ import { join } from 'node:path';
 import { applyPatch, checkModel, editText, findings, serverModel, stripComments, CONFIG_CHECK_ENTRY } from '../src/config-check';
 import { statusText } from '../src/status';
 
-// A real mac-studio /v1/models reply, recorded 2026-11-20 (only the model entry was logged; the list wrapper is added).
-const recorded = JSON.parse(readFileSync(join(__dirname, 'fixtures/mac-studio-models-20261120.json'), 'utf8'));
-// The same server after its 2026-11-25 change, with the fields as reported to us: max_model_len 272000, efforts high and xhigh.
-const current = { object: 'list', data: [{ ...recorded.data[0], display_name: 'Inkling 2 Mini', max_model_len: 272_000, reasoning: { thinks: true, efforts: ['high', 'xhigh'], default: 'xhigh' } }] };
-// m5-air (llama.cpp-based server) as reported: max_model_len and context_length both 98304.
-const m5 = { object: 'list', data: [{ id: 'mba-main', object: 'model', max_model_len: 98_304, context_length: 98_304 }] };
+// Real /v1/models replies: mac-studio recorded 2026-11-20 (only the model entry was logged; the list wrapper is added) and 2026-11-26
+// (after its change to a 272k window and two thinking levels), and m5-air recorded 2026-11-26.
+const fixture = (name: string) => JSON.parse(readFileSync(join(__dirname, 'fixtures', name), 'utf8'));
+const recorded = fixture('mac-studio-models-20261120.json');
+const current = fixture('mac-studio-models-20261126.json');
+const m5 = fixture('m5-air-models-20261126.json');
 const off = { off: null, minimal: null, low: null, medium: null };
 const oldConfig = { id: 'main', name: 'Qwen', contextWindow: 131_072, reasoning: true, thinkingLevelMap: { ...off, high: null, xhigh: 'xhigh', max: null } };
 
 test('reads the window and thinking levels the server reports', () => {
 	expect(serverModel(recorded, 'main')).toEqual({ window: 131_072, efforts: ['xhigh'] });
 	expect(serverModel(current, 'main')).toEqual({ window: 272_000, efforts: ['high', 'xhigh'] });
-	expect(serverModel(m5, 'mba-main')).toEqual({ window: 98_304, efforts: undefined });
+	expect(serverModel(m5, 'mba-main')).toEqual({ window: 98_304, efforts: ['high', 'xhigh'] });
 	expect(serverModel(current, 'other')).toBeUndefined();
 	// n_ctx_train is the training length, not what the server allows.
 	expect(serverModel({ data: [{ id: 'x', n_ctx_train: 131_072, meta: { n_ctx_train: 131_072 } }] }, 'x')).toEqual({ window: undefined, efforts: undefined });
@@ -38,7 +38,7 @@ test('the old mac-studio config against the server: a bigger window and an unmap
 test('a config window above the server is unsafe and says so; a matching config finds nothing', () => {
 	const [over] = findings({ contextWindow: 272_000, reasoning: true, thinkingLevelMap: { ...off, high: null, xhigh: 'xhigh', max: null } }, serverModel(recorded, 'main')!);
 	expect(over!.question).toBe('Config says 272k, but the server allows only 131k: requests past 131k will fail. Use 131k?');
-	expect(findings({ contextWindow: 98_304, reasoning: true }, serverModel(m5, 'mba-main')!)).toEqual([]);
+	expect(findings({ contextWindow: 98_304, reasoning: true, thinkingLevelMap: { ...off, high: 'high', xhigh: 'xhigh', max: null } }, serverModel(m5, 'mba-main')!)).toEqual([]);
 	expect(findings({ contextWindow: 272_000, reasoning: true, thinkingLevelMap: { ...off, high: 'high', xhigh: 'xhigh', max: null } }, serverModel(current, 'main')!)).toEqual([]);
 	// A level the server does not list is turned off; a non-reasoning model's levels are not compared.
 	expect(findings({ contextWindow: 131_072, reasoning: true, thinkingLevelMap: { ...off, high: 'high', xhigh: 'xhigh', max: null } }, serverModel(recorded, 'main')!)[0]!.patch)
