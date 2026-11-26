@@ -47,7 +47,7 @@ test('the bar fills toward pi-tuck\'s trim point, the number /tuck gives', async
 	expect(cut).toBe(50_583);
 	const [pwd, stats, statuses] = f.footer.render(160);
 	expect(pwd).toBe('/work/repo (main)');
-	expect(stats).toMatch(/^context ████████░░ 41k of 51k · then pi-tuck trims · \$0\.12 {2,}m · high$/);
+	expect(stats).toMatch(/^context ████████░░ 41k of 51k · \$0\.12 {2,}m · high$/);
 	expect(statuses).toBe('first second');
 	await f.commands.get('tuck')!('', f.ctx);
 	expect(f.notices.at(-1)).toContain('Trim point: the room less a 2% margin (about 50,583 tokens with this model).');
@@ -75,17 +75,25 @@ test('renders do not recompute: only a reply, a trim or a model change does', as
 	expect(f.reads).toEqual({ usage: before.usage + 5, entries: before.entries + 5 });
 });
 
-const figures: FooterFigures = { tokens: 16_000, estimated: false, cut: 24_000, window: 32_768, cost: 0, model: 'main · xhigh', pwd: '~/repo', session: undefined };
+const figures: FooterFigures = { tokens: 16_000, estimated: false, cut: 24_000, cuts: 0, window: 32_768, cost: 0, model: 'main · xhigh', pwd: '~/repo', session: undefined };
 
 test('the wide and narrow lines', () => {
 	expect(footerLines(figures, 80, plain, 'feature', new Map())).toEqual(['~/repo (feature)',
-		'context ███████░░░ 16k of 24k · then pi-tuck trims' + ' '.repeat(18) + 'main · xhigh']);
+		'context ███████░░░ 16k of 24k' + ' '.repeat(39) + 'main · xhigh']);
 	expect(footerLines(figures, 40, plain, null, new Map())[1]).toBe('███████░░░ 16k of 24k');
+});
+
+test('the trim count shows only after the first trim', () => {
+	const two = { ...figures, tokens: 19_000, cuts: 2 };
+	expect(footerLines(two, 64, plain, null, new Map())[1]).toBe('context ████████░░ 19k of 24k · 2 trims' + ' '.repeat(13) + 'main · xhigh');
+	expect(footerLines({ ...figures, cuts: 1 }, 120, plain, null, new Map())[1]).toMatch(/16k of 24k · 1 trim {2,}main/);
+	expect(footerLines(figures, 120, plain, null, new Map())[1]).not.toContain('trim');
+	expect(footerLines(two, 30, plain, null, new Map())[1]).toBe('████████░░ 19k of 24k');
 });
 
 test('cost shows only above $0', () => {
 	expect(footerLines(figures, 120, plain, null, new Map())[1]).not.toContain('$');
-	expect(footerLines({ ...figures, cost: 0.42 }, 120, plain, null, new Map())[1]).toContain('then pi-tuck trims · $0.42 ');
+	expect(footerLines({ ...figures, cost: 0.42 }, 120, plain, null, new Map())[1]).toMatch(/16k of 24k · \$0\.42 {2,}main/);
 });
 
 test('with no trim point, the size against the window', () => {
@@ -105,7 +113,7 @@ test('right after a trim, before the next reply, the size is the trim\'s own est
 	const f = await fixture([{ type: 'compaction', tokensBefore: 50_000, details: { compactor: 'pi-tuck', tokensAfter: 9_000 } }]);
 	f.ctx.getContextUsage = () => ({ tokens: null, contextWindow: 68_000, percent: null }) as never;
 	await f.fire('session_compact');
-	expect(f.footer.render(160)[1]).toContain(' ~9.0k of 51k · then pi-tuck trims');
+	expect(f.footer.render(160)[1]).toMatch(/ ~9\.0k of 51k · 1 trim · \$0\.12 {2,}m · high$/);
 });
 
 test('no UI, no footer', async () => {

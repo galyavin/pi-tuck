@@ -36,9 +36,12 @@ Pi-tuck needs a supported Pi version and a nonvirtual model with a valid context
 
 ## Footer
 
-In Pi's terminal UI, pi-tuck replaces Pi's footer. Under the folder and git branch, the bar fills toward pi-tuck's trim point, the number `/tuck` reports: a full bar means pi-tuck trims. Next to it are the context size and the trim point, the cost when it is above $0, and the model with its thinking level. Other extensions' statuses stay below. The bar turns yellow at 85% of the trim point. A narrow terminal shows only the bar and the two sizes. Right after a trim, before the next reply, the size is the trim's own estimate, shown with `~`. When pi-tuck is not trimming for the model, the line shows the context against the window. `/tuck` shows the trim history.
+In Pi's terminal UI, pi-tuck replaces Pi's footer. Under the folder and git branch, the bar fills toward pi-tuck's trim point, the number `/tuck` reports: a full bar means pi-tuck trims. Next to it are the context size and the trim point, the trim count once pi-tuck has trimmed, the cost when it is above $0, and the model with its thinking level. Other extensions' statuses stay below. The bar turns yellow at 85% of the trim point. A narrow terminal shows only the bar and the two sizes. Right after a trim, before the next reply, the size is the trim's own estimate, shown with `~`. When pi-tuck is not trimming for the model, the line shows the context against the window. `/tuck` shows the trim history.
 
-![pi-tuck footer](docs/footer-wide.png)
+```text
+~/repo (main)
+context ████████░░ 19k of 24k · 2 trims                             main · xhigh
+```
 
 When pi-tuck stops a request or a reply ends at its length limit, the notice suggests `/tuck-incident next` to record the next trim for a bug report.
 

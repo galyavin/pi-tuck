@@ -8,9 +8,9 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
 ### Added
 
 - Footer: pi-tuck replaces Pi's footer in the terminal UI. Under the folder and branch line, a bar fills toward pi-tuck's trim point
-  (full means pi-tuck trims), with the context size, the trim point, the cost when above $0, and the model and thinking level; other
-  extensions' statuses stay below. It turns yellow at 85% of the trim point instead of at Pi's 70% and 90% of the window. Its figures are
-  recomputed only after a reply, a trim, or a model or thinking change. `"footer": false` in `pi-tuck.json` keeps Pi's footer.
+  (full means pi-tuck trims), with the context size, the trim point, the trim count once there is one, the cost when above $0, and the
+  model and thinking level; other extensions' statuses stay below. It turns yellow at 85% of the trim point instead of at Pi's 70% and
+  90% of the window. Its figures are recomputed only after a reply, a trim, or a model or thinking change. `"footer": false` in `pi-tuck.json` keeps Pi's footer.
 - Refusal and length-stop notices suggest `/tuck-incident next` to record the next trim for a bug report.
 
 ### Changed

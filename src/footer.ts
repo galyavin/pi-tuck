@@ -4,7 +4,7 @@ import { tuckCuts } from "./status.js";
 
 /**
  * pi-tuck's footer in place of Pi's: the folder and branch line, then how full the context is against pi-tuck's trim point (a full bar
- * means pi-tuck trims), the cost when there is one, and the model; other extensions' statuses below. The figures are computed only after
+ * means pi-tuck trims), the trim count once there is one, the cost when there is one, and the model; other extensions' statuses below. The figures are computed only after
  * a reply, a trim, or a model or thinking change, and cached; a render reads the cache and Pi's own cached branch and statuses. It reads;
  * it changes nothing the model sees.
  */
@@ -14,6 +14,8 @@ export interface FooterFigures {
 	estimated: boolean;
 	/** pi-tuck's trim point in tokens (the band), when pi-tuck is active for this model. */
 	cut: number | undefined;
+	/** pi-tuck trims on this branch so far. */
+	cuts: number;
 	window: number;
 	cost: number;
 	model: string;
@@ -47,7 +49,7 @@ export function footerFigures(ctx: ExtensionContext, cutPoint: number | undefine
 	const home = process.env.HOME || process.env.USERPROFILE;
 	const pwd = home && (ctx.cwd === home || ctx.cwd.startsWith(home + "/") || ctx.cwd.startsWith(home + "\\")) ? "~" + ctx.cwd.slice(home.length) : ctx.cwd;
 	const model = ctx.model ? ctx.model.reasoning ? `${ctx.model.id} · ${thinking && thinking !== "off" ? thinking : "thinking off"}` : ctx.model.id : "no-model";
-	return { tokens, estimated, cut: cutPoint, window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0, cost, model, pwd, session: ctx.sessionManager.getSessionName?.() };
+	return { tokens, estimated, cut: cutPoint, cuts: ours.length, window: usage?.contextWindow ?? ctx.model?.contextWindow ?? 0, cost, model, pwd, session: ctx.sessionManager.getSessionName?.() };
 }
 
 /** A bar of `cells` cells that fills toward the trim point: full means pi-tuck trims. */
@@ -66,9 +68,11 @@ export function footerLines(f: FooterFigures, width: number, theme: FooterTheme,
 	const of = f.cut ?? (f.window > 0 ? f.window : undefined);
 	const amount = (f.cut === undefined ? "" : `${gauge(f, BAR)} `) + size + (of === undefined ? "" : ` of ${formatTokens(of)}`);
 	const cost = f.cost > 0 ? ` · $${f.cost.toFixed(f.cost < 0.01 ? 3 : 2)}` : "";
-	const wide = dim("context ") + hot(amount) + dim((f.cut === undefined ? "" : " · then pi-tuck trims") + cost);
+	const trims = f.cuts > 0 ? ` · ${f.cuts} trim${f.cuts === 1 ? "" : "s"}` : "";
+	const wide = dim("context ") + hot(amount) + dim(trims + cost);
 	const room = width - visibleWidth(wide) - visibleWidth(f.model);
-	const stats = room >= 2 ? wide + dim(" ".repeat(room) + f.model) : visibleWidth(wide) <= width ? wide : truncateToWidth(hot(amount), width, dim("..."));
+	// The whole line when it fits, else only the bar and the sizes.
+	const stats = room >= 2 ? wide + dim(" ".repeat(room) + f.model) : truncateToWidth(hot(amount), width, dim("..."));
 	const pwd = f.pwd + (branch ? ` (${branch})` : "") + (f.session ? ` • ${f.session}` : "");
 	const lines = [truncateToWidth(dim(pwd), width, dim("...")), stats];
 	if (statuses.size > 0) lines.push(truncateToWidth([...statuses.entries()].sort(([a], [b]) => a.localeCompare(b))
