@@ -32,7 +32,8 @@ function assertPinned(input: Parameters<typeof tuckObservedDraft>[1], ctx: Exten
   expect(Boolean(actual.draft.compaction), label).toBe(Boolean(expected.draft.compaction));
   if (!expected.draft.compaction || !actual.draft.compaction) return;
   expect(expected.compiledIds, label).toBeDefined();
-  expect(actual.compiledIds, `${label}: pinned boundary`).toEqual(expected.compiledIds);
+  // A prefix-stable summary compiles only the sources since the previous cut: the pinned boundary is the last compiled source.
+  expect(actual.compiledIds?.at(-1), `${label}: pinned boundary`).toEqual(expected.compiledIds!.at(-1));
   const branch = ctx.sessionManager.getBranch();
   const positions = new Map(branch.map((entry, at) => [entry.id, at]));
   const pinned = (positions.get(expected.compiledIds!.at(-1)!) ?? -1) + 1;

@@ -17,7 +17,7 @@ const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0
 const reply = (content: unknown[], stopReason: string, timestamp: number) =>
 	({ role: 'assistant', content, api: 'openai-completions', provider: 'probe', model: 'probe', usage, stopReason, timestamp }) as never;
 
-export interface Cut { turn: number; entries: number; before: number; mode?: DraftMode; summaryChars?: number; sha256?: string; ms: number; unavailable?: string }
+export interface Cut { turn: number; entries: number; before: number; mode?: DraftMode; summaryChars?: number; summary?: string; sha256?: string; ms: number; unavailable?: string }
 
 /** `cutAt` drafts one cut at that turn only, however large the session has grown. */
 export interface Run { window: number; reserve: number; turns: number; stopAfterCuts?: number; stopAfterShrunk?: number; cutAt?: number }
@@ -71,7 +71,7 @@ export function run(shape: Shape, { window, reserve, turns, stopAfterCuts = 0, s
 		if (!draft.compaction) { rows.push({ turn, entries, before, ms, unavailable: draft.unavailable }); break; }
 		manager.appendCompaction(draft.compaction.summary, draft.compaction.firstKeptEntryId, before, draft.compaction.details, true);
 		const kept = manager.getBranch().findIndex(entry => entry.id === draft.compaction!.firstKeptEntryId);
-		rows.push({ turn, entries, before, mode: draft.mode, summaryChars: draft.compaction.summary.length, ms,
+		rows.push({ turn, entries, before, mode: draft.mode, summaryChars: draft.compaction.summary.length, summary: draft.compaction.summary, ms,
 			sha256: createHash('sha256').update(`${kept}\n${draft.compaction.summary}`).digest('hex') });
 		if (draft.mode === 'shrunk') shrunk++;
 		if (stopAfterCuts && rows.length >= stopAfterCuts) break;

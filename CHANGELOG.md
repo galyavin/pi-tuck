@@ -11,6 +11,11 @@ All notable changes to pi-tuck. The format follows [Keep a Changelog](https://ke
   where K is what the latest trim left, δ the mean growth per request and R the mean tokens of unchanged re-reads soon after each trim. It
   balances the cost of a trim against the cost of carrying a larger context each request. It never moves the trim point later than
   1.8.0's, it is off with an explicit `cutAt`, a host reserve or a protected prefix, and admission is unchanged.
+- Prefix-stable summary: a trim's summary begins with the previous summary's dialogue records, byte for byte, and adds the messages
+  trimmed since after them; the omission counts, lists and kept results follow the dialogue. Consecutive summaries then share their
+  longest possible prefix, which a provider's prompt cache can serve. When the new messages do not fit whole and the carried part leaves
+  them less than half of the summary's room, the carried part keeps only its prompts (and drops its oldest ones past half the room), so a
+  summary still makes room for recent work. Sessions without an earlier pi-tuck summary are summarized as before.
 
 ## [1.8.0]
 

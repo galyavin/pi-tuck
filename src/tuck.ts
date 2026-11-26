@@ -52,6 +52,8 @@ import { buildGlobalIndexById } from "./tuck/core/global-indices";
 import { compileDialogue } from "./tuck/core/summarize";
 import { prepareKeywordQuery } from "./tuck/core/keyword-query";
 import { rankRecallRows } from "./tuck/core/search-entries";
+/** The share of the brief below which the carried part of a prefix-stable summary keeps only its user and custom records. */
+export const STABLE_CONSOLIDATE_AT = 0.5;
 export const tuck: Tuck = { buildOwnCut, applyTailBudget, calibrateCharsPerToken, buildGlobalIndexById, compileDialogue, prepareKeywordQuery, rankRecallRows };
 /** Uses pi-tuck's own cut, calibrated maximum tail and dialogue compiler; Pi owns persistence and continuation.
  * `_operatorManual` retains the exported positional slot for existing callers. */
@@ -440,7 +442,7 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
                 const missing = units.user.filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end && !wholeUser.has(unit.index));
                 if (!missing.length) records.splice(pos, 1);
                 else records[pos] = omissionRecord("user", missing.length, [missing[0]!.index, missing.at(-1)!.index], false);
-            } else if (at !== compiledBoundary) {
+            } else if (at !== compiledBoundary || stable) {
                 const role = record.role;
                 if (role === "assistant" || role === "toolResult") {
                     const missing = units[role].filter(unit => unit.position < at && unit.index >= record.sourceRange!.start && unit.index <= record.sourceRange!.end &&
@@ -456,7 +458,78 @@ export function tuckObservedDraft(tuck: Tuck, input: { branchEntries: SessionEnt
         const summary = render([...records, ...ledger, ...keptResults, ...thoughtOpenings]);
         return { summary, records: [...records, ...thoughtOpenings] };
     };
-    const compiled = tuck.compileDialogue(compileInput);
+    // Prefix-stable summary: the previous pi-tuck summary's dialogue records are carried verbatim as the oldest part, and only the sources
+    // since that cut are compiled after them; counters, lists and kept results follow the dialogue. Consecutive summaries then share a
+    // prefix a provider's prompt cache can read. When the carried part leaves the new sources less than half the brief, it keeps only its
+    // user and custom records (a fixed point, so the part already kept that way stays the prefix), and past half the brief its oldest
+    // sources go, down to a quarter. With no previous pi-tuck summary, a floor summary, or nothing that fits, the whole history is compiled.
+    const stableCompile = (): { compiled: ReturnType<typeof tuck.compileDialogue>; carried: boolean } => {
+        const whole = () => ({ compiled: tuck.compileDialogue(compileInput), carried: false });
+        const previousAt = entries.findLastIndex(entry => entry.type === "compaction");
+        const previous = entries[previousAt];
+        const details = previous?.type === "compaction" ? previous.details as { compactor?: string; deepest?: boolean } | undefined : undefined;
+        if (previous?.type !== "compaction" || details?.compactor !== "pi-tuck" || details.deepest) return whole();
+        const split = splitSummary(previous.summary);
+        if (!split || split.version !== 2) return whole();
+        const from = Math.min(previous.firstKeptEntryId ? positions.get(previous.firstKeptEntryId) ?? previousAt : previousAt, compiledBoundary);
+        const indexAt = new Map(rows.map(row => [row.index, row.position]));
+        const positionOf = (record: TranscriptRecord) => record.sourceEntryId !== undefined ? positions.get(record.sourceEntryId)
+            : record.sourceIndex !== undefined ? indexAt.get(record.sourceIndex) : undefined;
+        const dialogue = (record: TranscriptRecord) => record.sourceIndex !== undefined || record.sourceEntryId !== undefined
+            ? (record.kind === "excerpt" || record.kind === "omission") && (record.role === "user" || record.role === "assistant" || record.role === "custom") : false;
+        let old: TranscriptRecord[];
+        try { old = parseRecords(split.body, 2).filter(record => dialogue(record) && (positionOf(record) ?? Infinity) < from); }
+        catch { return whole(); }
+        // One counter per role over the whole compacted history: what the records leave out (assemble counts it again once the protected
+        // prompts are merged). Without `records`, every unit counts: a counter that costs at least as much as any real one.
+        const counters = (records?: readonly TranscriptRecord[]) => (["user", "assistant", "toolResult"] as const).flatMap(role => {
+            const shown = new Map<number, number>();
+            for (const record of records ?? []) if (record.kind === "excerpt" && record.role === role && !record.span && record.sourceIndex !== undefined &&
+                (role !== "user" || record.text === userTexts.get(record.sourceIndex))) shown.set(record.sourceIndex, (shown.get(record.sourceIndex) ?? 0) + 1);
+            const missing = units[role].flatMap(unit => {
+                const count = unit.position < compiledBoundary ? unit.count - Math.min(unit.count, shown.get(unit.index) ?? 0) : 0;
+                return count ? [{ index: unit.index, count }] : [];
+            });
+            return missing.length ? [omissionRecord(role, missing.reduce((n, unit) => n + unit.count, 0), [missing[0]!.index, missing.at(-1)!.index], false)] : [];
+        });
+        // A carried prompt that the protected rows quote too is paid for once, in their fixed cost (assemble keeps one of the two).
+        const protectedCost = new Map(protectedView.kept.map(record => [sourceKey(record), lineCost([record])]));
+        const oldCost = () => old.reduce((n, record) => n + Math.max(0, lineCost([record]) - (record.role === "user" || record.role === "custom" ? protectedCost.get(sourceKey(record)) ?? 0 : 0)), 0);
+        const fresh = sourceRows.filter(row => row.position >= from);
+        const compileFresh = (reserve: number) => fresh.length ? tuck.compileDialogue({ messages: fresh.map(row => row.message), sourceIndices: fresh.map(row => row.index),
+            sourceEntryIds: fresh.map(row => row.id), sourceTimes: fresh.map(row => resolveSourceTime(entries[row.position]!)),
+            ranking: { maxBriefChars: maxBriefChars - oldCost() - reserve, mandatorySourceIndices: mandatory } }) : { text: "", step: "whole" as const, size: 0 };
+        // First as if every new source fits whole: then only the counters the carried part and the tool history need are reserved.
+        const freshRecords = (compiled: ReturnType<typeof compileFresh>) => {
+            const body = compiled.text ? splitSummary(compiled.text) : undefined;
+            return body ? parseRecords(body.body, body.version).filter(record => record.kind !== "omission" || record.sourceIndex !== undefined) : undefined;
+        };
+        const wholeFresh: TranscriptRecord[] = fresh.flatMap((row): TranscriptRecord[] => row.message.role === "user" ? [{ kind: "excerpt" as const, role: "user" as const, sourceIndex: row.index, text: userTexts.get(row.index!) ?? "" }]
+            : row.message.role === "assistant" ? row.message.content.flatMap(part => part.type === "text" && part.text.trim() ? [{ kind: "excerpt" as const, role: "assistant" as const, sourceIndex: row.index, text: "" }] : []) : []);
+        let compiled = compileFresh(lineCost(counters([...old, ...wholeFresh]))), consolidated = false;
+        if (compiled.step !== "whole") {
+            if (maxBriefChars - oldCost() - lineCost(counters()) < STABLE_CONSOLIDATE_AT * maxBriefChars) {
+                consolidated = true;
+                old = old.filter(record => record.role === "user" || record.role === "custom");
+                if (oldCost() > STABLE_CONSOLIDATE_AT * maxBriefChars) {
+                    let cost = oldCost(), first = 0;
+                    while (first < old.length && cost > maxBriefChars / 4) {
+                        const at = positionOf(old[first]!);
+                        while (first < old.length && positionOf(old[first]!) === at) cost -= lineCost([old[first++]!]);
+                    }
+                    old = old.slice(first);
+                }
+            }
+            compiled = compileFresh(lineCost(counters()));
+        }
+        const added = fresh.length ? freshRecords(compiled) : [];
+        if (!added) return whole();
+        const text = serializeTranscript([...old, ...added, ...counters([...old, ...added])]) + DIALOGUE_SUFFIX;
+        if (text.length - lineCost(old) + oldCost() > maxBriefChars) return whole();
+        const step = !consolidated && compiled.step === "whole" && (details as { mode?: string }).mode === "dialogue" ? "whole" : "ranked";
+        return { compiled: { text, step, size: text.length }, carried: true };
+    };
+    const { compiled, carried: stable } = stableCompile();
     let offer = assemble(compiled.text);
     // After the complete dialogue fill, observations spend the remaining
     // room before the native tail's older end. The pinned tail is untouched.
