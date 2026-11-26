@@ -23,6 +23,7 @@ import { MAX_RECALL_CHARACTERS, MAX_RECALL_ENTRY_ID_CHARACTERS, MAX_RECALL_QUERY
 
 import { tuck, tuckDraft, tuckObservedDraft, tuckRecall } from "./tuck.js";
 import { thrashing } from "./thrash.js";
+import { leanLine } from "./lean.js";
 import { CONTINUATION_CACHE_MISS, LOADED_VERSION, statusText } from "./status.js";
 import { ImageRecallInput, historyImage, historyAround } from "./history-image.js";
 import { notify } from "./notify.js";
@@ -391,10 +392,20 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const cap = Math.min(hardLine, contextWindow(ctx) - piMargin - reply) - Math.ceil(Math.max(0, room) * TRIGGER_MARGIN_FRACTION);
         return Math.min(cap, settingsFor().getCompactionSettings(ctx.model).keepRecentTokens);
     };
+    // Lean line (lean.ts): once the branch has a cut and a measured growth rate, a cut also becomes due at K + sqrt(2(K + R)·δ / h), the
+    // economic order quantity of the context, when that is below the line above. Never later than it, and admission is unchanged: a cut it
+    // asks for is opportunistic, so one that cannot be planned is no cut. Off where the thrash line is off.
+    const leanLimit = (ctx: ExtensionContext): number | undefined => {
+        if (options.cutAt !== undefined || options.requestReserve || !ctx.model || preservePrefix(ctx)) return undefined;
+        return leanLine(ctx.sessionManager.getBranch());
+    };
+    // A cut the lean line makes due inside the band is sized by that line, not by the tenth-of-the-room rule for opportunistic cuts.
+    const usefulOnlyAt = (total: number, band: number, lean: number | undefined, ctx: ExtensionContext) =>
+        options.cutAt === undefined && !(lean !== undefined && fits(total, band, ctx));
     /** The cut point in tokens, for the operator (`/tuck`, the footer): the band the triggers use, from the same limits. Reads only. */
     const cutPoint = (ctx: ExtensionContext): number | undefined => {
         if (!active() || !ctx.model || stateFor(ctx).kind !== "active") return undefined;
-        try { const { room } = limits(ctx), band = Math.max(decisionBand(ctx, room), triggerLine(ctx, room) ?? 0); return band > 0 ? band : undefined; } catch { return undefined; }
+        try { const { room } = limits(ctx), band = Math.min(Math.max(decisionBand(ctx, room), triggerLine(ctx, room) ?? 0), leanLimit(ctx) ?? Infinity); return band > 0 ? band : undefined; } catch { return undefined; }
     };
     const fits = (tokens: number, limit: number, ctx: ExtensionContext) => corrected(tokens, ctx) < limit;
     // The saved conversation and a cut's quantities are counted by the one function the guard counts with (strict, as the context hook is).
@@ -594,14 +605,15 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             // trigger would: nothing below the band, an opportunistic cut inside it, a due cut at or above the room. A refusal is a plain
             // cancel (Pi reports it as aborted), never a failure.
             let thresholdOpportunistic = false;
+            const lean = leanLimit(ctx);
             if (event.reason === "threshold") {
-                const gate = gateCut({ total: before + mandatory, mandatory, room, band, trigger: triggerLine(ctx, room), fits: (tokens, limit) => fits(tokens, limit, ctx) });
+                const gate = gateCut({ total: before + mandatory, mandatory, room, band, trigger: triggerLine(ctx, room), lean, fits: (tokens, limit) => fits(tokens, limit, ctx) });
                 if (gate.kind !== "plan") return { cancel: true };
                 thresholdOpportunistic = gate.opportunistic;
             }
             // Pi checks old history before appending a new idle prompt. During an active run/manual cut the latest admitted input stays protected.
             const decide = (targetRoom = room, targetBand = band) => chooseCut({
-                before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
+                before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx),
                 opportunistic: thresholdOpportunistic,
                 unreduced: "Compaction did not reduce context within the estimated request budget",
                 plan: (target): Plan<CutPlan> => {
@@ -746,11 +758,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             throw new CapacityError("Incoming Pi prompt and response reserve cannot fit the estimated request budget");
         // A cut removes only conversation. If the mandatory request, host input included, does not fit by itself, no cut can
         // help: leave it to the complete-context guard, which fails closed.
-        const gate = gateCut({ total: before + mandatory, mandatory, room, band, trigger: triggerLine(ctx, room), fits: (tokens, limit) => fits(tokens, limit, ctx) });
+        const lean = leanLimit(ctx);
+        const gate = gateCut({ total: before + mandatory, mandatory, room, band, trigger: triggerLine(ctx, room), lean, fits: (tokens, limit) => fits(tokens, limit, ctx) });
         if (gate.kind === "none") return;
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
         const decide = (targetRoom: number, targetBand: number, opportunistic: boolean) => chooseCut({
-            before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined, opportunistic,
+            before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx), opportunistic,
             unreduced: "Incoming prompt compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<CutPlan> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
@@ -881,12 +894,12 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         const decide = (targetRoom = room, targetBand = band, required = false) => {
             previews = [];
             floorKept = undefined;
-            const before = measure(saved);
+            const before = measure(saved), lean = targetBand === band ? leanLimit(ctx) : undefined;
             const gate = required && fits(mandatory, targetRoom, ctx) ? { kind: "plan" as const, opportunistic: false } :
-                gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, trigger: targetBand === band ? triggerLine(ctx, room) : undefined, fits: (tokens, limit) => fits(tokens, limit, ctx) });
+                gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, trigger: targetBand === band ? triggerLine(ctx, room) : undefined, lean, fits: (tokens, limit) => fits(tokens, limit, ctx) });
             if (gate.kind !== "plan") return gate;
             return chooseCut({
-            opportunistic: gate.opportunistic, mandatory, before, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: options.cutAt === undefined,
+            opportunistic: gate.opportunistic, mandatory, before, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx),
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<CutPlan> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);

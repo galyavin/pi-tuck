@@ -60,6 +60,8 @@ export interface Options {
  /** Open with a thrashing branch: a read, a cut, and the same unchanged read again soon after it. With `lengthStopOutput`, a reply of that
   * many output tokens then stops at its length limit. */
  thrash?: { lengthStopOutput?: number };
+ /** Open with a cut, then `replies` replies whose recorded prompts start at `kept` tokens and grow by `growth` each: the lean line's inputs. */
+ lean?: { kept: number; growth: number; replies: number };
  /** Start a fresh AgentSession from a saved branch, including learned-budget receipts. */
  branch?: SessionEntry[];
  /** Capture normalized request hashes only for comparisons that need them. */
@@ -449,6 +451,14 @@ export async function harness(options: Options) {
    const reply = replyOf([{ type: 'text', text: 'Read it again.' }], options.thrash.lengthStopOutput ? 'length' : 'stop');
    if (options.thrash.lengthStopOutput) reply.usage.output = reply.usage.totalTokens = options.thrash.lengthStopOutput;
    manager.appendMessage(reply);
+  }
+  if (options.lean) {
+   manager.appendCompaction(serializeTranscript([{ kind: 'omission', reason: 'Earlier work, summarized.' }]) + DIALOGUE_SUFFIX, '', 1000, { compactor: 'pi-tuck', version: 2, adapter: 'standalone', keptUserTurns: 0 }, true);
+   for (let i = 0; i < options.lean.replies; i++) {
+    const reply = replyOf([{ type: 'text', text: `Step ${i}.` }]);
+    reply.usage.input = reply.usage.totalTokens = options.lean.kept + i * options.lean.growth;
+    manager.appendMessage(reply);
+   }
   }
   if (options.seededTail) {
    const { summary, tail, cycle: cycleTokens } = options.seededTail;

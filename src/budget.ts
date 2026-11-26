@@ -151,10 +151,11 @@ export function chooseCut<D extends object = {}>(input: CutInput<D> & { opportun
 }
 /** Rules 1 to 3: before any plan exists, does this request need a cut, and is a cut allowed to fail? */
 export type Gate = { kind: "none" } | { kind: "defer" } | { kind: "plan"; opportunistic: boolean };
-/** `trigger`, when above the band, moves only where a cut becomes due; the cut still plans to the band. */
-export function gateCut(input: { total: number; mandatory: number; room: number; band: number; trigger?: number; fits: CutInput["fits"] }): Gate {
+/** `trigger`, when above the band, moves only where a cut becomes due; the cut still plans to the band. `lean`, when below that line, moves
+ * it down: a cut becomes due there too, as an opportunistic cut inside the band. */
+export function gateCut(input: { total: number; mandatory: number; room: number; band: number; trigger?: number; lean?: number; fits: CutInput["fits"] }): Gate {
 	const { total, mandatory, room, band, fits } = input;
-	if (fits(total, Math.max(band, input.trigger ?? band))) return { kind: "none" };
+	if (fits(total, Math.min(Math.max(band, input.trigger ?? band), input.lean ?? Infinity))) return { kind: "none" };
 	const inBand = fits(total, room);
 	if (!fits(mandatory, room)) return { kind: "defer" };
 	return { kind: "plan", opportunistic: inBand };

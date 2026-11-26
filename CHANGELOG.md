@@ -3,6 +3,15 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Lean trigger: once a session has trimmed and made at least five requests since, the trim point can move earlier, to K + sqrt(2(K + R)·δ / 0.1),
+  where K is what the latest trim left, δ the mean growth per request and R the mean tokens of unchanged re-reads soon after each trim. It
+  balances the cost of a trim against the cost of carrying a larger context each request. It never moves the trim point later than
+  1.8.0's, it is off with an explicit `cutAt`, a host reserve or a protected prefix, and admission is unchanged.
+
 ## [1.8.0]
 
 ### Changed
