@@ -420,6 +420,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // A cut the lean line makes due inside the band is sized by that line, not by the tenth-of-the-room rule for opportunistic cuts.
     const usefulOnlyAt = (total: number, band: number, lean: number | undefined, ctx: ExtensionContext) =>
         options.cutAt === undefined && !(lean !== undefined && fits(total, band, ctx));
+    const leanDueAt = (total: number, band: number, lean: number | undefined, ctx: ExtensionContext) =>
+        options.cutAt === undefined && lean !== undefined && fits(total, band, ctx);
     /** The cut point in tokens, for the operator (`/tuck`, the footer): the band the triggers use, from the same limits. Reads only. */
     const cutPoint = (ctx: ExtensionContext): number | undefined => {
         if (!active() || !ctx.model || stateFor(ctx).kind !== "active") return undefined;
@@ -640,7 +642,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
             }
             // Pi checks old history before appending a new idle prompt. During an active run/manual cut the latest admitted input stays protected.
             const decide = (targetRoom = room, targetBand = band) => chooseCut({
-                before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx),
+                before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx), leanDue: leanDueAt(before + mandatory, targetBand, lean, ctx),
                 opportunistic: thresholdOpportunistic,
                 unreduced: "Compaction did not reduce context within the estimated request budget",
                 plan: (target): Plan<CutPlan> => {
@@ -790,7 +792,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         if (gate.kind === "none") return;
         const previousSummary = saved.find(message => message.role === "compactionSummary")?.summary;
         const decide = (targetRoom: number, targetBand: number, opportunistic: boolean) => chooseCut({
-            before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx), opportunistic,
+            before, mandatory, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx), leanDue: leanDueAt(before + mandatory, targetBand, lean, ctx), opportunistic,
             unreduced: "Incoming prompt compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<CutPlan> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);
@@ -926,7 +928,7 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
                 gateCut({ total: before + mandatory, mandatory, room: targetRoom, band: targetBand, trigger: targetBand === band ? triggerLine(ctx, room) : undefined, lean, fits: (tokens, limit) => fits(tokens, limit, ctx) });
             if (gate.kind !== "plan") return gate;
             return chooseCut({
-            opportunistic: gate.opportunistic, mandatory, before, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx),
+            opportunistic: gate.opportunistic, mandatory, before, room: targetRoom, band: targetBand, fits: (tokens, limit) => fits(tokens, limit, ctx), usefulOnly: usefulOnlyAt(before + mandatory, targetBand, lean, ctx), leanDue: leanDueAt(before + mandatory, targetBand, lean, ctx),
             unreduced: "Tool-loop preflight compaction did not reduce context within the estimated request budget",
             plan: (target): Plan<CutPlan> => {
                 const reserve = planReserve(target, targetRoom, targetBand, mandatory, ctx);

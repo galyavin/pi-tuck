@@ -109,9 +109,13 @@ export type Decision<D extends object = {}> =
 	| { kind: "defer" }
 	| { kind: "cut"; target: Target; plan: Extract<Plan<D>, { draft: true }> }
 	| { kind: "fault"; capacity: boolean; message: string };
+/** The least share of the saved conversation a cut due only at the lean line must free. */
+export const LEAN_MIN_FREE = 0.25;
 export interface CutInput<D extends object = {}> {
 	/** With no explicit cut point, a cut that isn't due must also free a tenth of the room. */
 	usefulOnly?: boolean;
+	/** The cut is due only at the lean line: it must free LEAN_MIN_FREE of the saved conversation, or it is no cut. */
+	leanDue?: boolean;
 	/** Saved conversation, measured by the planner's own function. */
 	before: number;
 	/** Input that no cut can remove: system part, host input, queued messages, or the incoming prompt. */
@@ -136,7 +140,9 @@ export function chooseCut<D extends object = {}>(input: CutInput<D> & { opportun
 	const lands = (p: Plan<D>): p is Extract<Plan<D>, { draft: true }> => p.draft && p.after < before && fits(p.after + mandatory, band);
 	// A cut no one needs yet must be worth its summary: one that frees under a tenth of the room would trigger again within a round or two.
 	// A due cut is not asked: it has to happen.
-	const worthwhile = (p: Extract<Plan<D>, { draft: true }>) => !input.usefulOnly || !input.opportunistic || !fits(10 * (before - p.after), room);
+	// A cut the lean line asks for must free a quarter of what it replaces; less leaves the context about where it was, at the price of a summary.
+	const worthwhile = (p: Extract<Plan<D>, { draft: true }>) => !input.opportunistic ||
+		(input.leanDue ? before - p.after >= LEAN_MIN_FREE * before : !input.usefulOnly || !fits(10 * (before - p.after), room));
 	const preferred = plan("band");
 	if (input.opportunistic) {
 		if (!lands(preferred) || !worthwhile(preferred)) return { kind: "none" };

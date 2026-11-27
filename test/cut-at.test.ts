@@ -366,6 +366,15 @@ test('cutAt 1 restores the earlier cut point: the same requests give the same de
 	}
 });
 
+test('a cut due only at the lean line must free a quarter of the saved conversation; a cut due at the band need not', () => {
+	const input = { before: 17_590, mandatory: 2_200, room: 255_616, band: 250_504, fits: (tokens: number, limit: number) => tokens < limit, unreduced: 'x' };
+	const plan = (after: number) => () => ({ draft: true as const, after, mode: 'dialogue' });
+	expect(chooseCut({ ...input, leanDue: true, opportunistic: true, plan: plan(17_556) }).kind).toBe('none');
+	expect(chooseCut({ ...input, leanDue: true, opportunistic: true, plan: plan(13_193) }).kind).toBe('none');
+	expect(chooseCut({ ...input, leanDue: true, opportunistic: true, plan: plan(13_192) }).kind).toBe('cut');
+	expect(chooseCut({ ...input, leanDue: true, opportunistic: false, plan: plan(17_556) }).kind).toBe('cut');
+});
+
 test('with no explicit cut point, a cut no one needs yet must free a tenth of the room; a due cut need not', () => {
 	const input = { before: 40_000, mandatory: 8_000, room: 49_000, band: 48_020, fits: (tokens: number, limit: number) => tokens < limit, unreduced: 'x' };
 	const plan = (after: number) => () => ({ draft: true as const, after, mode: 'dialogue' });
