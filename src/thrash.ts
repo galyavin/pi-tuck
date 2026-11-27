@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isDiscardedResponse } from "./protocol";
+import { cutEpochs } from "./epochs";
 import { pathKey } from "./path-key";
 import { isTextOnly, textOf } from "./tuck/core/content";
 import { extractPath } from "./tuck/core/tool-args";
@@ -18,14 +19,17 @@ export const THRASH_BAR = 0.5;
 export interface Rereads { cuts: number; rereads: number; tokens: number }
 /** The branch's cuts and the re-reads that followed them (as `thrashing` defines a re-read), with their text in tokens at 4 characters each. */
 export function rereadsAfterCuts(branch: readonly SessionEntry[]): Rereads {
-	let cuts = 0, replies = 0, rereads = 0, chars = 0;
+	// Each reply counts under the cut it was sent with (epochs.ts), so the reply that first carries a cut opens that cut's window.
+	const { epoch, cuts } = cutEpochs(branch);
+	let current = 0, replies = 0, rereads = 0, chars = 0;
 	const pending = new Map<string, { key: string; cut: number; soon: boolean }>(), last = new Map<string, { cut: number; text: string }>();
-	for (const entry of branch) {
-		if (entry.type === "compaction") { cuts++; replies = 0; continue; }
+	for (const [i, entry] of branch.entries()) {
 		if (entry.type !== "message") continue;
 		const message = entry.message;
 		if (message.role === "assistant") {
 			if (isDiscardedResponse(message)) continue;
+			if (epoch[i] !== current) { current = epoch[i]; replies = 0; }
+			const cuts = current;
 			replies++;
 			for (const block of message.content) {
 				if (block.type !== "toolCall" || block.name !== "read" || !block.arguments || typeof block.arguments !== "object") continue;

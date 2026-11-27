@@ -90,3 +90,37 @@ test('a cache-sensitive model never gets a lean cut', async () => {
  // The same session without the list cuts at its lean line.
  expect((await scenario({ ...large, ...lean, complete: 12_000 })).cuts).toBe(1);
 });
+
+// A cut planned at prompt time or by the guard is carried by requests at once and saved at the next boundary, after the reply that carried
+// it. Both log orders must read as the clean case: K is what the cut left, growth never takes the drop (state-machine review L1).
+test('a cut saved after the reply that carried it gives the same K and growth as one saved before it', () => {
+ const grow = (from: number, n: number) => Array.from({ length: n }, (_, i) => reply(from + i * 3_000));
+ const before = branch(...grow(200_000, 6), cut, ...grow(60_000, 6));
+ const after = branch(...grow(200_000, 6), reply(60_000), cut, ...grow(63_000, 5));
+ for (const b of [before, after]) {
+  const { kept, growth, samples, cuts } = leanInputs(b);
+  expect(kept).toBe(60_000);
+  expect(growth).toBe(3_000);
+  expect(samples).toBe(10);
+  expect(cuts).toBe(1);
+ }
+ expect(leanLine(after)).toBe(leanLine(before));
+ // Two cuts in one boundary (the prompt's cut, then a fresh one): the second entry is the second cut, and K is what the reply after it saw.
+ const twice = branch(...grow(200_000, 6), reply(60_000), cut, cut, ...grow(40_000, 5));
+ expect(leanInputs(twice).kept).toBe(40_000);
+ expect(leanInputs(twice).growth).toBe(3_000);
+});
+
+test('right after a cut with no reply yet the lean line waits for a measured K', () => {
+ const grow = (from: number, n: number) => Array.from({ length: n }, (_, i) => reply(from + i * 3_000));
+ expect(leanLine(branch(...grow(200_000, 6), cut, ...grow(60_000, 6), cut))).toBeUndefined();
+});
+
+test('a re-read in the reply that first carries a prompt-time cut counts against that cut', () => {
+ const text = 'x'.repeat(4_000);
+ const read = (id: string, input: number) => [reply(input, [{ type: 'toolCall', id, name: 'read', arguments: { path: 'a.ts' } }], 'toolUse'),
+  { type: 'message', message: { role: 'toolResult', toolCallId: id, toolName: 'read', isError: false, content: [{ type: 'text', text }], timestamp: 0 } }];
+ const b = branch(...read('1', 200_000), reply(203_000), ...read('2', 60_000), cut, reply(65_000));
+ expect(leanInputs(b).rereads).toBe(1_000);
+ expect(leanInputs(b).cuts).toBe(1);
+});

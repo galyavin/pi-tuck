@@ -1,5 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { isDiscardedResponse } from "./protocol";
+import { cutEpochs, promptTokens } from "./epochs";
 import { rereadsAfterCuts } from "./thrash";
 
 /** Holding cost of a context token per request, as a share of its fresh price: a cached re-send costs about a tenth. */
@@ -7,31 +7,24 @@ export const LEAN_HOLDING = 0.1;
 /** Growth samples (consecutive replies with no cut between) needed before the growth rate counts. */
 export const LEAN_MIN_SAMPLES = 4;
 
-const promptTokens = (entry: SessionEntry): number | undefined => {
-	if (entry.type !== "message" || entry.message.role !== "assistant" || isDiscardedResponse(entry.message)) return undefined;
-	const message = entry.message;
-	if (message.stopReason === "error" || message.stopReason === "aborted") return undefined;
-	const u = message.usage;
-	const total = (u?.input ?? 0) + (u?.cacheRead ?? 0) + (u?.cacheWrite ?? 0);
-	return Number.isFinite(total) && total > 0 ? total : undefined;
-};
-
 export interface LeanInputs { kept: number; growth: number; rereads: number; samples: number; cuts: number }
 /** The quantities the lean line is built from, read from the branch's recorded usage only. `kept` (K): the prompt of the first reply after
  * the latest cut, what that cut left (system, summary, kept turns, carried files). `growth` (δ): the mean rise of the prompt between
  * consecutive replies with no cut between. `rereads` (R): the mean tokens per cut of unchanged files re-read soon after it (thrash.ts). */
 export function leanInputs(branch: readonly SessionEntry[]): LeanInputs {
-	let kept = 0, previous: number | undefined, afterCut = false, sum = 0, samples = 0;
-	for (const entry of branch) {
-		if (entry.type === "compaction") { previous = undefined; afterCut = true; continue; }
+	// Epochs place each reply under the cut it was sent with (epochs.ts): growth is measured only inside an epoch, never across a cut.
+	const { epoch, opens, compactions } = cutEpochs(branch);
+	let kept = 0, previous: number | undefined, previousEpoch = -1, sum = 0, samples = 0;
+	branch.forEach((entry, i) => {
+		if (entry.type === "compaction" && epoch[i] !== previousEpoch && previousEpoch >= 0) { kept = 0; previous = undefined; }
 		const prompt = promptTokens(entry);
-		if (prompt === undefined) continue;
-		if (afterCut) { kept = prompt; afterCut = false; }
-		if (previous !== undefined) { sum += prompt - previous; samples++; }
-		previous = prompt;
-	}
+		if (prompt === undefined) return;
+		if (opens[i]) kept = prompt;
+		else if (previous !== undefined && epoch[i] === previousEpoch) { sum += prompt - previous; samples++; }
+		previous = prompt; previousEpoch = epoch[i];
+	});
 	const { cuts, tokens } = rereadsAfterCuts(branch);
-	return { kept, growth: samples ? sum / samples : 0, rereads: cuts ? tokens / cuts : 0, samples, cuts };
+	return { kept, growth: samples ? sum / samples : 0, rereads: cuts ? tokens / cuts : 0, samples, cuts: compactions };
 }
 
 /**
