@@ -12,7 +12,7 @@ pi install npm:pi-tuck
 
 Start a new Pi process after installing or updating. pi-tuck handles automatic compaction and `/compact` by default. Run `/tuck` to see the loaded version, cut history, and active cut policy.
 
-This README describes pi-tuck 1.10.1. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.10.1` or `pi install git:github.com/galyavin/pi-tuck@v1.10.1`. To uninstall, run `pi remove` with the source you installed.
+This README describes pi-tuck 1.10.2. To pin a published release, use a versioned source such as `pi install npm:pi-tuck@1.10.2` or `pi install git:github.com/galyavin/pi-tuck@v1.10.2`. To uninstall, run `pi remove` with the source you installed.
 
 ## Compaction and recall
 
@@ -20,7 +20,7 @@ A cut replaces older turns in the model's context with a summary while keeping t
 
 Files the agent has read more than once are carried whole after the summary, most-read first, as far as a share of the summary allows. A file is carried only when its last read covered the whole file and the file on disk still holds exactly that text; the agent can edit from a carried copy without re-reading it. When a session's cuts keep dropping files the agent then reads again unchanged, pi-tuck moves its trim point later, to native Pi's (the larger of the room and `keepRecentTokens`), while keeping room for the next reply. Cuts still trim to the usual size.
 
-Once a session has trimmed and grown for a few requests, pi-tuck can move its trim point earlier, to the line that balances the cost of a trim (the summary and the re-reads that follow) against the cost of carrying a larger context on every request. At large windows this means more, smaller trims and smaller requests; it never trims later than the default line. Each summary begins with the previous summary's dialogue, unchanged, and adds what was trimmed since, so consecutive summaries share a prefix a provider's prompt cache can serve. `/tuck` names the line in use: the default, the lean line, or native Pi's line.
+Once a session has trimmed and grown for a few requests, pi-tuck can move its trim point earlier, to the line that balances the cost of a trim (the summary and the re-reads that follow) against the cost of carrying a larger context on every request. At large windows this means more, smaller trims and smaller requests; it never trims later than the default line, and a lean trim must free at least a quarter of the conversation it replaces. Each summary begins with the previous summary's dialogue, unchanged, and adds what was trimmed since, so consecutive summaries share a prefix a provider's prompt cache can serve. `/tuck` names the line in use: the default, the lean line, or native Pi's line.
 
 When pi-tuck is active, `tuck_recall` becomes available after a cut on the current branch. Use a keyword query to locate a passage.
 

@@ -3,6 +3,14 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.10.2]
+
+### Fixed
+
+- Lean line: a trim the lean line asks for must now free at least a quarter of the conversation it replaces, or no trim is made. In a long
+  session at a large window, a lean trim could keep almost everything (17,590 tokens down to 17,556): the cost of a new summary for no
+  room gained. Trims at the default line are unchanged.
+
 ## [1.10.1]
 
 ### Fixed
