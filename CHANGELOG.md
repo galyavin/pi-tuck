@@ -3,6 +3,17 @@
 All notable changes to pi-tuck. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.10.1]
+
+### Fixed
+
+- Lean line: a cut planned when a prompt arrives, or by the request guard, is saved after the first reply that carried it. The lean line
+  took that drop in prompt size as negative growth, which pulled the line toward what the cut kept and could trigger cut after cut. Each
+  reply now counts under the cut it was sent with, and the line waits for a reply after a fresh cut. Re-reads after a cut count the same way.
+- Act-now turn: the limit of two in a row now holds until a reply finishes (stop or tool use); a reply cut off in the middle of a tool call
+  no longer resets it. The count is read from the session, so it survives a restart and follows `/tree`. No act-now turn is sent when the
+  operator has already queued a message.
+
 ## [1.10.0]
 
 ### Added
