@@ -73,8 +73,21 @@ export const capStopNotice = (model: string, maxTokens: number, file: string) =>
     "The unfinished response is saved in the session.";
 /** The follow-up turn sent after a reply that spent its whole output on thinking, with no text or tool call. */
 export const ACT_NOW = "Your last reply used the whole output budget on thinking. Act now: make the next tool call or give the answer, with brief reasoning.";
-/** At most this many act-now turns in a row; after that a stall gets the cap-stop notice until a reply is not a stall. */
+/** At most this many act-now turns in a row; after that a stall gets the cap-stop notice until a reply finishes (stop or toolUse). */
 export const ACT_NOW_LIMIT = 2;
+/** Act-now turns on the branch since its last finished reply (stopReason "stop" or "toolUse"). Read from the log, so a restart, /tree
+ * or fork keeps the count; a length stop with content (a cut-off tool call) does not reset it. Operator messages do not reset it. */
+export function actNowsInARow(branch: readonly SessionEntry[]): number {
+    let count = 0;
+    for (let i = branch.length - 1; i >= 0; i--) {
+        const entry = branch[i]!;
+        if (entry.type !== "message") continue;
+        const message = entry.message;
+        if (message.role === "assistant" && (message.stopReason === "stop" || message.stopReason === "toolUse")) break;
+        if (message.role === "user" && textOf(message.content) === ACT_NOW) count++;
+    }
+    return count;
+}
 /** Pi's models.json, shown with ~ for the home folder. */
 function modelsPath(): string {
     try {
@@ -325,11 +338,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     };
     // The act-now turn is pi-tuck's own, not the operator's: it grants no retry.
     pi.on("message_start", (event, ctx) => { if (event.message.role === "user" && textOf(event.message.content) !== ACT_NOW) rearmLengthRetry(ctx); });
-    // Act-now turns sent since the last reply that was not a stall.
-    let actNows = 0;
     pi.on("message_end", (event, ctx) => {
         if (event.message.role !== "assistant") return;
-        if (event.message.stopReason !== "error" && event.message.stopReason !== "aborted" && !(event.message.content && thinkingOnlyLength(event.message))) actNows = 0;
         if (event.message.stopReason !== "error" && event.message.stopReason !== "length") rearmLengthRetry(ctx);
         lengthStop = event.message.stopReason === "length" ? {
             kind: event.message.content && thinkingOnlyLength(event.message) ? "thinking" : "output",
@@ -1026,7 +1036,8 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
     // After a stall that is not retried: leave the stalled reply out of the context (it stays saved, with its output usage, so the next
     // request keeps the raised reply room) and queue one act-now turn, if that request fits as it stands. Otherwise the notice stands.
     const actNow = (event: TurnEndEvent, ctx: ExtensionContext, result: { entries: readonly SessionBoundaryDraft[] } | undefined) => {
-        if (actNows >= ACT_NOW_LIMIT || !ctx.model) return undefined;
+        // Queued operator input already becomes the next turn; an act-now behind it would arrive after an answer and misstate the stall.
+        if (event.context.pendingMessages.length > 0 || actNowsInARow(ctx.sessionManager.getBranch()) >= ACT_NOW_LIMIT || !ctx.model) return undefined;
         const edit: SessionBoundaryDraft = { type: "context_edit", targetId: event.messageEntryId, replacement: null };
         // The cap path returns before taking a pending cut: preview it in place, and take it only if the turn is queued.
         const untaken = !result || result.entries === event.entries;
@@ -1044,7 +1055,6 @@ export async function installCompaction(pi: ExtensionAPI, options: CompactionOpt
         } finally { restore?.(); }
         try { pi.sendUserMessage(ACT_NOW, { deliverAs: "followUp" }); } catch { return undefined; }
         if (untaken) entries = [...(atBoundary(event, ctx, "run-end", false)?.entries ?? event.entries), edit];
-        actNows++;
         markBoundary(entries);
         return { entries, continue: false };
     };

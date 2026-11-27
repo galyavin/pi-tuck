@@ -1,7 +1,8 @@
 import { expect, test } from 'vitest';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { requestReplyFloor, thinkingOnlyLength } from '../src/request-capacity';
-import { ACT_NOW, capStopNotice } from '../src/compaction';
+import { ACT_NOW, actNowsInARow, capStopNotice } from '../src/compaction';
+import type { SessionEntry } from '@earendil-works/pi-coding-agent';
 import { statusText } from '../src/status';
 import { MODEL } from './calibration-fixture';
 import { harness } from './budget-fixture';
@@ -150,6 +151,40 @@ test('act-now: two in a row at most, then the notice; a reply that is not a stal
   expect(h.state.answers.slice(4).map(a => a.stopReason)).toEqual(['length', 'stop']);
   expect(text(wire[5]!.messages.at(-1)!)).toContain(ACT_NOW);
   expect(h.notices).toHaveLength(1);
+  expect(h.faults).toEqual([]);
+ } finally { await h.cleanup(); }
+});
+
+// State-machine review AN1/AN3: the count is read from the branch, so a restart, /tree or fork keeps it, and only a finished reply
+// (stop or toolUse) resets it: a length stop with a cut-off tool call does not.
+test('act-now count: read from the branch; a cut-off tool call does not reset it', () => {
+ const user = (text: string) => ({ type: 'message', message: { role: 'user', content: [{ type: 'text', text }], timestamp: 0 } });
+ const reply = (stopReason: string, content: unknown[]) => ({ type: 'message', message: { role: 'assistant', stopReason, content, timestamp: 0 } });
+ const stall = reply('length', [{ type: 'thinking', thinking: 'x' }]);
+ const cutOff = reply('length', [{ type: 'thinking', thinking: 'x' }, { type: 'toolCall', id: 't', name: 'bash', arguments: {} }]);
+ const b = (...e: unknown[]) => e as SessionEntry[];
+ expect(actNowsInARow(b(user('task'), stall))).toBe(0);
+ expect(actNowsInARow(b(user('task'), stall, user(ACT_NOW), cutOff, user(ACT_NOW), stall))).toBe(2);
+ expect(actNowsInARow(b(user(ACT_NOW), stall, reply('toolUse', []), stall))).toBe(0);
+ expect(actNowsInARow(b(user(ACT_NOW), stall, reply('stop', [{ type: 'text', text: 'ok' }]), user(ACT_NOW), stall))).toBe(1);
+ // An operator message does not reset it (1.10.0 policy).
+ expect(actNowsInARow(b(user(ACT_NOW), stall, user(ACT_NOW), stall, user('continue'), stall))).toBe(2);
+});
+
+// State-machine review AN2: operator input queued during the stall becomes the next turn; no act-now is queued behind it.
+test('act-now: none when the operator queued input during the stalled reply', async () => {
+ const wire: { messages: { role: string; content: unknown }[] }[] = [];
+ let queued = false;
+ const h = await harness({ at: 'prompt', complete: 0, noHistory: true, noOpening: true, host: 200, systemTokens: 800,
+  limits: { contextWindow: 65_536, maxTokens: 32_768 }, reserveTokens: 16_384, piRequestPath: true,
+  compaction: { requestReserve: undefined }, thinkingOnlyLength: n => n === 1, replyTokens: () => 2_000,
+  onWire: context => { wire.push(structuredClone(context as never)); if (!queued) { queued = true; void h.session.followUp('Are you stuck?'); } } });
+ try {
+  await h.session.prompt('Initial task');
+  const text = (m: { content: unknown }) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+  expect(h.state.answers.map(a => a.stopReason)).toEqual(['length', 'stop']);
+  expect(text(wire[1]!.messages.at(-1)!)).toContain('Are you stuck?');
+  expect(wire.some(request => request.messages.some(m => m.role === 'user' && text(m).includes(ACT_NOW)))).toBe(false);
   expect(h.faults).toEqual([]);
  } finally { await h.cleanup(); }
 });
